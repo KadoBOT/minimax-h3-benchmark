@@ -16,7 +16,7 @@ class FakeComfy:
         self.cancelled = 0
         self.current_prompt_id = None
 
-    def run_prompt(self, prompt, track=True):
+    def run_prompt(self, prompt, track=True, on_live=None):
         self.n += 1
         if self.n in self.fail_on:
             raise RuntimeError(f"boom at call {self.n}")

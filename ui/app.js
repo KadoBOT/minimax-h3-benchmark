@@ -65,7 +65,8 @@ function cellHtml(run, bestId) {
   if (run.status === "done" && run.timed_s != null) {
     content = fmtRunTime(run);
   } else {
-    content = `<span class="chip ${escapeHtml(run.status || "queued")}">${escapeHtml(run.status || "queued")}</span>`;
+    const label = statusLabel(run);
+    content = `<span class="chip ${escapeHtml(run.status || "queued")}">${escapeHtml(label)}</span>`;
   }
   const title = run.sec_per_it != null
     ? `${run.id} · ${fmtRunTime(run)}`
@@ -76,14 +77,34 @@ function cellHtml(run, bestId) {
 function renderStatus(data) {
   const el = document.getElementById("status-line");
   const cur = data.current;
-  const curText = cur
-    ? `${cur.phase || "?"} / ${cur.run_id || "?"} / ${cur.stage || "?"}`
-    : "idle";
+  let curText = "idle";
+  if (cur) {
+    const bits = [
+      cur.phase || "?",
+      cur.run_id || "?",
+      cur.stage || "?",
+    ];
+    // Live Comfy detail: e.g. VideoCombine after sampler's 20/20 finishes
+    if (cur.detail) bits.push(cur.detail);
+    else if (cur.node_label) bits.push(cur.node_label);
+    curText = bits.join(" / ");
+  }
   el.textContent = `suite=${data.status || "?"} · ${curText} · updated ${data.updated_at || "—"}`;
   const best = findFastest(data.phases?.speed?.runs || []);
   document.getElementById("fastest").textContent = best
     ? `Fastest: ${fmtRunTime(best)} (${best.id})`
     : "";
+}
+
+/** Humanize in-progress status chips (sampler done ≠ whole job done). */
+function statusLabel(run) {
+  const s = run?.status || "queued";
+  if (s === "timing" || s === "warmup") {
+    // Prefer live detail from suite.current when this is the active run —
+    // rendered separately in header; cell stays stage name.
+    return s;
+  }
+  return s;
 }
 
 function renderSpeedHeatmap(runs) {

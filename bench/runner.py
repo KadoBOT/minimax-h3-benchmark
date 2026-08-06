@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -89,6 +90,8 @@ class BenchmarkRunner:
         *,
         stage: str,
         cache_bust: int,
+        suite: Suite | None = None,
+        phase: str | None = None,
     ) -> tuple[str, float, dict, float | None]:
         """Build prompt for stage and execute.
 
@@ -101,9 +104,43 @@ class BenchmarkRunner:
             output_tag=f"{run.id}_{stage}",
             cache_bust=cache_bust,
         )
-        return self.comfy.run_prompt(prompt)
 
-    def _timed_with_cache_guard(self, run: Run) -> tuple[str, float, dict, float | None]:
+        last_emit = [0.0]
+
+        def on_live(snap: dict) -> None:
+            # Throttle JSON writes while sampling (progress every step).
+            now = time.perf_counter()
+            if now - last_emit[0] < 1.0 and snap.get("progress_value") not in (None, snap.get("progress_max")):
+                return
+            last_emit[0] = now
+            if suite is None:
+                return
+            detail_parts = []
+            if snap.get("node_label"):
+                detail_parts.append(str(snap["node_label"]))
+            if snap.get("progress"):
+                detail_parts.append(str(snap["progress"]))
+            if snap.get("sec_per_it") is not None:
+                detail_parts.append(f"{snap['sec_per_it']:.2f}s/it")
+            suite.current = {
+                "phase": phase or run.phase,
+                "run_id": run.id,
+                "stage": stage if stage != "timed_retry" else "timing",
+                "node": snap.get("node"),
+                "node_label": snap.get("node_label"),
+                "progress": snap.get("progress"),
+                "sec_per_it": snap.get("sec_per_it"),
+                "detail": " · ".join(detail_parts) if detail_parts else None,
+            }
+            # Live UI update without rewriting the whole run list status each time
+            # is fine — current is what the header shows.
+            self._emit(suite)
+
+        return self.comfy.run_prompt(prompt, on_live=on_live if suite is not None else None)
+
+    def _timed_with_cache_guard(
+        self, run: Run, *, suite: Suite, phase: str
+    ) -> tuple[str, float, dict, float | None]:
         """Run timed generation; clear execution cache and retry if result is a cache hit."""
         # Clear node cache so timed is a real re-run (same seed as warmup).
         try:
@@ -112,7 +149,9 @@ class BenchmarkRunner:
             # Still attempt; cache_bust widgets may be enough.
             print(f"warning: execution cache clear failed: {e}")
 
-        pid, timed_s, hist, sec_per_it = self._run_once(run, stage="timed", cache_bust=1)
+        pid, timed_s, hist, sec_per_it = self._run_once(
+            run, stage="timed", cache_bust=1, suite=suite, phase=phase
+        )
 
         sampler_cached = self.comfy.was_node_cached(hist, NODE_SAMPLER_ADV)
         if sampler_cached or timed_s < _SUSPICIOUSLY_FAST_S:
@@ -126,7 +165,11 @@ class BenchmarkRunner:
             except ComfyError:
                 pass
             pid, timed_s, hist, sec_per_it = self._run_once(
-                run, stage="timed_retry", cache_bust=2
+                run,
+                stage="timed_retry",
+                cache_bust=2,
+                suite=suite,
+                phase=phase,
             )
             if self.comfy.was_node_cached(hist, NODE_SAMPLER_ADV) or timed_s < _SUSPICIOUSLY_FAST_S:
                 raise ComfyError(
@@ -147,7 +190,7 @@ class BenchmarkRunner:
         try:
             self._check_abort()
             pid, warm_s, _hist, _warm_it = self._run_once(
-                run, stage="warmup", cache_bust=0
+                run, stage="warmup", cache_bust=0, suite=suite, phase=phase
             )
             run.warmup_s = warm_s
             run.prompt_id = pid
@@ -172,10 +215,19 @@ class BenchmarkRunner:
 
         try:
             self._check_abort()
-            pid, timed_s, hist, sec_per_it = self._timed_with_cache_guard(run)
+            pid, timed_s, hist, sec_per_it = self._timed_with_cache_guard(
+                run, suite=suite, phase=phase
+            )
             run.prompt_id = pid
             run.timed_s = timed_s
             run.sec_per_it = sec_per_it
+            suite.current = {
+                "phase": phase,
+                "run_id": run.id,
+                "stage": "saving",
+                "detail": "downloading video",
+            }
+            self._emit(suite)
             vid = self.comfy.find_first_video(hist)
             if vid:
                 fn, sub, typ = vid

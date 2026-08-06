@@ -16,13 +16,56 @@ class ComfyError(RuntimeError):
     pass
 
 
+# Friendly labels for common MiniMax H3 workflow node ids (UI graph).
+NODE_LABELS: dict[str, str] = {
+    "1": "UNET",
+    "2": "CLIP",
+    "3": "VideoVAE",
+    "4": "AudioVAE",
+    "5": "I2V cond",
+    "6": "Scheduler",
+    "7": "SamplerSelect",
+    "8": "Guider",
+    "10": "Sampler",
+    "12": "AudioDecode",
+    "15": "EasyCache",
+    "20": "LoadImage",
+    "91": "SageAttn",
+    "92": "SolAttn",
+    "98": "Resolution",
+    "102": "Duration",
+    "103": "FrameMath",
+    "107": "Prompt",
+    "110": "VideoCombine",
+    "118": "Seed",
+    "119": "Noise",
+    "122": "Spectrum",
+    "123": "SigmaShift",
+    "124": "INT8 UNET",
+    "125": "VAEDecode",
+    "128": "H3Cache",
+}
+
+
+def node_label(node_id: str | int | None) -> str | None:
+    if node_id is None:
+        return None
+    s = str(node_id)
+    return NODE_LABELS.get(s, f"node {s}")
+
+
 class ProgressCollector:
-    """Collect ComfyUI WebSocket `progress` events and derive s/it."""
+    """Collect ComfyUI WebSocket progress/executing events and derive s/it."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         # (t, value, max, node, prompt_id)
         self._events: list[tuple[float, int, int, str | None, str | None]] = []
+        self.current_node: str | None = None
+        self.progress_value: int | None = None
+        self.progress_max: int | None = None
+        self._last_step_t: float | None = None
+        self.instant_sec_per_it: float | None = None
 
     def on_progress(self, data: dict[str, Any]) -> None:
         try:
@@ -34,10 +77,53 @@ class ProgressCollector:
             return
         node = data.get("node")
         prompt_id = data.get("prompt_id")
+        now = time.perf_counter()
         with self._lock:
+            prev_t = self._last_step_t
+            prev_v = self.progress_value
             self._events.append(
-                (time.perf_counter(), value, maximum, str(node) if node is not None else None, prompt_id)
+                (now, value, maximum, str(node) if node is not None else None, prompt_id)
             )
+            self.progress_value = value
+            self.progress_max = maximum
+            if node is not None:
+                self.current_node = str(node)
+            # Instant s/it from last step advance (matches tqdm-style display)
+            if prev_t is not None and prev_v is not None and value > prev_v:
+                self.instant_sec_per_it = (now - prev_t) / (value - prev_v)
+            self._last_step_t = now
+
+    def on_executing(self, data: dict[str, Any]) -> None:
+        node = data.get("node")
+        with self._lock:
+            if node is None:
+                # node=None means the prompt finished executing
+                self.current_node = None
+            else:
+                self.current_node = str(node)
+                # entering a new node — step progress may not apply
+                if self.progress_value is not None and self.progress_max is not None:
+                    if self.progress_value >= self.progress_max:
+                        self.progress_value = None
+                        self.progress_max = None
+
+    def live_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            node = self.current_node
+            value = self.progress_value
+            maximum = self.progress_max
+            instant = self.instant_sec_per_it
+        out: dict[str, Any] = {
+            "node": node,
+            "node_label": node_label(node),
+        }
+        if value is not None and maximum is not None:
+            out["progress"] = f"{value}/{maximum}"
+            out["progress_value"] = value
+            out["progress_max"] = maximum
+        if instant is not None:
+            out["sec_per_it"] = round(instant, 3)
+        return out
 
     def sec_per_it(self, prompt_id: str | None = None) -> float | None:
         """Average seconds per iteration for the dominant progress series.
@@ -286,7 +372,9 @@ class ComfyClient:
         return f"{ws}/ws?clientId={urllib.parse.quote(self.client_id)}"
 
     def _start_progress_listener(
-        self, collector: ProgressCollector
+        self,
+        collector: ProgressCollector,
+        on_live: Any | None = None,
     ) -> tuple[threading.Event, threading.Thread]:
         stop = threading.Event()
 
@@ -316,9 +404,22 @@ class ComfyClient:
                                 msg = json.loads(raw)
                             except json.JSONDecodeError:
                                 continue
-                            if msg.get("type") == "progress":
-                                data = msg.get("data") or {}
+                            mtype = msg.get("type")
+                            data = msg.get("data") or {}
+                            if mtype == "progress":
                                 collector.on_progress(data)
+                                if on_live is not None:
+                                    try:
+                                        on_live(collector.live_snapshot())
+                                    except Exception:
+                                        pass
+                            elif mtype == "executing":
+                                collector.on_executing(data)
+                                if on_live is not None:
+                                    try:
+                                        on_live(collector.live_snapshot())
+                                    except Exception:
+                                        pass
 
                 except Exception:
                     return
@@ -335,18 +436,23 @@ class ComfyClient:
         return stop, t
 
     def run_prompt(
-        self, prompt: dict[str, Any], *, track: bool = True
+        self,
+        prompt: dict[str, Any],
+        *,
+        track: bool = True,
+        on_live: Any | None = None,
     ) -> tuple[str, float, dict, float | None]:
         """Queue prompt and wait.
 
         Returns (prompt_id, elapsed_s, history_item, sec_per_it).
         *sec_per_it* is derived from WebSocket progress events (sampler s/it).
+        *on_live* is called with live snapshots (node / progress / s/it) during the run.
         """
         collector = ProgressCollector()
         stop: threading.Event | None = None
         ws_thread: threading.Thread | None = None
         if track:
-            stop, ws_thread = self._start_progress_listener(collector)
+            stop, ws_thread = self._start_progress_listener(collector, on_live=on_live)
 
         t0 = time.perf_counter()
         pid = self.queue_prompt(prompt)
@@ -362,5 +468,8 @@ class ComfyClient:
             if ws_thread is not None:
                 ws_thread.join(timeout=2.0)
         elapsed = time.perf_counter() - t0
+        # Prefer average over the full sampling series; fall back to last instant
         sec_per_it = collector.sec_per_it(pid) if track else None
+        if sec_per_it is None and track:
+            sec_per_it = collector.instant_sec_per_it
         return pid, elapsed, item, sec_per_it
