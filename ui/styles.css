@@ -130,7 +130,9 @@ th.row-label, td.row-label {
 td.cell {
   cursor: pointer;
   background: var(--bg-cell);
-  min-width: 5.5rem;
+  min-width: 8.5rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
   transition: background 0.12s ease;
 }
 
