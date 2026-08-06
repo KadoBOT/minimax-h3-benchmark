@@ -52,3 +52,25 @@ def test_videos_and_path_traversal(tmp_path, monkeypatch):
             assert e.code == 404
     finally:
         httpd.shutdown()
+
+
+def test_video_range_request(tmp_path, monkeypatch):
+    videos = tmp_path / "videos"
+    videos.mkdir(parents=True)
+    payload = b"0123456789ABCDEF"
+    (videos / "clip.mp4").write_bytes(payload)
+    monkeypatch.setattr("bench.server.RESULTS_DIR", tmp_path)
+    monkeypatch.setattr("bench.server.BENCHMARK_JSON", tmp_path / "benchmark.json")
+    httpd = start_server(9879)
+    try:
+        req = urllib.request.Request(
+            "http://127.0.0.1:9879/videos/clip.mp4",
+            headers={"Range": "bytes=0-3"},
+        )
+        with urllib.request.urlopen(req) as resp:
+            assert resp.status == 206
+            assert resp.headers.get("Content-Range", "").startswith("bytes 0-3/")
+            assert resp.read() == b"0123"
+            assert "video/mp4" in (resp.headers.get("Content-Type") or "")
+    finally:
+        httpd.shutdown()

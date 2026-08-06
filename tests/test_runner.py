@@ -12,15 +12,29 @@ class FakeComfy:
         self.n = 0
         self.fail_on = fail_on or set()
         self.downloaded: list[tuple[str, Path]] = []
+        self.cleared = 0
+        self.cancelled = 0
+        self.current_prompt_id = None
 
-    def run_prompt(self, prompt):
+    def run_prompt(self, prompt, track=True):
         self.n += 1
         if self.n in self.fail_on:
             raise RuntimeError(f"boom at call {self.n}")
+        # Clear-cache mini prompts have node 9001 — return fast without counting as gen.
+        if "9001" in prompt and len(prompt) <= 2:
+            return f"clear{self.n}", 0.01, {"status": {"status_str": "success", "completed": True}, "outputs": {}}
         return (
             f"p{self.n}",
-            1.5 + self.n * 0.01,
+            10.0 + self.n * 0.01,  # > 2s so cache-guard does not false-positive
             {
+                "status": {
+                    "status_str": "success",
+                    "completed": True,
+                    "messages": [
+                        ["execution_start", {}],
+                        ["execution_success", {}],
+                    ],
+                },
                 "outputs": {
                     "110": {
                         "gifs": [
@@ -31,9 +45,18 @@ class FakeComfy:
                             }
                         ]
                     }
-                }
+                },
             },
         )
+
+    def clear_execution_cache(self):
+        self.cleared += 1
+
+    def cancel_all(self):
+        self.cancelled += 1
+
+    def was_node_cached(self, history_item, node_id):
+        return False
 
     def find_first_video(self, hist):
         return "t.mp4", "", "output"
@@ -71,7 +94,10 @@ def _patch_matrix_and_workflow(monkeypatch, speed_runs=None, quality_runs=None, 
         "bench.runner.build_scale_runs",
         scale_runs if scale_runs is not None else (lambda base: []),
     )
-    monkeypatch.setattr("bench.runner.apply_config", lambda ui, cfg: {"1": {}})
+    monkeypatch.setattr(
+        "bench.runner.apply_config",
+        lambda ui, cfg, output_tag=None, cache_bust=0: {"1": {}},
+    )
     monkeypatch.setattr("bench.runner.load_ui_workflow", lambda p: {})
 
 

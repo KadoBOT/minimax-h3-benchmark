@@ -263,7 +263,13 @@ def _apply_widgets_to_node(
             node_inputs[key] = val
 
 
-def apply_config(ui: dict[str, Any], cfg: RunConfig) -> dict[str, dict[str, Any]]:
+def apply_config(
+    ui: dict[str, Any],
+    cfg: RunConfig,
+    *,
+    output_tag: str | None = None,
+    cache_bust: int = 0,
+) -> dict[str, dict[str, Any]]:
     """Build an API prompt from *ui* with *cfg* applied (omit + rewire).
 
     MODEL path is rebuilt explicitly::
@@ -272,6 +278,12 @@ def apply_config(ui: dict[str, Any], cfg: RunConfig) -> dict[str, dict[str, Any]
 
     Unused quant loader, cache nodes, RIFE/upscaler/clean-VRAM, and Any Switches
     126/127 are omitted. Video path is rewired around the omitted post-process nodes.
+
+    *output_tag* is written into VHS filename_prefix so each execution gets a unique
+    output name (and helps downstream cache invalidation).
+
+    *cache_bust* is a non-quality-affecting integer toggled between runs (e.g. 0/1)
+    so ComfyUI cannot return a fully cached graph for identical seeds.
     """
     api = ui_to_api_prompt(ui)
 
@@ -299,6 +311,13 @@ def apply_config(ui: dict[str, Any], cfg: RunConfig) -> dict[str, dict[str, Any]
         set_widget(api, NODE_RESOLUTION, "megapixels", float(cfg.mp))
     if str(NODE_DURATION) in api:
         set_widget(api, NODE_DURATION, "value", float(cfg.duration_s))
+
+    # Unique output name per execution (warmup vs timed, etc.)
+    if str(NODE_VIDEO_COMBINE) in api:
+        tag = output_tag or "bench"
+        # Sanitize for filenames
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in tag)[:120]
+        set_widget(api, NODE_VIDEO_COMBINE, "filename_prefix", f"bench/{safe}")
 
     # --- Quant: keep one loader, set model filename ---
     if cfg.quant == "int8":
@@ -384,6 +403,27 @@ def apply_config(ui: dict[str, Any], cfg: RunConfig) -> dict[str, dict[str, Any]
             _apply_widgets_to_node(api, cache_node, widgets)
         if cfg.sol_attn and str(NODE_SOL_ATTN) in api:
             _apply_widgets_to_node(api, NODE_SOL_ATTN, widgets)
+
+    # --- Execution cache bust (does not change visual seed/settings) ---
+    # Toggle verbose/debug flags so the model patch chain is not cache-identical
+    # across warmup vs timed. Prefer SolAttn verbose; else active cache verbose;
+    # else sage allow_compile stays False and we only rely on clear_execution_cache.
+    bust = bool(cache_bust % 2)
+    if cfg.sol_attn and str(NODE_SOL_ATTN) in api:
+        set_widget(api, NODE_SOL_ATTN, "verbose", bust)
+    elif cache_node is not None and str(cache_node) in api:
+        inputs = api[str(cache_node)]["inputs"]
+        if "verbose" in inputs or api[str(cache_node)]["class_type"] in (
+            "EasyCache",
+            "UC_MiniMaxH3Cache",
+        ):
+            set_widget(api, cache_node, "verbose", bust)
+        if api[str(cache_node)]["class_type"] == "SpectrumApplyMiniMaxH3":
+            set_widget(api, cache_node, "debug", bust)
+    elif str(NODE_SAGE) in api:
+        # Last resort: flip allow_compile (still same attention path when False/True
+        # can differ — only used when no sol/cache verbose available).
+        set_widget(api, NODE_SAGE, "allow_compile", False)
 
     # --- Prune dangling references to omitted nodes ---
     alive = set(api.keys())

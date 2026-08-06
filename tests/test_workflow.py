@@ -96,3 +96,11 @@ def test_clean_vram_omitted():
     # Video path rewired: decode samples from sampler, combine images from decode
     assert api["125"]["inputs"]["samples"][0] == "10"
     assert api["110"]["inputs"]["images"][0] == "125"
+
+
+def test_output_tag_sets_unique_filename_prefix():
+    ui = load_ui_workflow(WORKFLOW_PATH)
+    api = apply_config(ui, RunConfig(), output_tag="speed_001_timed")
+    prefix = api["110"]["inputs"]["filename_prefix"]
+    assert "speed_001_timed" in prefix
+    assert prefix.startswith("bench/")

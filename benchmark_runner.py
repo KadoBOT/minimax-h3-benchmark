@@ -51,17 +51,29 @@ def main(argv: list[str] | None = None) -> int:
     try:
         runner.run_all(existing)
     except KeyboardInterrupt:
+        print("Aborting… interrupting ComfyUI and clearing queue.")
+        runner.request_abort()
         suite = store.try_load_suite()
         if suite:
             suite.status = "aborted"
+            suite.current = None
             store.save_suite(suite)
         print("Aborted.")
     finally:
-        print(f"Suite finished. UI still at http://127.0.0.1:{args.port}/ (Ctrl+C to exit)")
+        # Always ensure Comfy is not left running our jobs after exit path.
+        try:
+            client.cancel_all()
+        except Exception:
+            pass
+        print(f"UI still at http://127.0.0.1:{args.port}/ (Ctrl+C to exit)")
         try:
             while True:
                 time.sleep(3600)
         except KeyboardInterrupt:
+            try:
+                client.cancel_all()
+            except Exception:
+                pass
             pass
         httpd.shutdown()
     return 0
