@@ -89,8 +89,11 @@ class BenchmarkRunner:
         *,
         stage: str,
         cache_bust: int,
-    ) -> tuple[str, float, dict]:
-        """Build prompt for stage and execute. Returns prompt_id, elapsed, history."""
+    ) -> tuple[str, float, dict, float | None]:
+        """Build prompt for stage and execute.
+
+        Returns prompt_id, elapsed, history, sec_per_it.
+        """
         self._check_abort()
         prompt = apply_config(
             self.ui,
@@ -100,7 +103,7 @@ class BenchmarkRunner:
         )
         return self.comfy.run_prompt(prompt)
 
-    def _timed_with_cache_guard(self, run: Run) -> tuple[str, float, dict]:
+    def _timed_with_cache_guard(self, run: Run) -> tuple[str, float, dict, float | None]:
         """Run timed generation; clear execution cache and retry if result is a cache hit."""
         # Clear node cache so timed is a real re-run (same seed as warmup).
         try:
@@ -109,7 +112,7 @@ class BenchmarkRunner:
             # Still attempt; cache_bust widgets may be enough.
             print(f"warning: execution cache clear failed: {e}")
 
-        pid, timed_s, hist = self._run_once(run, stage="timed", cache_bust=1)
+        pid, timed_s, hist, sec_per_it = self._run_once(run, stage="timed", cache_bust=1)
 
         sampler_cached = self.comfy.was_node_cached(hist, NODE_SAMPLER_ADV)
         if sampler_cached or timed_s < _SUSPICIOUSLY_FAST_S:
@@ -122,14 +125,16 @@ class BenchmarkRunner:
                 self.comfy.clear_execution_cache()
             except ComfyError:
                 pass
-            pid, timed_s, hist = self._run_once(run, stage="timed_retry", cache_bust=2)
+            pid, timed_s, hist, sec_per_it = self._run_once(
+                run, stage="timed_retry", cache_bust=2
+            )
             if self.comfy.was_node_cached(hist, NODE_SAMPLER_ADV) or timed_s < _SUSPICIOUSLY_FAST_S:
                 raise ComfyError(
                     f"timed run still appears fully cached after retry "
                     f"(timed_s={timed_s:.3f}). Start ComfyUI with --cache-none "
                     "or install PRO_ClearCacheNode / easy clearCacheAll."
                 )
-        return pid, timed_s, hist
+        return pid, timed_s, hist, sec_per_it
 
     def _execute_cell(self, suite: Suite, phase: str, run: Run) -> None:
         suite.current = {"phase": phase, "run_id": run.id, "stage": "warmup"}
@@ -141,7 +146,9 @@ class BenchmarkRunner:
         # Never enable clean VRAM — apply_config already omits NODE_CLEAN_VRAM.
         try:
             self._check_abort()
-            pid, warm_s, _hist = self._run_once(run, stage="warmup", cache_bust=0)
+            pid, warm_s, _hist, _warm_it = self._run_once(
+                run, stage="warmup", cache_bust=0
+            )
             run.warmup_s = warm_s
             run.prompt_id = pid
         except KeyboardInterrupt:
@@ -165,9 +172,10 @@ class BenchmarkRunner:
 
         try:
             self._check_abort()
-            pid, timed_s, hist = self._timed_with_cache_guard(run)
+            pid, timed_s, hist, sec_per_it = self._timed_with_cache_guard(run)
             run.prompt_id = pid
             run.timed_s = timed_s
+            run.sec_per_it = sec_per_it
             vid = self.comfy.find_first_video(hist)
             if vid:
                 fn, sub, typ = vid

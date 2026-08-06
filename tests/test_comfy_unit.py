@@ -45,3 +45,21 @@ def test_cancel_all_posts_interrupt_and_clear(monkeypatch):
     paths = [c[1] for c in calls]
     assert "/interrupt" in paths
     assert "/queue" in paths
+
+
+def test_progress_collector_sec_per_it():
+    from bench.comfy import ProgressCollector
+
+    c = ProgressCollector()
+    # Simulate sampler steps ~2s each
+    t0 = 1000.0
+    # monkeypatch time inside on_progress by injecting events directly
+    c._events = [
+        (t0 + 0.0, 1, 4, "10", "p1"),
+        (t0 + 2.0, 2, 4, "10", "p1"),
+        (t0 + 4.0, 3, 4, "10", "p1"),
+        (t0 + 6.0, 4, 4, "10", "p1"),
+    ]
+    spi = c.sec_per_it("p1")
+    assert spi is not None
+    assert abs(spi - 2.0) < 1e-6

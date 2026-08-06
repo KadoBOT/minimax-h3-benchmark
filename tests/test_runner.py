@@ -22,7 +22,12 @@ class FakeComfy:
             raise RuntimeError(f"boom at call {self.n}")
         # Clear-cache mini prompts have node 9001 — return fast without counting as gen.
         if "9001" in prompt and len(prompt) <= 2:
-            return f"clear{self.n}", 0.01, {"status": {"status_str": "success", "completed": True}, "outputs": {}}
+            return (
+                f"clear{self.n}",
+                0.01,
+                {"status": {"status_str": "success", "completed": True}, "outputs": {}},
+                None,
+            )
         return (
             f"p{self.n}",
             10.0 + self.n * 0.01,  # > 2s so cache-guard does not false-positive
@@ -47,6 +52,7 @@ class FakeComfy:
                     }
                 },
             },
+            0.5,  # fake sec_per_it
         )
 
     def clear_execution_cache(self):
@@ -111,6 +117,7 @@ def test_runner_speed_then_base(tmp_path, monkeypatch):
     assert all(x.status == "done" for x in suite.phases["speed"].runs)
     assert suite.phases["speed"].runs[0].timed_s is not None
     assert suite.phases["speed"].runs[0].warmup_s is not None
+    assert suite.phases["speed"].runs[0].sec_per_it == 0.5
     assert suite.phases["speed"].runs[0].video_path == "videos/s1.mp4"
     assert (tmp_path / "videos" / "s1.mp4").read_bytes() == b"fake"
 

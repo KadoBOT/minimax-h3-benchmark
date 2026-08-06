@@ -21,6 +21,14 @@ function fmtSec(s) {
   return `${Number(s).toFixed(1)}s`;
 }
 
+/** Wall time + ComfyUI s/it, e.g. "120.0s / 6.54s/it" */
+function fmtRunTime(run) {
+  if (!run || run.timed_s == null) return "—";
+  const wall = fmtSec(run.timed_s);
+  if (run.sec_per_it == null || run.sec_per_it === undefined) return wall;
+  return `${wall} / ${Number(run.sec_per_it).toFixed(2)}s/it`;
+}
+
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, "&amp;")
@@ -55,11 +63,14 @@ function cellHtml(run, bestId) {
   if (run.id === bestId) classes.push("best");
   let content;
   if (run.status === "done" && run.timed_s != null) {
-    content = fmtSec(run.timed_s);
+    content = fmtRunTime(run);
   } else {
     content = `<span class="chip ${escapeHtml(run.status || "queued")}">${escapeHtml(run.status || "queued")}</span>`;
   }
-  return `<td class="${classes.join(" ")}" data-run-id="${escapeHtml(run.id)}" title="${escapeHtml(run.id)}">${content}</td>`;
+  const title = run.sec_per_it != null
+    ? `${run.id} · ${fmtRunTime(run)}`
+    : run.id;
+  return `<td class="${classes.join(" ")}" data-run-id="${escapeHtml(run.id)}" title="${escapeHtml(title)}">${content}</td>`;
 }
 
 function renderStatus(data) {
@@ -71,7 +82,7 @@ function renderStatus(data) {
   el.textContent = `suite=${data.status || "?"} · ${curText} · updated ${data.updated_at || "—"}`;
   const best = findFastest(data.phases?.speed?.runs || []);
   document.getElementById("fastest").textContent = best
-    ? `Fastest: ${fmtSec(best.timed_s)} (${best.id})`
+    ? `Fastest: ${fmtRunTime(best)} (${best.id})`
     : "";
 }
 
@@ -139,7 +150,7 @@ function renderQuality(runs) {
     <th>scheduler</th>
     <th>sampler</th>
     <th>steps</th>
-    <th>timed_s</th>
+    <th>time</th>
     <th>video</th>
   </tr></thead><tbody>`;
   for (const r of runs) {
@@ -153,7 +164,7 @@ function renderQuality(runs) {
       <td>${escapeHtml(cfg.scheduler ?? "—")}</td>
       <td>${escapeHtml(cfg.sampler ?? "—")}</td>
       <td>${escapeHtml(cfg.steps ?? "—")}</td>
-      <td>${fmtSec(r.timed_s)}</td>
+      <td>${escapeHtml(fmtRunTime(r))}</td>
       <td>${vid}</td>
     </tr>`;
   }
@@ -254,7 +265,7 @@ function renderGallery(allRuns) {
       <video src="/${escapeHtml(r.video_path)}" controls preload="metadata"></video>
       <div class="meta">
         <strong>${escapeHtml(r.id)}</strong><br>
-        ${fmtSec(r.timed_s)} · ${escapeHtml(r.config?.cache || "?")} · ${escapeHtml(r.config?.quant || "?")}
+        ${escapeHtml(fmtRunTime(r))} · ${escapeHtml(r.config?.cache || "?")} · ${escapeHtml(r.config?.quant || "?")}
         <div class="chips">${configChips(r.config)}</div>
       </div>
     </article>`
@@ -285,8 +296,9 @@ function openDetail(runId) {
     <div class="kv">
       phase=<span>${escapeHtml(run.phase || "?")}</span>
       · status=<span>${escapeHtml(run.status || "?")}</span>
-      · timed=<span>${fmtSec(run.timed_s)}</span>
+      · timed=<span>${escapeHtml(fmtRunTime(run))}</span>
       · warmup=<span>${fmtSec(run.warmup_s)}</span>
+      ${run.sec_per_it != null ? `· s/it=<span>${Number(run.sec_per_it).toFixed(2)}</span>` : ""}
     </div>
     <div class="chips">${configChips(cfg)}</div>
     ${video}

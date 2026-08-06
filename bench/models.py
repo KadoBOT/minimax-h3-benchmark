@@ -41,6 +41,7 @@ class Run:
     config: RunConfig = field(default_factory=RunConfig)
     warmup_s: float | None = None
     timed_s: float | None = None
+    sec_per_it: float | None = None  # ComfyUI sampler progress average (s/it)
     video_path: str | None = None
     prompt_id: str | None = None
     error: str | None = None
@@ -63,6 +64,7 @@ class Run:
             config=cfg,
             warmup_s=d.get("warmup_s"),
             timed_s=d.get("timed_s"),
+            sec_per_it=d.get("sec_per_it"),
             video_path=d.get("video_path"),
             prompt_id=d.get("prompt_id"),
             error=d.get("error"),
