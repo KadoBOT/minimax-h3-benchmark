@@ -395,6 +395,8 @@ function openDetail(runId) {
           ? `· s/it=<span>${Number(run.sec_per_it).toFixed(2)}</span>`
           : ""
       }
+      ${run.graph_cache_cleared != null ? `· graph_clear=<span>${run.graph_cache_cleared}</span>` : ""}
+      ${run.sampler_cached != null ? `· sampler_cached=<span>${run.sampler_cached}</span>` : ""}
     </div>
     <div class="chips">${configChips(cfg)}</div>
     ${video}

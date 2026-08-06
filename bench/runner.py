@@ -1,4 +1,20 @@
-"""Orchestrate benchmark phases: warmup + timed cells, progressive store updates."""
+"""Orchestrate benchmark phases: warmup + timed cells, progressive store updates.
+
+Protocol (truthful metrics)
+---------------------------
+Per cell (not once globally):
+
+1. **Warmup** — full pipeline gen, same seed/settings. Record ``warmup_s``. Not ranked.
+2. **Clear Comfy graph execution cache only** — forces the next queue to re-run
+   sampling. Does **not** unload models / clean VRAM, and does **not** disable
+   EasyCache / Spectrum / H3 (those re-apply whenever the sampler actually runs).
+3. **Timed** — identical sampling graph again. Record ``timed_s`` (full pipeline)
+   and ``sec_per_it`` (sampler wall ÷ steps). Ranked on ``timed_s``; use
+   ``sec_per_it`` to compare denoise speedups.
+
+No graph-cache clear between matrix cells (different configs usually invalidate
+themselves; model weights stay resident for realistic sequential use).
+"""
 
 from __future__ import annotations
 
@@ -21,8 +37,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# Timed runs faster than this almost certainly hit a full execution-cache (warmup reuse).
-_SUSPICIOUSLY_FAST_S = 2.0
+# Absolute floor: anything under this is almost certainly a graph-cache hit.
+_SUSPICIOUSLY_FAST_ABS_S = 2.0
+# Relative: timed << warmup implies graph cache (or failed clear), not a real gen.
+_SUSPICIOUSLY_FAST_VS_WARMUP = 0.15
 
 
 class BenchmarkRunner:
@@ -65,6 +83,11 @@ class BenchmarkRunner:
             suite.status = "running"
             if not suite.phases["speed"].runs:
                 suite.phases["speed"].runs = build_speed_runs()
+            # Ensure protocol text is present on older result files
+            if "protocol" not in (suite.baseline or {}):
+                from bench.models import BENCHMARK_PROTOCOL
+
+                suite.baseline = {**(suite.baseline or {}), "protocol": BENCHMARK_PROTOCOL}
             self._emit(suite)
             return suite
         suite = empty_suite(str(uuid4())[:8], self.comfy.base_url)
@@ -84,32 +107,40 @@ class BenchmarkRunner:
             return True
         return False
 
+    def _looks_like_graph_cache_hit(
+        self, hist: dict, timed_s: float, warmup_s: float | None
+    ) -> bool:
+        """True when the timed pass likely skipped real sampling."""
+        if self.comfy.was_node_cached(hist, NODE_SAMPLER_ADV):
+            return True
+        if timed_s < _SUSPICIOUSLY_FAST_ABS_S:
+            return True
+        if warmup_s is not None and warmup_s > 10.0 and timed_s < warmup_s * _SUSPICIOUSLY_FAST_VS_WARMUP:
+            return True
+        return False
+
     def _run_once(
         self,
         run: Run,
         *,
         stage: str,
-        cache_bust: int,
         suite: Suite | None = None,
         phase: str | None = None,
     ) -> tuple[str, float, dict, float | None]:
         """Build prompt for stage and execute.
 
-        Returns prompt_id, elapsed, history, sec_per_it.
+        Warmup and timed share the same sampling graph; only output filename differs.
         """
         self._check_abort()
         prompt = apply_config(
             self.ui,
             run.config,
             output_tag=f"{run.id}_{stage}",
-            cache_bust=cache_bust,
         )
 
         last_emit = [0.0]
 
         def on_live(snap: dict) -> None:
-            # Throttle JSON writes — frequent emits only refresh the header, but
-            # still rewrite benchmark.json; keep this to ~2s.
             now = time.perf_counter()
             if now - last_emit[0] < 2.0 and snap.get("progress_value") not in (
                 None,
@@ -126,75 +157,90 @@ class BenchmarkRunner:
                 detail_parts.append(str(snap["progress"]))
             if snap.get("sec_per_it") is not None:
                 detail_parts.append(f"{snap['sec_per_it']:.2f}s/it")
+            ui_stage = "timing" if stage.startswith("timed") else stage
             suite.current = {
                 "phase": phase or run.phase,
                 "run_id": run.id,
-                "stage": stage if stage != "timed_retry" else "timing",
+                "stage": ui_stage,
                 "node": snap.get("node"),
                 "node_label": snap.get("node_label"),
                 "progress": snap.get("progress"),
                 "sec_per_it": snap.get("sec_per_it"),
                 "detail": " · ".join(detail_parts) if detail_parts else None,
             }
-            # Live UI update without rewriting the whole run list status each time
-            # is fine — current is what the header shows.
             self._emit(suite)
 
         return self.comfy.run_prompt(prompt, on_live=on_live if suite is not None else None)
 
-    def _timed_with_cache_guard(
+    def _timed_pass(
         self, run: Run, *, suite: Suite, phase: str
-    ) -> tuple[str, float, dict, float | None]:
-        """Run timed generation; clear execution cache and retry if result is a cache hit."""
-        # Clear node cache so timed is a real re-run (same seed as warmup).
+    ) -> tuple[str, float, dict, float | None, bool, bool]:
+        """Clear graph cache once, run timed gen, optional single retry.
+
+        Returns:
+            prompt_id, timed_s, hist, sec_per_it, sampler_cached, graph_cache_cleared
+        """
+        cleared = False
+        suite.current = {
+            "phase": phase,
+            "run_id": run.id,
+            "stage": "clear_graph_cache",
+            "detail": "clear Comfy execution cache (not VRAM / not model caches)",
+        }
+        self._emit(suite)
         try:
             self.comfy.clear_execution_cache()
+            cleared = True
         except ComfyError as e:
-            # Still attempt; cache_bust widgets may be enough.
-            print(f"warning: execution cache clear failed: {e}")
+            print(
+                f"warning: graph execution cache clear failed for {run.id}: {e}. "
+                "Timed pass may be invalid if Comfy reuses warmup node outputs."
+            )
 
         pid, timed_s, hist, sec_per_it = self._run_once(
-            run, stage="timed", cache_bust=1, suite=suite, phase=phase
+            run, stage="timed", suite=suite, phase=phase
         )
-
         sampler_cached = self.comfy.was_node_cached(hist, NODE_SAMPLER_ADV)
-        if sampler_cached or timed_s < _SUSPICIOUSLY_FAST_S:
+
+        if self._looks_like_graph_cache_hit(hist, timed_s, run.warmup_s):
             print(
-                f"warning: timed run for {run.id} looks cached "
+                f"warning: timed run for {run.id} looks like a graph-cache hit "
                 f"(timed_s={timed_s:.3f}, sampler_cached={sampler_cached}); "
-                "clearing cache and retrying once"
+                "clearing execution cache once more and retrying"
             )
             try:
                 self.comfy.clear_execution_cache()
+                cleared = True
             except ComfyError:
                 pass
             pid, timed_s, hist, sec_per_it = self._run_once(
-                run,
-                stage="timed_retry",
-                cache_bust=2,
-                suite=suite,
-                phase=phase,
+                run, stage="timed_retry", suite=suite, phase=phase
             )
-            if self.comfy.was_node_cached(hist, NODE_SAMPLER_ADV) or timed_s < _SUSPICIOUSLY_FAST_S:
+            sampler_cached = self.comfy.was_node_cached(hist, NODE_SAMPLER_ADV)
+            if self._looks_like_graph_cache_hit(hist, timed_s, run.warmup_s):
                 raise ComfyError(
-                    f"timed run still appears fully cached after retry "
-                    f"(timed_s={timed_s:.3f}). Start ComfyUI with --cache-none "
-                    "or install PRO_ClearCacheNode / easy clearCacheAll."
+                    f"timed run still looks graph-cached after retry "
+                    f"(timed_s={timed_s:.3f}). Install PRO_ClearCacheNode / "
+                    "easy clearCacheAll, or start ComfyUI with --cache-none."
                 )
-        return pid, timed_s, hist, sec_per_it
+
+        return pid, timed_s, hist, sec_per_it, sampler_cached, cleared
 
     def _execute_cell(self, suite: Suite, phase: str, run: Run) -> None:
         suite.current = {"phase": phase, "run_id": run.id, "stage": "warmup"}
         run.status = "warmup"
         run.started_at = _now()
         run.error = None
+        run.sampler_cached = None
+        run.graph_cache_cleared = None
         self._emit(suite)
 
         # Never enable clean VRAM — apply_config already omits NODE_CLEAN_VRAM.
+        # Do NOT clear graph cache before warmup — first cell cold-start is intentional.
         try:
             self._check_abort()
             pid, warm_s, _hist, _warm_it = self._run_once(
-                run, stage="warmup", cache_bust=0, suite=suite, phase=phase
+                run, stage="warmup", suite=suite, phase=phase
             )
             run.warmup_s = warm_s
             run.prompt_id = pid
@@ -219,12 +265,19 @@ class BenchmarkRunner:
 
         try:
             self._check_abort()
-            pid, timed_s, hist, sec_per_it = self._timed_with_cache_guard(
-                run, suite=suite, phase=phase
-            )
+            (
+                pid,
+                timed_s,
+                hist,
+                sec_per_it,
+                sampler_cached,
+                cleared,
+            ) = self._timed_pass(run, suite=suite, phase=phase)
             run.prompt_id = pid
             run.timed_s = timed_s
             run.sec_per_it = sec_per_it
+            run.sampler_cached = sampler_cached
+            run.graph_cache_cleared = cleared
             suite.current = {
                 "phase": phase,
                 "run_id": run.id,

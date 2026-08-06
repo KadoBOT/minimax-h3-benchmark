@@ -279,12 +279,13 @@ def apply_config(
     Unused quant loader, cache nodes, RIFE/upscaler/clean-VRAM, and Any Switches
     126/127 are omitted. Video path is rewired around the omitted post-process nodes.
 
-    *output_tag* is written into VHS filename_prefix so each execution gets a unique
-    output name (and helps downstream cache invalidation).
+    *output_tag* only changes VHS ``filename_prefix`` (unique output files). It must
+    not alter sampling inputs. Graph-level re-execution after warmup is handled by
+    clearing Comfy's **execution** cache — not by mutating model/cache widgets.
 
-    *cache_bust* is a non-quality-affecting integer toggled between runs (e.g. 0/1)
-    so ComfyUI cannot return a fully cached graph for identical seeds.
+    *cache_bust* is deprecated/ignored (kept for call-site compatibility).
     """
+    del cache_bust  # no longer used — identical graphs for warmup vs timed
     api = ui_to_api_prompt(ui)
 
     # --- Prompt / seed / schedule / resolution / duration ---
@@ -404,26 +405,8 @@ def apply_config(
         if cfg.sol_attn and str(NODE_SOL_ATTN) in api:
             _apply_widgets_to_node(api, NODE_SOL_ATTN, widgets)
 
-    # --- Execution cache bust (does not change visual seed/settings) ---
-    # Toggle verbose/debug flags so the model patch chain is not cache-identical
-    # across warmup vs timed. Prefer SolAttn verbose; else active cache verbose;
-    # else sage allow_compile stays False and we only rely on clear_execution_cache.
-    bust = bool(cache_bust % 2)
-    if cfg.sol_attn and str(NODE_SOL_ATTN) in api:
-        set_widget(api, NODE_SOL_ATTN, "verbose", bust)
-    elif cache_node is not None and str(cache_node) in api:
-        inputs = api[str(cache_node)]["inputs"]
-        if "verbose" in inputs or api[str(cache_node)]["class_type"] in (
-            "EasyCache",
-            "UC_MiniMaxH3Cache",
-        ):
-            set_widget(api, cache_node, "verbose", bust)
-        if api[str(cache_node)]["class_type"] == "SpectrumApplyMiniMaxH3":
-            set_widget(api, cache_node, "debug", bust)
-    elif str(NODE_SAGE) in api:
-        # Last resort: flip allow_compile (still same attention path when False/True
-        # can differ — only used when no sol/cache verbose available).
-        set_widget(api, NODE_SAGE, "allow_compile", False)
+    # Keep patch/cache verbose flags at workflow defaults (no per-stage mutation).
+    # Fairness: warmup and timed must use the same sampling graph.
 
     # --- Prune dangling references to omitted nodes ---
     alive = set(api.keys())

@@ -242,11 +242,17 @@ class ComfyClient:
         self.current_prompt_id = None
 
     def clear_execution_cache(self) -> None:
-        """Clear ComfyUI node execution cache so the next identical prompt re-runs.
+        """Clear ComfyUI **graph execution** cache (node output memoization).
 
-        Without this, a second run with the same seed/settings returns in ~0s
-        because every node is cache-hit (warmup already produced outputs).
-        Does NOT unload models / clean VRAM.
+        Call this **once after warmup, before the timed gen of the same cell**.
+        That forces a real second sampling pass with the same seed/settings.
+
+        This does **not**:
+        - unload models / clean VRAM
+        - disable EasyCache / Spectrum / H3 (those re-apply on real sampling)
+
+        Without this, Comfy often returns the warmup tensors in ~0s and ``timed_s``
+        is meaningless.
         """
         # Prefer standalone clear node if available.
         prompt = {
@@ -257,7 +263,6 @@ class ComfyClient:
         }
         try:
             _pid, _elapsed, hist, _it = self.run_prompt(prompt, track=False)
-            # If the node errored, fall through to secondary method.
             status = (hist.get("status") or {}).get("status_str")
             if status == "error":
                 raise ComfyError("PRO_ClearCacheNode failed")

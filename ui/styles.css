@@ -66,6 +66,19 @@ h2 {
   font-size: 0.82rem;
 }
 
+.protocol {
+  font-size: 0.75rem;
+  max-width: 52rem;
+  line-height: 1.4;
+  margin: 0.4rem 0 0;
+  opacity: 0.9;
+}
+
+.protocol strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .stat {
   font-family: var(--mono);
   font-size: 0.9rem;

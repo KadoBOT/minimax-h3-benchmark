@@ -111,7 +111,8 @@ def test_runner_speed_then_base(tmp_path, monkeypatch):
     _patch_store(monkeypatch, tmp_path)
     _patch_matrix_and_workflow(monkeypatch)
 
-    r = BenchmarkRunner(FakeComfy())
+    fake = FakeComfy()
+    r = BenchmarkRunner(fake)
     suite = r.init_suite()
     r.run_phase(suite, "speed")
     assert all(x.status == "done" for x in suite.phases["speed"].runs)
@@ -120,6 +121,10 @@ def test_runner_speed_then_base(tmp_path, monkeypatch):
     assert suite.phases["speed"].runs[0].sec_per_it == 0.5
     assert suite.phases["speed"].runs[0].video_path == "videos/s1.mp4"
     assert (tmp_path / "videos" / "s1.mp4").read_bytes() == b"fake"
+    # Graph cache cleared once per cell (warmup→timed), not more without retries
+    assert fake.cleared == 2  # two cells
+    assert suite.phases["speed"].runs[0].graph_cache_cleared is True
+    assert "protocol" in suite.baseline
 
 
 def test_run_all_picks_fastest_and_completes(tmp_path, monkeypatch):

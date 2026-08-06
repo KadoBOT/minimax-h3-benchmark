@@ -41,7 +41,12 @@ class Run:
     config: RunConfig = field(default_factory=RunConfig)
     warmup_s: float | None = None
     timed_s: float | None = None
-    sec_per_it: float | None = None  # ComfyUI sampler progress average (s/it)
+    # Sampler rate during the *timed* run (wall while sampler node ran / steps).
+    sec_per_it: float | None = None
+    # True if Comfy reported the sampler node as execution-cached on the timed pass.
+    sampler_cached: bool | None = None
+    # True if we cleared Comfy's graph execution cache before the timed pass.
+    graph_cache_cleared: bool | None = None
     video_path: str | None = None
     prompt_id: str | None = None
     error: str | None = None
@@ -57,20 +62,11 @@ class Run:
         cfg = d.get("config") or {}
         if isinstance(cfg, dict):
             cfg = RunConfig.from_dict(cfg)
-        return cls(
-            id=d["id"],
-            phase=d["phase"],
-            status=d.get("status", "queued"),
-            config=cfg,
-            warmup_s=d.get("warmup_s"),
-            timed_s=d.get("timed_s"),
-            sec_per_it=d.get("sec_per_it"),
-            video_path=d.get("video_path"),
-            prompt_id=d.get("prompt_id"),
-            error=d.get("error"),
-            started_at=d.get("started_at"),
-            finished_at=d.get("finished_at"),
-        )
+        known = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        known["config"] = cfg
+        known.setdefault("id", d.get("id"))
+        known.setdefault("phase", d.get("phase"))
+        return cls(**{k: v for k, v in known.items() if k in cls.__dataclass_fields__})
 
 
 @dataclass
@@ -129,6 +125,33 @@ class Suite:
         )
 
 
+# Written into suite.baseline so the UI/results file document metric meaning.
+BENCHMARK_PROTOCOL: dict[str, Any] = {
+    "warmup_s": (
+        "Full pipeline wall-clock for the first gen of this cell. Discarded for ranking. "
+        "May include model load on early cells; later cells keep weights in VRAM (no VRAM clean)."
+    ),
+    "timed_s": (
+        "Full pipeline wall-clock for the second gen of this cell (same seed/settings). "
+        "Ranked metric for end-to-end time. Includes VAE decode + video encode after sampling."
+    ),
+    "sec_per_it": (
+        "Sampler-only rate during the timed gen: wall time while the sampler node ran ÷ steps. "
+        "Best signal for EasyCache / Spectrum / H3 / quant / sol-attn speedups."
+    ),
+    "graph_execution_cache": (
+        "ComfyUI node-output cache is cleared once per cell: after warmup, before timed. "
+        "Not cleared between matrix cells. This is NOT Easy/Spectrum/H3 — those still apply "
+        "on every real sampling pass."
+    ),
+    "vram_clean": False,
+    "identical_graphs": (
+        "Warmup and timed use the same sampling graph (same seed, cache, quant, sol-attn). "
+        "Only VHS filename_prefix differs so outputs do not overwrite each other."
+    ),
+}
+
+
 def empty_suite(suite_id: str, comfy_url: str) -> Suite:
     from bench.constants import FIXED_SEED
 
@@ -142,6 +165,7 @@ def empty_suite(suite_id: str, comfy_url: str) -> Suite:
             "scheduler": "simple",
             "sampler": "res_multistep",
             "steps": 20,
+            "protocol": BENCHMARK_PROTOCOL,
         },
         phases={
             "speed": PhaseState(),

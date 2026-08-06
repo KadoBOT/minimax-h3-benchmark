@@ -19,3 +19,5 @@ def test_empty_suite_has_three_phases():
     s = empty_suite("t1", "http://127.0.0.1:8188")
     assert set(s.phases) == {"speed", "quality", "scale"}
     assert s.baseline["seed"] == 914265959575104
+    assert "protocol" in s.baseline
+    assert s.baseline["protocol"]["vram_clean"] is False
