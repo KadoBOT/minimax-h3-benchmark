@@ -55,17 +55,52 @@ def node_label(node_id: str | int | None) -> str | None:
 
 
 class ProgressCollector:
-    """Collect ComfyUI WebSocket progress/executing events and derive s/it."""
+    """Derive ComfyUI s/it from WebSocket executing + progress events.
+
+    Important: do **not** use inter-arrival times of progress messages alone.
+    Messages often arrive in bursts, which produced bogus ~0.01s/it. Instead:
+
+    - Wall-clock while a node is *executing* (enter → leave via ``executing``)
+    - Divided by that node's progress ``max`` (step count), same idea as tqdm
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        # (t, value, max, node, prompt_id)
-        self._events: list[tuple[float, int, int, str | None, str | None]] = []
         self.current_node: str | None = None
         self.progress_value: int | None = None
         self.progress_max: int | None = None
-        self._last_step_t: float | None = None
+        self._node_enter: dict[str, float] = {}
+        self._node_max: dict[str, int] = {}
+        self._node_last_value: dict[str, int] = {}
+        # Best finalized s/it (prefer higher step counts = sampler)
+        self._best_sec_per_it: float | None = None
+        self._best_steps: int = 0
         self.instant_sec_per_it: float | None = None
+
+    def _finalize_node(self, node: str, end_t: float) -> None:
+        enter = self._node_enter.get(node)
+        steps = self._node_max.get(node) or 0
+        if enter is None or steps <= 0:
+            return
+        duration = end_t - enter
+        if duration <= 0:
+            return
+        candidate = duration / steps
+        # Ignore pathological sub-50ms/it (burst artefacts / non-sampler noise)
+        if candidate < 0.05 and steps < 5:
+            return
+        if steps > self._best_steps or (
+            steps == self._best_steps
+            and (self._best_sec_per_it is None or candidate > self._best_sec_per_it)
+        ):
+            # Prefer more steps (sampler). On ties keep larger s/it only if previous
+            # was junk; otherwise keep first good sample.
+            if steps > self._best_steps or self._best_sec_per_it is None:
+                self._best_sec_per_it = candidate
+                self._best_steps = steps
+            elif candidate >= 0.05 and self._best_sec_per_it < 0.05:
+                self._best_sec_per_it = candidate
+                self._best_steps = steps
 
     def on_progress(self, data: dict[str, Any]) -> None:
         try:
@@ -75,37 +110,44 @@ class ProgressCollector:
             return
         if maximum <= 0:
             return
-        node = data.get("node")
-        prompt_id = data.get("prompt_id")
+        raw_node = data.get("node")
         now = time.perf_counter()
         with self._lock:
-            prev_t = self._last_step_t
-            prev_v = self.progress_value
-            self._events.append(
-                (now, value, maximum, str(node) if node is not None else None, prompt_id)
-            )
+            node = str(raw_node) if raw_node is not None else self.current_node
+            if node is None:
+                return
+            if node not in self._node_enter:
+                # Progress before executing event — start clock here
+                self._node_enter[node] = now
+            self.current_node = node
             self.progress_value = value
             self.progress_max = maximum
-            if node is not None:
-                self.current_node = str(node)
-            # Instant s/it from last step advance (matches tqdm-style display)
-            if prev_t is not None and prev_v is not None and value > prev_v:
-                self.instant_sec_per_it = (now - prev_t) / (value - prev_v)
-            self._last_step_t = now
+            self._node_max[node] = max(self._node_max.get(node, 0), maximum)
+            self._node_last_value[node] = value
+            enter = self._node_enter[node]
+            # Live estimate like tqdm: elapsed / completed steps
+            if value > 0 and now > enter:
+                self.instant_sec_per_it = (now - enter) / value
+            # If progress hits max, finalize this node's rate early
+            if value >= maximum and maximum >= 1:
+                self._finalize_node(node, now)
 
     def on_executing(self, data: dict[str, Any]) -> None:
-        node = data.get("node")
+        raw = data.get("node")
+        now = time.perf_counter()
         with self._lock:
-            if node is None:
-                # node=None means the prompt finished executing
+            prev = self.current_node
+            if prev is not None and (raw is None or str(raw) != prev):
+                self._finalize_node(prev, now)
+                self.progress_value = None
+                self.progress_max = None
+            if raw is None:
                 self.current_node = None
-            else:
-                self.current_node = str(node)
-                # entering a new node — step progress may not apply
-                if self.progress_value is not None and self.progress_max is not None:
-                    if self.progress_value >= self.progress_max:
-                        self.progress_value = None
-                        self.progress_max = None
+                return
+            node = str(raw)
+            self.current_node = node
+            # New node wall-clock start
+            self._node_enter[node] = now
 
     def live_snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -113,6 +155,7 @@ class ProgressCollector:
             value = self.progress_value
             maximum = self.progress_max
             instant = self.instant_sec_per_it
+            best = self._best_sec_per_it
         out: dict[str, Any] = {
             "node": node,
             "node_label": node_label(node),
@@ -121,49 +164,28 @@ class ProgressCollector:
             out["progress"] = f"{value}/{maximum}"
             out["progress_value"] = value
             out["progress_max"] = maximum
-        if instant is not None:
-            out["sec_per_it"] = round(instant, 3)
+        rate = instant if instant is not None else best
+        if rate is not None and rate >= 0.05:
+            out["sec_per_it"] = round(rate, 3)
         return out
 
     def sec_per_it(self, prompt_id: str | None = None) -> float | None:
-        """Average seconds per iteration for the dominant progress series.
-
-        Prefer the node with the largest step count (usually the sampler).
-        Uses mean inter-step deltas when value increases; falls back to
-        (last_t - first_t) / last_value.
-        """
+        """Best sampler s/it for the finished prompt (prompt_id ignored; WS-scoped)."""
+        del prompt_id  # events are already scoped to this collector / run
         with self._lock:
-            events = list(self._events)
-        if prompt_id is not None:
-            events = [e for e in events if e[4] == prompt_id]
-        if len(events) < 2:
-            return None
-
-        by_node: dict[str, list[tuple[float, int, int]]] = {}
-        for t, value, maximum, node, _pid in events:
-            key = node or "_unknown"
-            by_node.setdefault(key, []).append((t, value, maximum))
-
-        # Pick series with the highest max (sampler steps)
-        def series_key(xs: list[tuple[float, int, int]]) -> tuple[int, int]:
-            return (max(m for _t, _v, m in xs), len(xs))
-
-        series = max(by_node.values(), key=series_key)
-        series = sorted(series, key=lambda x: x[0])
-
-        deltas: list[float] = []
-        for i in range(1, len(series)):
-            t0, v0, _m0 = series[i - 1]
-            t1, v1, _m1 = series[i]
-            if v1 > v0:
-                deltas.append((t1 - t0) / (v1 - v0))
-        if deltas:
-            return sum(deltas) / len(deltas)
-
-        t0, v0, _m0 = series[0]
-        t1, v1, _m1 = series[-1]
-        if v1 > 0 and t1 > t0:
-            return (t1 - t0) / v1
+            # Finalize current node if still open (prompt ending)
+            if self.current_node is not None:
+                self._finalize_node(self.current_node, time.perf_counter())
+            best = self._best_sec_per_it
+            instant = self.instant_sec_per_it
+            steps = self._best_steps
+        if best is not None and best >= 0.05:
+            return best
+        # Fall back to live estimate only if sensible
+        if instant is not None and instant >= 0.05:
+            return instant
+        if best is not None and steps >= 10:
+            return best
         return None
 
 

@@ -108,9 +108,13 @@ class BenchmarkRunner:
         last_emit = [0.0]
 
         def on_live(snap: dict) -> None:
-            # Throttle JSON writes while sampling (progress every step).
+            # Throttle JSON writes — frequent emits only refresh the header, but
+            # still rewrite benchmark.json; keep this to ~2s.
             now = time.perf_counter()
-            if now - last_emit[0] < 1.0 and snap.get("progress_value") not in (None, snap.get("progress_max")):
+            if now - last_emit[0] < 2.0 and snap.get("progress_value") not in (
+                None,
+                snap.get("progress_max"),
+            ):
                 return
             last_emit[0] = now
             if suite is None:

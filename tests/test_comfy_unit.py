@@ -1,7 +1,8 @@
 import json
+import time
 from unittest.mock import MagicMock
 
-from bench.comfy import ComfyClient
+from bench.comfy import ComfyClient, ProgressCollector
 
 
 def test_queue_prompt(monkeypatch):
@@ -47,19 +48,45 @@ def test_cancel_all_posts_interrupt_and_clear(monkeypatch):
     assert "/queue" in paths
 
 
-def test_progress_collector_sec_per_it():
-    from bench.comfy import ProgressCollector
-
+def test_progress_collector_sec_per_it_uses_node_wall_clock(monkeypatch):
+    """s/it = sampler wall time / steps, not WS message inter-arrival."""
     c = ProgressCollector()
-    # Simulate sampler steps ~2s each
-    t0 = 1000.0
-    # monkeypatch time inside on_progress by injecting events directly
-    c._events = [
-        (t0 + 0.0, 1, 4, "10", "p1"),
-        (t0 + 2.0, 2, 4, "10", "p1"),
-        (t0 + 4.0, 3, 4, "10", "p1"),
-        (t0 + 6.0, 4, 4, "10", "p1"),
-    ]
+    t = [1000.0]
+
+    def fake_perf():
+        return t[0]
+
+    monkeypatch.setattr(time, "perf_counter", fake_perf)
+
+    # Enter sampler
+    c.on_executing({"node": "10", "prompt_id": "p1"})
+    # 20 steps over 100s wall clock → 5.0 s/it
+    for step in range(1, 21):
+        t[0] = 1000.0 + step * 5.0
+        c.on_progress({"value": step, "max": 20, "node": "10", "prompt_id": "p1"})
+    # Leave sampler for VAE
+    t[0] = 1000.0 + 100.0
+    c.on_executing({"node": "125", "prompt_id": "p1"})
+
     spi = c.sec_per_it("p1")
     assert spi is not None
-    assert abs(spi - 2.0) < 1e-6
+    assert abs(spi - 5.0) < 0.05
+
+
+def test_progress_collector_ignores_burst_message_deltas(monkeypatch):
+    """Burst-received progress messages must not yield ~0.01 s/it."""
+    c = ProgressCollector()
+    t = [1000.0]
+    monkeypatch.setattr(time, "perf_counter", lambda: t[0])
+
+    c.on_executing({"node": "10"})
+    # Simulate wall clock advancing correctly even if we only "process" at end
+    for step in range(1, 21):
+        t[0] = 1000.0 + step * 5.0
+        c.on_progress({"value": step, "max": 20, "node": "10"})
+    t[0] = 1100.0
+    c.on_executing({"node": None})
+
+    spi = c.sec_per_it()
+    assert spi is not None
+    assert spi > 1.0  # not 0.01

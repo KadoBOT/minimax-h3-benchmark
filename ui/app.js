@@ -10,6 +10,12 @@ const COLS = [
 /** @type {Map<string, object>} */
 const runIndex = new Map();
 
+/** Skip full table re-renders when nothing meaningful changed */
+let lastSpeedKey = "";
+let lastQualityKey = "";
+let lastScaleKey = "";
+let lastGalleryKey = "";
+
 async function fetchResults() {
   const r = await fetch("/api/results", { cache: "no-store" });
   if (!r.ok) throw new Error("api failed");
@@ -25,8 +31,9 @@ function fmtSec(s) {
 function fmtRunTime(run) {
   if (!run || run.timed_s == null) return "—";
   const wall = fmtSec(run.timed_s);
-  if (run.sec_per_it == null || run.sec_per_it === undefined) return wall;
-  return `${wall} / ${Number(run.sec_per_it).toFixed(2)}s/it`;
+  const it = run.sec_per_it;
+  if (it == null || it === undefined || !(Number(it) >= 0.05)) return wall;
+  return `${wall} / ${Number(it).toFixed(2)}s/it`;
 }
 
 function escapeHtml(s) {
@@ -55,6 +62,12 @@ function findFastest(runs) {
     .sort((a, b) => a.timed_s - b.timed_s)[0];
 }
 
+function runsFingerprint(runs, fields) {
+  return runs
+    .map((r) => fields.map((f) => r[f] ?? r.config?.[f] ?? "").join(":"))
+    .join("|");
+}
+
 function cellHtml(run, bestId) {
   if (!run) {
     return `<td class="cell empty">—</td>`;
@@ -65,12 +78,12 @@ function cellHtml(run, bestId) {
   if (run.status === "done" && run.timed_s != null) {
     content = fmtRunTime(run);
   } else {
-    const label = statusLabel(run);
-    content = `<span class="chip ${escapeHtml(run.status || "queued")}">${escapeHtml(label)}</span>`;
+    content = `<span class="chip ${escapeHtml(run.status || "queued")}">${escapeHtml(run.status || "queued")}</span>`;
   }
-  const title = run.sec_per_it != null
-    ? `${run.id} · ${fmtRunTime(run)}`
-    : run.id;
+  const title =
+    run.sec_per_it != null && Number(run.sec_per_it) >= 0.05
+      ? `${run.id} · ${fmtRunTime(run)}`
+      : run.id;
   return `<td class="${classes.join(" ")}" data-run-id="${escapeHtml(run.id)}" title="${escapeHtml(title)}">${content}</td>`;
 }
 
@@ -79,12 +92,7 @@ function renderStatus(data) {
   const cur = data.current;
   let curText = "idle";
   if (cur) {
-    const bits = [
-      cur.phase || "?",
-      cur.run_id || "?",
-      cur.stage || "?",
-    ];
-    // Live Comfy detail: e.g. VideoCombine after sampler's 20/20 finishes
+    const bits = [cur.phase || "?", cur.run_id || "?", cur.stage || "?"];
     if (cur.detail) bits.push(cur.detail);
     else if (cur.node_label) bits.push(cur.node_label);
     curText = bits.join(" / ");
@@ -96,28 +104,27 @@ function renderStatus(data) {
     : "";
 }
 
-/** Humanize in-progress status chips (sampler done ≠ whole job done). */
-function statusLabel(run) {
-  const s = run?.status || "queued";
-  if (s === "timing" || s === "warmup") {
-    // Prefer live detail from suite.current when this is the active run —
-    // rendered separately in header; cell stays stage name.
-    return s;
-  }
-  return s;
+function bindCellClicks(wrap) {
+  wrap.querySelectorAll("td.cell[data-run-id]").forEach((td) => {
+    td.addEventListener("click", () => openDetail(td.dataset.runId));
+  });
 }
 
 function renderSpeedHeatmap(runs) {
   const wrap = document.getElementById("speed-heatmap");
+  const key = runsFingerprint(runs, ["id", "status", "timed_s", "sec_per_it"]);
+  if (key === lastSpeedKey && wrap.dataset.ready === "1") return;
+  lastSpeedKey = key;
+
   if (!runs.length) {
     wrap.innerHTML = `<div class="empty-msg">No speed runs yet.</div>`;
+    wrap.dataset.ready = "1";
     return;
   }
 
-  // Preserve first-seen row order from the run list
   const rowOrder = [];
   const rowSet = new Set();
-  const grid = new Map(); // rowLabel -> colKey -> run
+  const grid = new Map();
 
   for (const run of runs) {
     const cfg = run.config || {};
@@ -128,7 +135,6 @@ function renderSpeedHeatmap(runs) {
       rowOrder.push(row);
     }
     if (!grid.has(row)) grid.set(row, new Map());
-    // Prefer keeping the first match; variants with sol_* only fill sol_on col
     if (!grid.get(row).has(col)) {
       grid.get(row).set(col, run);
     }
@@ -137,7 +143,7 @@ function renderSpeedHeatmap(runs) {
   const best = findFastest(runs);
   const bestId = best ? best.id : null;
 
-  let html = "<table><thead><tr><th class=\"row-label\">cache / variant</th>";
+  let html = '<table><thead><tr><th class="row-label">cache / variant</th>';
   for (const c of COLS) {
     html += `<th>${escapeHtml(c.label)}</th>`;
   }
@@ -153,16 +159,27 @@ function renderSpeedHeatmap(runs) {
   }
   html += "</tbody></table>";
   wrap.innerHTML = html;
-
-  wrap.querySelectorAll("td.cell[data-run-id]").forEach((td) => {
-    td.addEventListener("click", () => openDetail(td.dataset.runId));
-  });
+  wrap.dataset.ready = "1";
+  bindCellClicks(wrap);
 }
 
 function renderQuality(runs) {
   const wrap = document.getElementById("quality-table");
+  const key = runsFingerprint(runs, [
+    "id",
+    "status",
+    "timed_s",
+    "sec_per_it",
+    "scheduler",
+    "sampler",
+    "steps",
+  ]);
+  if (key === lastQualityKey && wrap.dataset.ready === "1") return;
+  lastQualityKey = key;
+
   if (!runs.length) {
     wrap.innerHTML = `<div class="empty-msg">No quality runs yet.</div>`;
+    wrap.dataset.ready = "1";
     return;
   }
   let html = `<table><thead><tr>
@@ -191,6 +208,7 @@ function renderQuality(runs) {
   }
   html += "</tbody></table>";
   wrap.innerHTML = html;
+  wrap.dataset.ready = "1";
   wrap.querySelectorAll("tr[data-run-id]").forEach((tr) => {
     tr.style.cursor = "pointer";
     tr.addEventListener("click", (e) => {
@@ -202,12 +220,16 @@ function renderQuality(runs) {
 
 function renderScale(runs) {
   const wrap = document.getElementById("scale-table");
+  const key = runsFingerprint(runs, ["id", "status", "timed_s", "sec_per_it", "mp", "duration_s"]);
+  if (key === lastScaleKey && wrap.dataset.ready === "1") return;
+  lastScaleKey = key;
+
   if (!runs.length) {
     wrap.innerHTML = `<div class="empty-msg">No scale runs yet.</div>`;
+    wrap.dataset.ready = "1";
     return;
   }
 
-  // Pivot: rows = mp, cols = duration
   const mps = [];
   const durs = [];
   const mpSet = new Set();
@@ -234,7 +256,7 @@ function renderScale(runs) {
   const best = findFastest(runs);
   const bestId = best ? best.id : null;
 
-  let html = "<table><thead><tr><th class=\"row-label\">MP \\ duration</th>";
+  let html = '<table><thead><tr><th class="row-label">MP \\ duration</th>';
   for (const d of durs) {
     html += `<th>${escapeHtml(d)}s</th>`;
   }
@@ -248,9 +270,8 @@ function renderScale(runs) {
   }
   html += "</tbody></table>";
   wrap.innerHTML = html;
-  wrap.querySelectorAll("td.cell[data-run-id]").forEach((td) => {
-    td.addEventListener("click", () => openDetail(td.dataset.runId));
-  });
+  wrap.dataset.ready = "1";
+  bindCellClicks(wrap);
 }
 
 function configChips(cfg) {
@@ -270,34 +291,84 @@ function configChips(cfg) {
   return bits.map((b) => `<span class="chip">${escapeHtml(b)}</span>`).join("");
 }
 
+/**
+ * Incremental gallery update: never rewrite <video> for existing cards.
+ * Full innerHTML on every poll was restarting playback (spinner).
+ */
 function renderGallery(allRuns) {
   const done = allRuns
     .filter((r) => r.video_path)
     .sort((a, b) => (b.finished_at || "").localeCompare(a.finished_at || ""));
   const g = document.getElementById("gallery");
+
+  const key = done
+    .map((r) => `${r.id}:${r.video_path}:${r.timed_s}:${r.sec_per_it}`)
+    .join("|");
+  // Even when key changes for meta (timed_s), keep videos; only structural set change
+  // needs full rebuild of card list order/add/remove.
+  const structureKey = done.map((r) => `${r.id}:${r.video_path}`).join("|");
+
   if (!done.length) {
-    g.innerHTML = `<div class="empty-msg">No videos yet.</div>`;
+    if (g.dataset.structureKey !== "empty") {
+      g.innerHTML = `<div class="empty-msg">No videos yet.</div>`;
+      g.dataset.structureKey = "empty";
+      lastGalleryKey = "";
+    }
     return;
   }
-  g.innerHTML = done
-    .map(
-      (r) => `
-    <article class="card" data-run-id="${escapeHtml(r.id)}">
-      <video src="/${escapeHtml(r.video_path)}" controls preload="metadata"></video>
-      <div class="meta">
+
+  if (g.dataset.structureKey !== structureKey) {
+    // Structural change: rebuild, but only when membership/order of videos changes
+    g.innerHTML = "";
+    g.dataset.structureKey = structureKey;
+    for (const r of done) {
+      g.appendChild(makeGalleryCard(r));
+    }
+    lastGalleryKey = key;
+    return;
+  }
+
+  // Same videos: update meta text only (no video reload)
+  if (key === lastGalleryKey) return;
+  lastGalleryKey = key;
+  for (const r of done) {
+    const card = [...g.querySelectorAll(".card")].find((el) => el.dataset.runId === r.id);
+    if (!card) continue;
+    const meta = card.querySelector(".meta");
+    if (!meta) continue;
+    meta.innerHTML = `
         <strong>${escapeHtml(r.id)}</strong><br>
         ${escapeHtml(fmtRunTime(r))} · ${escapeHtml(r.config?.cache || "?")} · ${escapeHtml(r.config?.quant || "?")}
-        <div class="chips">${configChips(r.config)}</div>
-      </div>
-    </article>`
-    )
-    .join("");
-  g.querySelectorAll(".card").forEach((card) => {
-    card.addEventListener("click", (e) => {
-      if (e.target.tagName === "VIDEO") return;
-      openDetail(card.dataset.runId);
-    });
+        <div class="chips">${configChips(r.config)}</div>`;
+  }
+}
+
+function makeGalleryCard(r) {
+  const article = document.createElement("article");
+  article.className = "card";
+  article.dataset.runId = r.id;
+
+  const video = document.createElement("video");
+  video.controls = true;
+  video.preload = "metadata";
+  // Cache-bust only once on create so poll doesn't reload
+  video.src = `/${r.video_path}`;
+  video.dataset.src = r.video_path;
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.innerHTML = `
+        <strong>${escapeHtml(r.id)}</strong><br>
+        ${escapeHtml(fmtRunTime(r))} · ${escapeHtml(r.config?.cache || "?")} · ${escapeHtml(r.config?.quant || "?")}
+        <div class="chips">${configChips(r.config)}</div>`;
+
+  article.appendChild(video);
+  article.appendChild(meta);
+  article.addEventListener("click", (e) => {
+    if (e.target.tagName === "VIDEO") return;
+    openDetail(article.dataset.runId);
   });
+  return article;
 }
 
 function openDetail(runId) {
@@ -319,7 +390,11 @@ function openDetail(runId) {
       · status=<span>${escapeHtml(run.status || "?")}</span>
       · timed=<span>${escapeHtml(fmtRunTime(run))}</span>
       · warmup=<span>${fmtSec(run.warmup_s)}</span>
-      ${run.sec_per_it != null ? `· s/it=<span>${Number(run.sec_per_it).toFixed(2)}</span>` : ""}
+      ${
+        run.sec_per_it != null && Number(run.sec_per_it) >= 0.05
+          ? `· s/it=<span>${Number(run.sec_per_it).toFixed(2)}</span>`
+          : ""
+      }
     </div>
     <div class="chips">${configChips(cfg)}</div>
     ${video}
