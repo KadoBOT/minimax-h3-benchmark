@@ -59,10 +59,10 @@ Applies to **every** benchmark cell in all phases:
 | Rule | Behavior |
 |------|----------|
 | Seed | Fixed `914265959575104`; seed control = fixed (not randomize) on `easy seed` and `RandomNoise` |
-| Content baseline | Prompt + first-frame image from the workflow as-is |
+| Content baseline | Fixed first-frame image from the workflow; **prompt is duration-agnostic** (no timestamps / time ranges) — see Baseline prompt below |
 | Clean VRAM | **Always bypassed** (`easy cleanGpuUsed` mode bypass) |
 | RIFE / Upscale | **Always bypassed** |
-| Cache exclusivity | **Exactly one** of Spectrum, EasyCache, H3 Cache active; the other two bypassed |
+| Cache exclusivity | **At most one** of Spectrum, EasyCache, H3 Cache active. For `none`, **all three** cache nodes are bypassed (model passthrough, no caching). Never combine two caches. |
 | Per cell | (1) **Warmup** generation — discard timing & do not score; (2) **Timed** generation — record wall-clock from prompt accepted → outputs ready |
 | Live write | On timed completion: video under `results/videos/`, row in `benchmark.json` |
 | Failures | Record error, mark cell `failed`, continue queue |
@@ -82,19 +82,30 @@ Unless a phase overrides a field:
 - Steps: `20`
 - Seed: `914265959575104`
 
+### Baseline prompt (no timestamps)
+
+The workflow’s stock prompt is timeline-sliced (`0:00 - 0:02: …`) and is **invalid for multi-duration benchmarks**. The runner **always** overwrites node `Prompt` (`PrimitiveStringMultiline` id 107) with a single duration-agnostic prompt used for every cell and phase:
+
+> The scene animates from the first frame. Steam billows heavily from under the car hood. The older man exhales a tired sigh and slumps slightly. The overhead light flickers. The younger man tightens his grip on the wrench, steps forward, and angrily points it toward the engine while shouting. A sudden burst of sparks shoots up from the engine bay, casting a bright orange flash across both men's faces as the camera quickly zooms in on the younger man.
+
+Same narrative content as the original, **without** time ranges so Phase 3 duration sweeps stay coherent.
+
 ## Phase 1 — Speed matrix (+ tuned variants)
 
 **Purpose:** Compare generation speed across cache method, quantization, and sol-attn (plus a few widget tweaks).
 
-### Core axes (12 cells)
+### Core axes (16 cells)
 
 | Axis | Values |
 |------|--------|
-| Cache | `spectrum` \| `easy` \| `h3` (only one active) |
+| Cache | `none` \| `spectrum` \| `easy` \| `h3` |
 | Quant | `nvfp4` (`UNETLoader` + model `minimax_h3_fl2va_pruned_nvfp4.safetensors`) \| `int8` (`OTUNetLoaderW8A8` + `minimax_h3_fl2va_pruned_int8_convrot.safetensors`) |
 | Sol-attn | `on` (default SolAttnPatch widgets) \| `off` (bypass SolAttnPatch) |
 
-Core: **3 × 2 × 2 = 12** cells.
+- `none`: bypass Spectrum, EasyCache, **and** H3 Cache (no caching; model passes through bypassed path into Any Switch 127).
+- `spectrum` / `easy` / `h3`: exactly that one active; other two bypassed.
+
+Core: **4 × 2 × 2 = 16** cells.
 
 ### Tuned variants (~8 extra cells)
 
@@ -111,7 +122,7 @@ Fixed reference for variants: **`nvfp4` + sol-attn on**, unless the variant is s
 | `sol_aggressive` | SolAttn: tau `1.8`, start `0.1`, end `0.95` (cache = EasyCache defaults; sol on) |
 | `sol_conservative` | SolAttn: tau `1.0`, start `0.3`, end `0.85` (cache = EasyCache defaults; sol on) |
 
-**Total Phase 1 ≈ 20 cells** × (warmup + timed) ≈ 40 Comfy executions.
+**Total Phase 1 ≈ 24 cells** × (warmup + timed) ≈ 48 Comfy executions.
 
 ### Phase 1 outcome
 
@@ -180,12 +191,13 @@ ComfyUI node `mode`: `0` = active, `4` = bypass.
 1. Load UI JSON → convert to API prompt (node id → `{class_type, inputs}`).
 2. Set quant path: activate one loader, bypass the other.
 3. Set sol-attn: active or bypass node 92.
-4. Set cache: activate exactly one of 15/122/128; bypass the other two; apply widget overrides for variants.
+4. Set cache: for `none`, bypass all of 15/122/128; otherwise activate exactly one and bypass the other two; apply widget overrides for variants.
 5. Force bypass: 97, 96, 111 (and related helpers if needed).
 6. Write seed, scheduler, sampler, steps, MP, duration as required by the cell.
-7. Submit, wait, collect outputs.
+7. **Always** write the duration-agnostic baseline prompt to node 107 (never leave timestamped timeline prompt in place).
+8. Submit, wait, collect outputs.
 
-Any Switch nodes select the first connected non-bypassed input; bypassing unused branches is the supported selection mechanism (do not rely on combining caches).
+Any Switch nodes select the first connected non-bypassed input; bypassing unused branches is the supported selection mechanism (do not rely on combining caches). For `cache=none`, all cache nodes are bypassed so the MODEL passthrough carries no cache policy.
 
 ## Data model
 
@@ -241,7 +253,7 @@ minimax-h3_test.i2v.v2.workflow.json
   "phase": "speed|quality|scale",
   "status": "queued|warmup|timing|done|failed",
   "config": {
-    "cache": "easy|spectrum|h3",
+    "cache": "none|easy|spectrum|h3",
     "cache_variant": null,
     "quant": "nvfp4|int8",
     "sol_attn": true,
@@ -308,10 +320,10 @@ python benchmark_runner.py --port 8787      # UI port
 
 | Phase | Cells | Gens (warm+timed) |
 |-------|------:|------------------:|
-| Speed | ~20 | ~40 |
+| Speed | ~24 | ~48 |
 | Quality | ~11 | ~22 |
 | Scale | 25 | 50 |
-| **Total** | **~56** | **~112** |
+| **Total** | **~60** | **~120** |
 
 Wall time depends heavily on GPU and Phase 3 high-MP/long-duration cells.
 
@@ -338,3 +350,5 @@ Wall time depends heavily on GPU and Phase 3 high-MP/long-duration cells.
 | Sampler name | `er_sde` (user LGTM) |
 | Phase 3 quality knobs | Keep Phase 1 defaults |
 | Visual companion | Declined |
+| No-cache baseline | Include `cache=none` in core speed matrix (4×2×2) |
+| Prompt | Duration-agnostic; strip timeline timestamps from workflow prompt |
