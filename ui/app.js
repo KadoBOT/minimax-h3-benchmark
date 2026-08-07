@@ -1349,10 +1349,132 @@ function syncCompareToolbar() {
   if (play) play.disabled = !(a && b);
 }
 
+/** Sequential A→B compare state (no dual-sync — avoids seek loops). */
+const compareSeq = {
+  active: null, // "a" | "b" | null
+  onEndedA: null,
+  onEndedB: null,
+};
+
+function compareVideos() {
+  return {
+    a: document.getElementById("compare-video-a"),
+    b: document.getElementById("compare-video-b"),
+    paneA: document.getElementById("compare-pane-a"),
+    paneB: document.getElementById("compare-pane-b"),
+    status: document.getElementById("compare-seq-status"),
+  };
+}
+
+function setCompareActivePane(which) {
+  const { paneA, paneB } = compareVideos();
+  if (paneA) paneA.classList.toggle("playing", which === "a");
+  if (paneB) paneB.classList.toggle("playing", which === "b");
+}
+
+function setCompareStatus(text) {
+  const { status } = compareVideos();
+  if (status) status.textContent = text || "";
+}
+
+function detachCompareEndedHandlers() {
+  const { a, b } = compareVideos();
+  if (a && compareSeq.onEndedA) {
+    a.removeEventListener("ended", compareSeq.onEndedA);
+  }
+  if (b && compareSeq.onEndedB) {
+    b.removeEventListener("ended", compareSeq.onEndedB);
+  }
+  compareSeq.onEndedA = null;
+  compareSeq.onEndedB = null;
+}
+
+function stopComparePlayback() {
+  const { a, b } = compareVideos();
+  if (a) {
+    a.pause();
+  }
+  if (b) {
+    b.pause();
+  }
+  compareSeq.active = null;
+  setCompareActivePane(null);
+}
+
+function resetCompareVideosToStart() {
+  const { a, b } = compareVideos();
+  if (a) {
+    try {
+      a.pause();
+      a.currentTime = 0;
+    } catch {
+      /* ignore */
+    }
+  }
+  if (b) {
+    try {
+      b.pause();
+      b.currentTime = 0;
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function playCompareSequence() {
+  const { a, b } = compareVideos();
+  if (!a || !b || !a.src || !b.src) return;
+
+  detachCompareEndedHandlers();
+  stopComparePlayback();
+  resetCompareVideosToStart();
+
+  compareSeq.onEndedA = () => {
+    if (compareSeq.active !== "a") return;
+    a.pause();
+    try {
+      b.currentTime = 0;
+    } catch {
+      /* ignore */
+    }
+    compareSeq.active = "b";
+    setCompareActivePane("b");
+    setCompareStatus("Playing B…");
+    b.play().catch(() => setCompareStatus("Could not play B"));
+  };
+  compareSeq.onEndedB = () => {
+    if (compareSeq.active !== "b") return;
+    b.pause();
+    compareSeq.active = null;
+    setCompareActivePane(null);
+    setCompareStatus("Done — click Play A → B to watch again");
+  };
+
+  a.addEventListener("ended", compareSeq.onEndedA);
+  b.addEventListener("ended", compareSeq.onEndedB);
+
+  compareSeq.active = "a";
+  setCompareActivePane("a");
+  setCompareStatus("Playing A…");
+  a.play().catch(() => setCompareStatus("Could not play A"));
+}
+
+function pauseCompareSequence() {
+  const { a, b } = compareVideos();
+  if (a) a.pause();
+  if (b) b.pause();
+  if (compareSeq.active) {
+    setCompareStatus(
+      `Paused on ${compareSeq.active.toUpperCase()} — click Play A → B to restart, or use Pause then play that pane’s native control if needed`
+    );
+  }
+}
+
 function wireCompareControls() {
   const play = document.getElementById("btn-compare-play");
   const clear = document.getElementById("btn-compare-clear");
-  const syncBtn = document.getElementById("btn-compare-sync");
+  const seqBtn = document.getElementById("btn-compare-seq");
+  const pauseBtn = document.getElementById("btn-compare-pause");
   if (play) {
     play.addEventListener("click", () => openCompareDialog());
   }
@@ -1366,35 +1488,28 @@ function wireCompareControls() {
       renderGallery([...runIndex.values()]);
     });
   }
-  if (syncBtn) {
-    syncBtn.addEventListener("click", () => {
-      const va = document.getElementById("compare-video-a");
-      const vb = document.getElementById("compare-video-b");
-      if (!va || !vb) return;
-      if (va.paused) {
-        va.play();
-        vb.play();
-      } else {
-        va.pause();
-        vb.pause();
-      }
-    });
+  if (seqBtn) {
+    seqBtn.addEventListener("click", () => playCompareSequence());
+  }
+  if (pauseBtn) {
+    pauseBtn.addEventListener("click", () => pauseCompareSequence());
   }
   const dlg = document.getElementById("compare-dialog");
   if (dlg) {
     dlg.addEventListener("close", () => {
-      const va = document.getElementById("compare-video-a");
-      const vb = document.getElementById("compare-video-b");
-      if (va) {
-        va.pause();
-        va.removeAttribute("src");
-        va.load();
+      detachCompareEndedHandlers();
+      stopComparePlayback();
+      const { a, b } = compareVideos();
+      if (a) {
+        a.removeAttribute("src");
+        a.load();
       }
-      if (vb) {
-        vb.pause();
-        vb.removeAttribute("src");
-        vb.load();
+      if (b) {
+        b.removeAttribute("src");
+        b.load();
       }
+      setCompareStatus("");
+      setCompareActivePane(null);
     });
   }
   syncCompareToolbar();
@@ -1409,45 +1524,33 @@ function openCompareDialog() {
     alert("Pick two runs that have videos.");
     return;
   }
-  const va = document.getElementById("compare-video-a");
-  const vb = document.getElementById("compare-video-b");
+  const { a, b } = compareVideos();
   const la = document.getElementById("compare-label-a");
   const lb = document.getElementById("compare-label-b");
   if (la) la.textContent = `A · ${aId}${ra.rating != null ? ` · ★${ra.rating}` : ""}`;
   if (lb) lb.textContent = `B · ${bId}${rb.rating != null ? ` · ★${rb.rating}` : ""}`;
-  va.src = `/${ra.video_path}`;
-  vb.src = `/${rb.video_path}`;
-  // Keep playback roughly in sync
-  const syncFrom = (src, dst) => {
-    const onTime = () => {
-      if (Math.abs(dst.currentTime - src.currentTime) > 0.35) {
-        dst.currentTime = src.currentTime;
-      }
-    };
-    src.addEventListener("timeupdate", onTime);
-    src.addEventListener("play", () => {
-      if (dst.paused) dst.play().catch(() => {});
-    });
-    src.addEventListener("pause", () => {
-      if (!dst.paused) dst.pause();
-    });
-    src.addEventListener("seeked", () => {
-      dst.currentTime = src.currentTime;
-    });
-  };
-  // clone node to drop old listeners
-  const freshA = va.cloneNode(true);
-  const freshB = vb.cloneNode(true);
-  va.parentNode.replaceChild(freshA, va);
-  vb.parentNode.replaceChild(freshB, vb);
-  freshA.id = "compare-video-a";
-  freshB.id = "compare-video-b";
-  freshA.src = `/${ra.video_path}`;
-  freshB.src = `/${rb.video_path}`;
-  syncFrom(freshA, freshB);
-  syncFrom(freshB, freshA);
+
+  detachCompareEndedHandlers();
+  stopComparePlayback();
+
+  // Bust cache slightly so re-open always reloads cleanly
+  const bust = `t=${Date.now()}`;
+  a.src = `/${ra.video_path}?${bust}`;
+  b.src = `/${rb.video_path}?${bust}`;
+  a.load();
+  b.load();
+
   document.getElementById("compare-dialog").showModal();
-  Promise.all([freshA.play(), freshB.play()]).catch(() => {});
+  setCompareStatus("Ready — click Play A → B");
+  // Auto-start sequence once both can play
+  const tryStart = () => {
+    if (a.readyState >= 2 && b.readyState >= 2) {
+      playCompareSequence();
+      return;
+    }
+    setTimeout(tryStart, 100);
+  };
+  tryStart();
 }
 
 function renderGallery(allRuns) {

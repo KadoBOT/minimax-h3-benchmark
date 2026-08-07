@@ -216,18 +216,20 @@
 
   <dialog id="compare-dialog" class="compare-dialog">
     <form method="dialog" class="detail-toolbar">
-      <span class="muted">Side-by-side compare (left = A, right = B) · synced play</span>
-      <button type="button" id="btn-compare-sync" class="compact">Play / Pause</button>
+      <span class="muted">Side-by-side (left = A, right = B) · play A fully, then B</span>
+      <button type="button" id="btn-compare-seq" class="primary compact">Play A → B</button>
+      <button type="button" id="btn-compare-pause" class="compact">Pause</button>
       <button class="close" value="close">Close</button>
     </form>
+    <p id="compare-seq-status" class="muted field-hint"></p>
     <div class="compare-stage">
-      <div class="compare-pane">
+      <div class="compare-pane" id="compare-pane-a">
         <div class="compare-label" id="compare-label-a">A</div>
-        <video id="compare-video-a" controls playsinline></video>
+        <video id="compare-video-a" playsinline preload="auto"></video>
       </div>
-      <div class="compare-pane">
+      <div class="compare-pane" id="compare-pane-b">
         <div class="compare-label" id="compare-label-b">B</div>
-        <video id="compare-video-b" controls playsinline></video>
+        <video id="compare-video-b" playsinline preload="auto"></video>
       </div>
     </div>
   </dialog>
