@@ -431,7 +431,10 @@ def apply_config(
         raise KeyError(f"Selected model loader node {loader} missing from workflow")
 
     # --- Rebuild MODEL path ---
-    # loader → [TurboLoRA?] → Sol XOR Sage → SigmaShift → [cache?] → Scheduler + Guider
+    # Matches working Music Suite API exports:
+    #   loader → [TurboLoRA?] → [SolAttn?] → Sage → SigmaShift → [cache?] → Scheduler/Guider
+    # Sol and Sage are stacked (Sol then Sage), not exclusive. Omitting Sage when Sol
+    # was on diverged from successful Comfy runs and is not needed for correctness.
     prev = str(loader)
 
     if cfg.turbo and str(NODE_TURBO_LORA) in api:
@@ -446,13 +449,13 @@ def apply_config(
     if cfg.sol_attn and str(NODE_SOL_ATTN) in api:
         set_link(api, NODE_SOL_ATTN, "model", prev, 0)
         prev = str(NODE_SOL_ATTN)
-        _omit(api, NODE_SAGE)
     else:
-        if str(NODE_SAGE) not in api:
-            raise KeyError(f"Sage attention node {NODE_SAGE} missing from workflow")
-        set_link(api, NODE_SAGE, "model", prev, 0)
-        prev = str(NODE_SAGE)
         _omit(api, NODE_SOL_ATTN)
+
+    if str(NODE_SAGE) not in api:
+        raise KeyError(f"Sage attention node {NODE_SAGE} missing from workflow")
+    set_link(api, NODE_SAGE, "model", prev, 0)
+    prev = str(NODE_SAGE)
 
     set_link(api, NODE_SIGMA_SHIFT, "model", prev, 0)
     prev = str(NODE_SIGMA_SHIFT)

@@ -49,17 +49,28 @@ def list_diffusion_models(directory: Path | str | None = None) -> list[str]:
 def infer_loader(filename: str) -> tuple[ModelPath, QuantName]:
     """Map a model filename to (model_path, quant) for the v3 loaders.
 
+    ``quant`` here means *loader class*, not bit-width:
+
     - ``*.gguf`` → GGUF loader
-    - names with int4/int8/mixed (even alongside nvfp4) → OTUNet INT8 loader
-    - pure nvfp4 / other safetensors → UNETLoader
+    - convrot / mixed / w8a8 weights → OTUNetLoaderW8A8 (``quant=int8``)
+    - INT4Q / nvfp4 / other packs → standard UNETLoader (``quant=nvfp4``)
+
+    IMPORTANT: Music Suite loads ``*INT4Q*.safetensors`` via **UNETLoader**, not
+    OTUNet. Routing INT4Q through OTUNet caused CUDA illegal memory access during
+    model init (confirmed against a working Comfy API export).
     """
-    n = filename.lower()
+    n = filename.lower().replace("-", "_")
     if n.endswith(".gguf"):
         return "gguf", "nvfp4"
-    if any(tok in n for tok in ("int8", "int4", "mixed", "w8a8")):
-        return "safetensor", "int8"
-    if "nvfp4" in n:
+    # Pre-packed INT4Q (and similar) use the plain UNET loader.
+    if "int4q" in n:
         return "safetensor", "nvfp4"
+    # On-the-fly / convrot W8A8 style weights
+    if any(tok in n for tok in ("convrot", "mixed", "w8a8")):
+        return "safetensor", "int8"
+    # Bare int8 (no nvfp4) still goes to OTUNet
+    if "int8" in n and "nvfp4" not in n:
+        return "safetensor", "int8"
     return "safetensor", "nvfp4"
 
 

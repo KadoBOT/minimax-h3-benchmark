@@ -64,6 +64,11 @@ def test_infer_loader():
         "safetensor",
         "int8",
     )
+    # INT4Q uses UNETLoader in working Comfy exports — not OTUNet
+    assert infer_loader("minimax_h3_fl2va_pruned_INT4Q.safetensors") == (
+        "safetensor",
+        "nvfp4",
+    )
 
 
 def test_runconfig_aligns_path_from_diffusion_model():

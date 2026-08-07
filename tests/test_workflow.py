@@ -153,9 +153,20 @@ def test_output_tag_sets_unique_filename_prefix():
     assert prefix.startswith("bench/")
 
 
-def test_sol_on_omits_sage():
+def test_sol_on_stacks_sage_after_sol():
+    """Working Comfy exports chain Sol → Sage → Sigma (not Sol alone)."""
     ui = load_ui_workflow(WORKFLOW_PATH)
     api = apply_config(ui, RunConfig(sol_attn=True))
     assert str(NODE_SOL_ATTN) in api
-    assert str(NODE_SAGE) not in api
-    assert api["123"]["inputs"]["model"][0] == str(NODE_SOL_ATTN)
+    assert str(NODE_SAGE) in api
+    assert api[str(NODE_SAGE)]["inputs"]["model"][0] == str(NODE_SOL_ATTN)
+    assert api["123"]["inputs"]["model"][0] == str(NODE_SAGE)
+
+
+def test_int4q_uses_unet_loader_not_otu():
+    ui = load_ui_workflow(WORKFLOW_PATH)
+    name = "minimax_h3_fl2va_pruned_INT4Q.safetensors"
+    api = apply_config(ui, RunConfig(diffusion_model=name))
+    assert str(NODE_UNET) in api
+    assert str(NODE_INT8) not in api
+    assert api[str(NODE_UNET)]["inputs"]["unet_name"] == name

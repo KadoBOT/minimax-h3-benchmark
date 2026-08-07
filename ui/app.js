@@ -15,19 +15,25 @@ const AXIS_PRIORITY = [
 
 /** Infer loader path from diffusion model basename (mirrors bench.diffusion_models.infer_loader). */
 function inferLoader(filename) {
-  const n = String(filename || "").toLowerCase();
+  const n = String(filename || "")
+    .toLowerCase()
+    .replace(/-/g, "_");
   if (n.endsWith(".gguf")) return { model_path: "gguf", quant: "nvfp4" };
-  if (["int8", "int4", "mixed", "w8a8"].some((t) => n.includes(t))) {
+  // INT4Q packs load via standard UNETLoader (not OTUNet) — matches Music Suite.
+  if (n.includes("int4q")) return { model_path: "safetensor", quant: "nvfp4" };
+  if (["convrot", "mixed", "w8a8"].some((t) => n.includes(t))) {
     return { model_path: "safetensor", quant: "int8" };
   }
-  if (n.includes("nvfp4")) return { model_path: "safetensor", quant: "nvfp4" };
+  if (n.includes("int8") && !n.includes("nvfp4")) {
+    return { model_path: "safetensor", quant: "int8" };
+  }
   return { model_path: "safetensor", quant: "nvfp4" };
 }
 
 function loaderLabel(cfg) {
   if (!cfg) return "—";
   if (cfg.model_path === "gguf") return "GGUF";
-  return cfg.quant === "int8" ? "INT (OTUNet)" : "NVFP4 (UNET)";
+  return cfg.quant === "int8" ? "OTUNet (convrot/int8)" : "UNETLoader";
 }
 
 const DEFAULT_FIRST_FRAME =
