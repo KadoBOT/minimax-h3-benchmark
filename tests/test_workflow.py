@@ -149,6 +149,21 @@ def test_prompt_baseline_set():
     assert "0:00" not in val
 
 
+def test_prompt_and_aspect_ratio_overrides():
+    ui = load_ui_workflow(WORKFLOW_PATH)
+    api = apply_config(
+        ui,
+        RunConfig(
+            prompt="A cat jumps onto a table.",
+            aspect_ratio="9:16 (Portrait Widescreen)",
+            mp=0.6,
+        ),
+    )
+    assert api[str(NODE_PROMPT)]["inputs"]["value"] == "A cat jumps onto a table."
+    assert api["98"]["inputs"]["aspect_ratio"] == "9:16 (Portrait Widescreen)"
+    assert api["98"]["inputs"]["megapixels"] == 0.6
+
+
 def test_output_tag_sets_unique_filename_prefix():
     ui = load_ui_workflow(WORKFLOW_PATH)
     api = apply_config(ui, RunConfig(), output_tag="speed_001_timed")

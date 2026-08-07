@@ -87,6 +87,21 @@ input[type="file"] {
   color: var(--muted);
 }
 
+textarea#prompt {
+  width: 100%;
+  margin-top: 0.25rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-cell);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  resize: vertical;
+  min-height: 5rem;
+}
+
 .muted {
   color: var(--muted);
   margin: 0;

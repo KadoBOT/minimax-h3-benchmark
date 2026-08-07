@@ -21,6 +21,10 @@ class RunConfig:
     diffusion_model: str = ""
     # Basename under ComfyUI input/ for LoadImage first frame (FL2V)
     first_frame: str = ""
+    # Positive prompt for I2V (duration-agnostic text)
+    prompt: str = ""
+    # ResolutionSelector aspect_ratio combo value
+    aspect_ratio: str = ""
     turbo: bool = False
     rife: bool = False
     upscaler: bool = False
@@ -42,6 +46,12 @@ class RunConfig:
     sol_variant: str | None = None
 
     def __post_init__(self) -> None:
+        from bench.constants import (
+            BASELINE_PROMPT,
+            DEFAULT_ASPECT_RATIO,
+            DEFAULT_FIRST_FRAME,
+        )
+
         # cache="none" means caching disabled (ctor and from_dict)
         if self.cache == "none":
             self.cache_enabled = False
@@ -53,12 +63,18 @@ class RunConfig:
             self.model_path = path
             self.quant = quant
         if not (self.first_frame and str(self.first_frame).strip()):
-            from bench.constants import DEFAULT_FIRST_FRAME
-
             self.first_frame = DEFAULT_FIRST_FRAME
         else:
             # LoadImage expects a basename in ComfyUI/input (no path separators)
             self.first_frame = Path(str(self.first_frame).replace("\\", "/")).name
+        if not (self.prompt and str(self.prompt).strip()):
+            self.prompt = BASELINE_PROMPT
+        else:
+            self.prompt = str(self.prompt).strip()
+        if not (self.aspect_ratio and str(self.aspect_ratio).strip()):
+            self.aspect_ratio = DEFAULT_ASPECT_RATIO
+        else:
+            self.aspect_ratio = str(self.aspect_ratio).strip()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

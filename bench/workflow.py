@@ -348,8 +348,9 @@ def apply_config(
     steps_eff = TURBO_STEPS_DEFAULT if cfg.turbo else int(cfg.steps)
 
     # --- Prompt / seed / schedule / resolution / duration ---
+    prompt_text = (getattr(cfg, "prompt", None) or BASELINE_PROMPT).strip() or BASELINE_PROMPT
     if str(NODE_PROMPT) in api:
-        set_widget(api, NODE_PROMPT, "value", BASELINE_PROMPT)
+        set_widget(api, NODE_PROMPT, "value", prompt_text)
 
     if str(NODE_SEED) in api:
         set_widget(api, NODE_SEED, "seed", int(cfg.seed))
@@ -369,6 +370,8 @@ def apply_config(
     if str(NODE_SAMPLER) in api:
         set_widget(api, NODE_SAMPLER, "sampler_name", cfg.sampler)
     if str(NODE_RESOLUTION) in api:
+        aspect = (getattr(cfg, "aspect_ratio", None) or "16:9 (Widescreen)").strip()
+        set_widget(api, NODE_RESOLUTION, "aspect_ratio", aspect)
         set_widget(api, NODE_RESOLUTION, "megapixels", float(cfg.mp))
     if str(NODE_DURATION) in api:
         set_widget(api, NODE_DURATION, "value", float(cfg.duration_s))

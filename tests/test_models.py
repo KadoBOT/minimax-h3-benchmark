@@ -20,6 +20,10 @@ def test_runconfig_defaults_v2():
     assert c.upscaler is False
     assert c.clean_vram is False
     assert c.first_frame == DEFAULT_FIRST_FRAME
+    from bench.constants import BASELINE_PROMPT, DEFAULT_ASPECT_RATIO
+
+    assert c.prompt == BASELINE_PROMPT
+    assert c.aspect_ratio == DEFAULT_ASPECT_RATIO
 
 
 def test_run_roundtrip_new_fields():

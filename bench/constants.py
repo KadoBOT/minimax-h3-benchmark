@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-WORKFLOW_PATH = ROOT / "minimax-h3-i2v_v3_turbo_workflow.json"
+WORKFLOW_PATH = ROOT / "updated_h3_wf.json"
 RESULTS_DIR = ROOT / "results"
 BENCHMARK_JSON = RESULTS_DIR / "benchmark.json"
 VIDEOS_DIR = RESULTS_DIR / "videos"
@@ -78,7 +78,7 @@ FIXED_SEED = 42
 
 # ComfyUI input folder + default first-frame image (FL2V)
 COMFY_INPUT_DIR = Path(r"C:\Users\ricar\Documents\ComfyUI\ComfyUI\input")
-DEFAULT_FIRST_FRAME = "Cyberpunk_outlaw_with_jagged_grin_202605230412.jpeg"
+DEFAULT_FIRST_FRAME = "Cyberpunk_courier_riding_magneti…_2K_202608070843.jpeg"
 DEFAULT_FIRST_FRAME_PATH = COMFY_INPUT_DIR / DEFAULT_FIRST_FRAME
 
 NVFP4_UNET = "minimax_h3_fl2va_pruned_nvfp4.safetensors"
@@ -87,13 +87,9 @@ GGUF_UNET = "MiniMax-H3-FL2VA-Q4_K_M.gguf"
 GGUF_CLIP = "qwen3vl-32B-MiniMax-H3-Q4_K_M.gguf"
 
 BASELINE_PROMPT = (
-    "The scene animates from the first frame. Steam billows heavily from under "
-    "the car hood. The older man exhales a tired sigh and slumps slightly. The "
-    "overhead light flickers. The younger man tightens his grip on the wrench, "
-    "steps forward, and angrily points it toward the engine while shouting. A "
-    "sudden burst of sparks shoots up from the engine bay, casting a bright "
-    "orange flash across both men's faces as the camera quickly zooms in on the "
-    "younger man."
+    "[0s-1.5s] Low tracking shot races forward with the courier as he accelerates hard on the magnetic skateboard, cyan board thrusters flare brighter, rain streaks turn into diagonal streaks across the lens, neon signs smear into long light trails while the alley walls rush past on both sides.\n"  
+    "[1.5s-3.5s] He snaps into a sharp left bank at full speed, the board sprays a sheet of water and sparks off the wet pavement, a swarm of holographic ads and floating drones whip past his head, camera whip-pans to keep him centered as background traffic blurs into pure light streaks.\n"
+    "[3.5s-5s] The courier launches off a sudden ramp of debris, body and board launching airborne in a tight arc through heavy rain and neon haze, camera follows the upward trajectory then drops with him as he lands hard, water exploding outward in all directions while the alley continues to rush past at extreme speed."
 )
 
 FALLBACK_SCHEDULERS = ["beta", "beta57", "simple"]
@@ -101,3 +97,15 @@ FALLBACK_SAMPLERS = ["euler", "res_multistep", "er_sde"]
 
 DEFAULT_SCHEDULER = "beta57"
 DEFAULT_SAMPLER = "euler"
+DEFAULT_ASPECT_RATIO = "16:9 (Widescreen)"
+
+FALLBACK_ASPECT_RATIOS = [
+    "1:1 (Square)",
+    "2:3 (Portrait Photo)",
+    "3:2 (Photo)",
+    "3:4 (Portrait Standard)",
+    "4:3 (Standard)",
+    "9:16 (Portrait Widescreen)",
+    "16:9 (Widescreen)",
+    "21:9 (Ultrawide)",
+]

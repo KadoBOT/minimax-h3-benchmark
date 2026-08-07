@@ -8,9 +8,12 @@ import urllib.request
 from typing import Any
 
 from bench.constants import (
+    BASELINE_PROMPT,
+    DEFAULT_ASPECT_RATIO,
     DEFAULT_FIRST_FRAME,
     DEFAULT_SAMPLER,
     DEFAULT_SCHEDULER,
+    FALLBACK_ASPECT_RATIOS,
     FALLBACK_SAMPLERS,
     FALLBACK_SCHEDULERS,
     GGUF_UNET,
@@ -30,6 +33,8 @@ _DEFAULTS = {
     "mp": 0.5,
     "duration_s": 5,
     "first_frame": DEFAULT_FIRST_FRAME,
+    "prompt": BASELINE_PROMPT,
+    "aspect_ratio": DEFAULT_ASPECT_RATIO,
 }
 
 
@@ -66,13 +71,19 @@ def fetch_comfy_options(comfy_url: str, timeout: float = 3.0) -> dict[str, Any]:
     try:
         sched = _combo(f"{base}/object_info/BasicScheduler", "scheduler", timeout)
         samp = _combo(f"{base}/object_info/KSamplerSelect", "sampler_name", timeout)
+        aspects = _combo(
+            f"{base}/object_info/ResolutionSelector", "aspect_ratio", timeout
+        )
         if not sched or not samp:
             raise RuntimeError("empty combo")
+        if not aspects:
+            aspects = list(FALLBACK_ASPECT_RATIOS)
         defaults = dict(_DEFAULTS)
         defaults.update(diff["defaults_extra"])
         data = {
             "schedulers": sched,
             "samplers": samp,
+            "aspect_ratios": aspects,
             "source": "comfy",
             "defaults": defaults,
             "diffusion_models": diff["diffusion_models"],
@@ -84,6 +95,7 @@ def fetch_comfy_options(comfy_url: str, timeout: float = 3.0) -> dict[str, Any]:
         data = {
             "schedulers": list(FALLBACK_SCHEDULERS),
             "samplers": list(FALLBACK_SAMPLERS),
+            "aspect_ratios": list(FALLBACK_ASPECT_RATIOS),
             "source": "fallback",
             "defaults": defaults,
             "diffusion_models": diff["diffusion_models"],

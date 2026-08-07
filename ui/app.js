@@ -31,6 +31,15 @@ function loaderLabel(cfg) {
 
 const DEFAULT_FIRST_FRAME =
   "Cyberpunk_outlaw_with_jagged_grin_202605230412.jpeg";
+const DEFAULT_ASPECT_RATIO = "16:9 (Widescreen)";
+const DEFAULT_PROMPT =
+  "The scene animates from the first frame. Steam billows heavily from under " +
+  "the car hood. The older man exhales a tired sigh and slumps slightly. The " +
+  "overhead light flickers. The younger man tightens his grip on the wrench, " +
+  "steps forward, and angrily points it toward the engine while shouting. A " +
+  "sudden burst of sparks shoots up from the engine bay, casting a bright " +
+  "orange flash across both men's faces as the camera quickly zooms in on the " +
+  "younger man.";
 
 const state = {
   config: {
@@ -38,6 +47,8 @@ const state = {
     quant: "nvfp4",
     diffusion_model: "",
     first_frame: DEFAULT_FIRST_FRAME,
+    prompt: DEFAULT_PROMPT,
+    aspect_ratio: DEFAULT_ASPECT_RATIO,
     turbo: false,
     rife: false,
     upscaler: false,
@@ -87,6 +98,16 @@ const GALLERY_COMPARE_FIELDS = [
     get: (c) => String(c.diffusion_model || c.quant || c.model_path || ""),
   },
   { key: "first_frame", label: "first frame", get: (c) => String(c.first_frame ?? "") },
+  {
+    key: "prompt",
+    label: "prompt",
+    get: (c) => String(c.prompt ?? "").trim().slice(0, 200),
+  },
+  {
+    key: "aspect_ratio",
+    label: "aspect",
+    get: (c) => String(c.aspect_ratio ?? ""),
+  },
   {
     key: "cache",
     label: "cache",
@@ -143,6 +164,20 @@ async function loadOptions() {
   }
   fillSelect("scheduler", state.options.schedulers, state.config.scheduler);
   fillSelect("sampler", state.options.samplers, state.config.sampler);
+  const aspects =
+    state.options.aspect_ratios && state.options.aspect_ratios.length
+      ? state.options.aspect_ratios
+      : [
+          "1:1 (Square)",
+          "2:3 (Portrait Photo)",
+          "3:2 (Photo)",
+          "3:4 (Portrait Standard)",
+          "4:3 (Standard)",
+          "9:16 (Portrait Widescreen)",
+          "16:9 (Widescreen)",
+          "21:9 (Ultrawide)",
+        ];
+  fillSelect("aspect_ratio", aspects, state.config.aspect_ratio || DEFAULT_ASPECT_RATIO);
   const models = state.options.diffusion_models || [];
   const d = state.options.defaults || {};
   const defaultModel = d.diffusion_model || models[0] || "";
@@ -173,12 +208,16 @@ async function loadOptions() {
   if (d.sampler && state.options.samplers.includes(d.sampler)) {
     state.config.sampler = d.sampler;
   }
+  if (d.aspect_ratio) state.config.aspect_ratio = d.aspect_ratio;
+  if (d.prompt) state.config.prompt = d.prompt;
   if (d.steps != null) state.config.steps = d.steps;
   if (d.mp != null) state.config.mp = d.mp;
   if (d.duration_s != null) state.config.duration_s = d.duration_s;
   if (d.seed != null) state.config.seed = d.seed;
   if (d.first_frame) state.config.first_frame = d.first_frame;
   else if (!state.config.first_frame) state.config.first_frame = DEFAULT_FIRST_FRAME;
+  if (!state.config.prompt) state.config.prompt = DEFAULT_PROMPT;
+  if (!state.config.aspect_ratio) state.config.aspect_ratio = DEFAULT_ASPECT_RATIO;
   updateFirstFramePreview(state.config.first_frame);
   formFromState();
 }
@@ -287,6 +326,8 @@ function configChips(cfg) {
   const bits = [
     cfg.diffusion_model || null,
     cfg.first_frame ? `img:${cfg.first_frame}` : null,
+    cfg.aspect_ratio || null,
+    cfg.prompt ? `prompt:${String(cfg.prompt).slice(0, 40)}…` : null,
     cfg.model_path === "gguf" ? "gguf" : null,
     cfg.turbo ? "turbo" : null,
     cfg.rife ? "rife" : null,
@@ -424,6 +465,18 @@ function formFromState() {
   document.getElementById("seed").value = c.seed;
   document.getElementById("mp").value = c.mp;
   document.getElementById("duration_s").value = c.duration_s;
+  const promptEl = document.getElementById("prompt");
+  if (promptEl) promptEl.value = c.prompt || DEFAULT_PROMPT;
+  const ar = document.getElementById("aspect_ratio");
+  if (ar && c.aspect_ratio) {
+    if (![...ar.options].some((o) => o.value === c.aspect_ratio)) {
+      const opt = document.createElement("option");
+      opt.value = c.aspect_ratio;
+      opt.textContent = c.aspect_ratio;
+      ar.appendChild(opt);
+    }
+    ar.value = c.aspect_ratio;
+  }
   updateFirstFramePreview(c.first_frame || DEFAULT_FIRST_FRAME);
 
   syncDisabled();
@@ -448,11 +501,17 @@ function stateFromForm() {
   const cache =
     document.querySelector('input[name="cache"]:checked')?.value || "spectrum";
 
+  const promptRaw = document.getElementById("prompt")?.value ?? "";
   state.config = {
     model_path: inferred.model_path,
     quant: inferred.quant,
     diffusion_model: diffusionModel,
     first_frame: state.config.first_frame || DEFAULT_FIRST_FRAME,
+    prompt: (promptRaw && promptRaw.trim()) || DEFAULT_PROMPT,
+    aspect_ratio:
+      document.getElementById("aspect_ratio")?.value ||
+      state.config.aspect_ratio ||
+      DEFAULT_ASPECT_RATIO,
     turbo: document.getElementById("toggle-turbo").checked,
     rife: document.getElementById("toggle-rife").checked,
     upscaler: document.getElementById("toggle-upscaler").checked,
@@ -520,7 +579,7 @@ function wireForm() {
     syncDisabled();
   });
   panel.addEventListener("input", (e) => {
-    if (e.target.matches("input[type=number]")) {
+    if (e.target.matches("input[type=number], textarea#prompt")) {
       stateFromForm();
     }
   });
@@ -601,6 +660,8 @@ function applyConfigToPanel(cfg) {
     quant: inferred.quant,
     diffusion_model: diffusionModel,
     first_frame: cfg.first_frame || DEFAULT_FIRST_FRAME,
+    prompt: (cfg.prompt && String(cfg.prompt).trim()) || DEFAULT_PROMPT,
+    aspect_ratio: cfg.aspect_ratio || DEFAULT_ASPECT_RATIO,
     turbo: !!cfg.turbo,
     rife: !!cfg.rife,
     upscaler: !!cfg.upscaler,
@@ -624,6 +685,10 @@ function applyConfigToPanel(cfg) {
   if (state.options) {
     fillSelect("scheduler", state.options.schedulers, state.config.scheduler);
     fillSelect("sampler", state.options.samplers, state.config.sampler);
+    const aspects = state.options.aspect_ratios || [];
+    if (aspects.length) {
+      fillSelect("aspect_ratio", aspects, state.config.aspect_ratio);
+    }
     const models = state.options.diffusion_models || [];
     fillSelect("diffusion_model", models, state.config.diffusion_model);
   }
