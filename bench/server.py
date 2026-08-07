@@ -23,6 +23,7 @@ from bench.constants import (
     RESULTS_DIR,
     UI_DIR,
 )
+from bench import store
 from bench.models import RunConfig
 from bench.options import fetch_comfy_options
 
@@ -125,6 +126,8 @@ class BenchHandler(SimpleHTTPRequestHandler):
             return self._handle_run(raw)
         if parsed.path == "/api/abort":
             return self._handle_abort()
+        if parsed.path == "/api/rate":
+            return self._handle_rate(raw)
         self.send_error(404)
 
     def do_HEAD(self):
@@ -232,6 +235,38 @@ class BenchHandler(SimpleHTTPRequestHandler):
         if APP.runner is not None:
             APP.runner.request_abort()
         return self._json(200, {"ok": True})
+
+    def _handle_rate(self, raw: bytes):
+        """POST { run_id, rating: 1..10 | null } — human quality score."""
+        try:
+            body = json.loads(raw.decode() or "{}")
+        except json.JSONDecodeError:
+            return self._json(400, {"error": "invalid json"})
+        run_id = body.get("run_id")
+        if not run_id or not isinstance(run_id, str):
+            return self._json(400, {"error": "run_id required"})
+        rating = body.get("rating", None)
+        if rating is not None and rating != "":
+            try:
+                rating = int(rating)
+            except (TypeError, ValueError):
+                return self._json(400, {"error": "rating must be int 1–10 or null"})
+        else:
+            rating = None
+        try:
+            suite = store.set_run_rating(run_id, rating, suite=APP.suite)
+            if APP.suite is None:
+                # Disk-only path still ok
+                pass
+            else:
+                APP.suite = suite
+        except KeyError:
+            return self._json(404, {"error": f"run {run_id} not found"})
+        except ValueError as e:
+            return self._json(400, {"error": str(e)})
+        except FileNotFoundError:
+            return self._json(404, {"error": "no suite on disk"})
+        return self._json(200, {"ok": True, "run_id": run_id, "rating": rating})
 
     def _handle_upload_image(self):
         """Accept multipart image, write into ComfyUI input/, return basename for LoadImage."""

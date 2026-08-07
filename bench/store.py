@@ -130,6 +130,14 @@ def patch_run(run_id: str, **fields: Any) -> Suite:
                     from bench.models import RunConfig
 
                     setattr(r, k, RunConfig.from_dict(v))
+                elif k == "rating":
+                    if v is None or v == "" or v == "null":
+                        setattr(r, k, None)
+                    else:
+                        iv = int(v)
+                        if not 1 <= iv <= 10:
+                            raise ValueError("rating must be 1–10 or null")
+                        setattr(r, k, iv)
                 else:
                     setattr(r, k, v)
             found = True
@@ -138,6 +146,25 @@ def patch_run(run_id: str, **fields: Any) -> Suite:
         raise KeyError(f"run {run_id} not found")
     save_suite(suite)
     return suite
+
+
+def set_run_rating(run_id: str, rating: int | None, suite: Suite | None = None) -> Suite:
+    """Set quality rating (1–10) or clear with None. Optionally patch live suite."""
+    if rating is not None:
+        rating = int(rating)
+        if not 1 <= rating <= 10:
+            raise ValueError("rating must be 1–10 or null")
+    target = suite
+    if target is None:
+        return patch_run(run_id, rating=rating)
+    if not target.runs:
+        target.runs = target.all_runs()
+    for r in target.all_runs():
+        if r.id == run_id:
+            r.rating = rating
+            save_suite(target)
+            return target
+    raise KeyError(f"run {run_id} not found")
 
 
 def video_dest(run_id: str, ext: str = ".mp4") -> Path:

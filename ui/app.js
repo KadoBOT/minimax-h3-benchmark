@@ -65,6 +65,8 @@ const state = {
   busy: false,
   /** @type {Set<string>} Field keys allowed to differ in gallery compare mode */
   galleryVaryAxes: new Set(),
+  /** @type {string[]} up to two run ids for 50/50 video compare */
+  compareIds: [],
 };
 
 /** @type {Map<string, object>} */
@@ -73,8 +75,10 @@ const runIndex = new Map();
 let lastListKey = "";
 let lastHeatmapKey = "";
 let lastGalleryKey = "";
+let lastScoresKey = "";
 let detailRunId = null;
 let galleryFiltersWired = false;
+let expandedRunId = null;
 
 /**
  * Comparable config dimensions for gallery "allow-vary" filtering.
@@ -684,7 +688,7 @@ function renderList(runs) {
   const key = sorted
     .map(
       (r) =>
-        `${r.id}:${r.status}:${r.timed_s}:${r.sec_per_it}:${r.video_path || ""}`
+        `${r.id}:${r.status}:${r.timed_s}:${r.sec_per_it}:${r.video_path || ""}:${r.rating ?? ""}:${expandedRunId || ""}`
     )
     .join("|");
   if (key === lastListKey && wrap.dataset.ready === "1") return;
@@ -701,6 +705,7 @@ function renderList(runs) {
     <th>status</th>
     <th>wall</th>
     <th>s/it</th>
+    <th>rating</th>
     <th>config</th>
     <th>video</th>
     <th></th>
@@ -709,18 +714,36 @@ function renderList(runs) {
   for (const r of sorted) {
     const cfg = r.config || {};
     const vid = r.video_path
-      ? `<a href="/${escapeHtml(r.video_path)}" target="_blank" rel="noopener">video</a>`
+      ? `<button type="button" class="linkish video-expand-btn" data-expand="${escapeHtml(r.id)}">video</button>`
       : "—";
     const wall = r.timed_s != null ? fmtSec(r.timed_s) : "—";
+    const ratingOpts = ['<option value="">—</option>']
+      .concat(
+        Array.from({ length: 10 }, (_, i) => {
+          const v = i + 1;
+          const sel = r.rating === v ? " selected" : "";
+          return `<option value="${v}"${sel}>${v}</option>`;
+        })
+      )
+      .join("");
     html += `<tr class="clickable" data-run-id="${escapeHtml(r.id)}">
       <td class="row-label">${escapeHtml(r.id)}</td>
       <td><span class="chip ${escapeHtml(r.status || "queued")}">${escapeHtml(r.status || "queued")}</span></td>
       <td>${escapeHtml(wall)}</td>
       <td title="seconds per sampler step (same unit as Comfy tqdm)">${escapeHtml(fmtSecPerIt(r))}</td>
+      <td><select class="rating-select" data-rate="${escapeHtml(r.id)}" title="Quality 1–10">${ratingOpts}</select></td>
       <td class="chips-cell"><div class="chips">${configChips(cfg)}</div></td>
       <td>${vid}</td>
       <td><button type="button" class="compact apply-btn" data-apply="${escapeHtml(r.id)}">Apply</button></td>
     </tr>`;
+    if (expandedRunId === r.id && r.video_path) {
+      html += `<tr class="video-expand-row"><td colspan="8">
+        <div class="inline-video-wrap">
+          <video src="/${escapeHtml(r.video_path)}" controls autoplay playsinline></video>
+          <button type="button" class="compact" data-collapse="${escapeHtml(r.id)}">Collapse</button>
+        </div>
+      </td></tr>`;
+    }
   }
   html += "</tbody></table></div>";
   wrap.innerHTML = html;
@@ -728,7 +751,7 @@ function renderList(runs) {
 
   wrap.querySelectorAll("tr[data-run-id]").forEach((tr) => {
     tr.addEventListener("click", (e) => {
-      if (e.target.closest("a, button")) return;
+      if (e.target.closest("a, button, select")) return;
       openDetail(tr.dataset.runId);
     });
   });
@@ -739,6 +762,65 @@ function renderList(runs) {
       if (run) applyConfigToPanel(run.config);
     });
   });
+  wrap.querySelectorAll("[data-expand]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.expand;
+      expandedRunId = expandedRunId === id ? null : id;
+      lastListKey = "";
+      renderList([...runIndex.values()]);
+    });
+  });
+  wrap.querySelectorAll("[data-collapse]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      expandedRunId = null;
+      lastListKey = "";
+      renderList([...runIndex.values()]);
+    });
+  });
+  wrap.querySelectorAll("select[data-rate]").forEach((sel) => {
+    sel.addEventListener("change", (e) => {
+      e.stopPropagation();
+      submitRating(sel.dataset.rate, sel.value === "" ? null : Number(sel.value));
+    });
+    sel.addEventListener("click", (e) => e.stopPropagation());
+  });
+}
+
+async function submitRating(runId, rating) {
+  try {
+    const r = await fetch("/api/rate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_id: runId, rating }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      alert(err.error || "Failed to save rating");
+      return;
+    }
+    const run = runIndex.get(runId);
+    if (run) run.rating = rating;
+    lastListKey = "";
+    lastScoresKey = "";
+    lastGalleryKey = "";
+    const g = document.getElementById("gallery");
+    if (g) g.dataset.structureKey = "";
+  } catch (e) {
+    alert(String(e.message || e));
+  }
+}
+
+function openVideoExpand(runId) {
+  const run = runIndex.get(runId);
+  const dlg = document.getElementById("video-expand");
+  const body = document.getElementById("video-expand-body");
+  const title = document.getElementById("video-expand-title");
+  if (!run || !run.video_path) return;
+  title.textContent = run.id;
+  body.innerHTML = `<video src="/${escapeHtml(run.video_path)}" controls autoplay playsinline></video>`;
+  dlg.showModal();
 }
 
 // ---------------------------------------------------------------------------
@@ -1053,17 +1135,51 @@ function updateGalleryCardMeta(card, r) {
       .map((p) => `<span class="chip">${escapeHtml(p)}</span>`)
       .join("")}</div>`;
   }
+  const inCompare = state.compareIds.includes(r.id);
+  const slot = state.compareIds[0] === r.id ? "A" : state.compareIds[1] === r.id ? "B" : "";
+  const ratingOpts = ['<option value="">rate —</option>']
+    .concat(
+      Array.from({ length: 10 }, (_, i) => {
+        const v = i + 1;
+        const sel = r.rating === v ? " selected" : "";
+        return `<option value="${v}"${sel}>${v}</option>`;
+      })
+    )
+    .join("");
   meta.innerHTML = `
-        <strong>${escapeHtml(r.id)}</strong><br>
+        <strong>${escapeHtml(r.id)}</strong>
+        ${slot ? `<span class="chip compare-mark">Compare ${slot}</span>` : ""}
+        <br>
         ${escapeHtml(fmtRunTime(r))}
+        ${r.rating != null ? ` · ★${r.rating}` : ""}
         ${varyBits}
-        <div class="chips">${configChips(r.config)}</div>`;
+        <div class="chips">${configChips(r.config)}</div>
+        <div class="card-actions">
+          <select class="rating-select" data-rate="${escapeHtml(r.id)}">${ratingOpts}</select>
+          <button type="button" class="compact ${inCompare ? "primary" : ""}" data-compare-toggle="${escapeHtml(r.id)}">
+            ${inCompare ? "Unpick" : "Pick compare"}
+          </button>
+        </div>`;
+  meta.querySelectorAll("select[data-rate]").forEach((sel) => {
+    sel.addEventListener("change", (e) => {
+      e.stopPropagation();
+      submitRating(sel.dataset.rate, sel.value === "" ? null : Number(sel.value));
+    });
+    sel.addEventListener("click", (e) => e.stopPropagation());
+  });
+  meta.querySelectorAll("[data-compare-toggle]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleComparePick(btn.dataset.compareToggle);
+    });
+  });
 }
 
 function makeGalleryCard(r) {
   const article = document.createElement("article");
   article.className = "card";
   article.dataset.runId = r.id;
+  if (state.compareIds.includes(r.id)) article.classList.add("compare-picked");
 
   const video = document.createElement("video");
   video.controls = true;
@@ -1078,9 +1194,139 @@ function makeGalleryCard(r) {
   updateGalleryCardMeta(article, r);
   article.addEventListener("click", (e) => {
     if (e.target.tagName === "VIDEO") return;
+    if (e.target.closest("button, select")) return;
     openDetail(article.dataset.runId);
   });
   return article;
+}
+
+function toggleComparePick(runId) {
+  const idx = state.compareIds.indexOf(runId);
+  if (idx >= 0) {
+    state.compareIds.splice(idx, 1);
+  } else {
+    if (state.compareIds.length >= 2) {
+      state.compareIds.shift();
+    }
+    state.compareIds.push(runId);
+  }
+  syncCompareToolbar();
+  const g = document.getElementById("gallery");
+  if (g) g.dataset.structureKey = "";
+  lastGalleryKey = "";
+  renderGallery([...runIndex.values()]);
+}
+
+function syncCompareToolbar() {
+  const a = state.compareIds[0];
+  const b = state.compareIds[1];
+  const elA = document.getElementById("compare-slot-a");
+  const elB = document.getElementById("compare-slot-b");
+  const play = document.getElementById("btn-compare-play");
+  if (elA) elA.textContent = a ? `A: ${a}` : "A: —";
+  if (elB) elB.textContent = b ? `B: ${b}` : "B: —";
+  if (play) play.disabled = !(a && b);
+}
+
+function wireCompareControls() {
+  const play = document.getElementById("btn-compare-play");
+  const clear = document.getElementById("btn-compare-clear");
+  const syncBtn = document.getElementById("btn-compare-sync");
+  if (play) {
+    play.addEventListener("click", () => openCompareDialog());
+  }
+  if (clear) {
+    clear.addEventListener("click", () => {
+      state.compareIds = [];
+      syncCompareToolbar();
+      const g = document.getElementById("gallery");
+      if (g) g.dataset.structureKey = "";
+      lastGalleryKey = "";
+      renderGallery([...runIndex.values()]);
+    });
+  }
+  if (syncBtn) {
+    syncBtn.addEventListener("click", () => {
+      const va = document.getElementById("compare-video-a");
+      const vb = document.getElementById("compare-video-b");
+      if (!va || !vb) return;
+      if (va.paused) {
+        va.play();
+        vb.play();
+      } else {
+        va.pause();
+        vb.pause();
+      }
+    });
+  }
+  const dlg = document.getElementById("compare-dialog");
+  if (dlg) {
+    dlg.addEventListener("close", () => {
+      const va = document.getElementById("compare-video-a");
+      const vb = document.getElementById("compare-video-b");
+      if (va) {
+        va.pause();
+        va.removeAttribute("src");
+        va.load();
+      }
+      if (vb) {
+        vb.pause();
+        vb.removeAttribute("src");
+        vb.load();
+      }
+    });
+  }
+  syncCompareToolbar();
+}
+
+function openCompareDialog() {
+  const aId = state.compareIds[0];
+  const bId = state.compareIds[1];
+  const ra = runIndex.get(aId);
+  const rb = runIndex.get(bId);
+  if (!ra?.video_path || !rb?.video_path) {
+    alert("Pick two runs that have videos.");
+    return;
+  }
+  const va = document.getElementById("compare-video-a");
+  const vb = document.getElementById("compare-video-b");
+  const la = document.getElementById("compare-label-a");
+  const lb = document.getElementById("compare-label-b");
+  if (la) la.textContent = `A · ${aId}${ra.rating != null ? ` · ★${ra.rating}` : ""}`;
+  if (lb) lb.textContent = `B · ${bId}${rb.rating != null ? ` · ★${rb.rating}` : ""}`;
+  va.src = `/${ra.video_path}`;
+  vb.src = `/${rb.video_path}`;
+  // Keep playback roughly in sync
+  const syncFrom = (src, dst) => {
+    const onTime = () => {
+      if (Math.abs(dst.currentTime - src.currentTime) > 0.35) {
+        dst.currentTime = src.currentTime;
+      }
+    };
+    src.addEventListener("timeupdate", onTime);
+    src.addEventListener("play", () => {
+      if (dst.paused) dst.play().catch(() => {});
+    });
+    src.addEventListener("pause", () => {
+      if (!dst.paused) dst.pause();
+    });
+    src.addEventListener("seeked", () => {
+      dst.currentTime = src.currentTime;
+    });
+  };
+  // clone node to drop old listeners
+  const freshA = va.cloneNode(true);
+  const freshB = vb.cloneNode(true);
+  va.parentNode.replaceChild(freshA, va);
+  vb.parentNode.replaceChild(freshB, vb);
+  freshA.id = "compare-video-a";
+  freshB.id = "compare-video-b";
+  freshA.src = `/${ra.video_path}`;
+  freshB.src = `/${rb.video_path}`;
+  syncFrom(freshA, freshB);
+  syncFrom(freshB, freshA);
+  document.getElementById("compare-dialog").showModal();
+  Promise.all([freshA.play(), freshB.play()]).catch(() => {});
 }
 
 function renderGallery(allRuns) {
@@ -1096,13 +1342,14 @@ function renderGallery(allRuns) {
   if (statusEl) statusEl.textContent = status;
 
   const flatIds = groups.flatMap((gr) => gr.runs.map((r) => r.id));
-  const structureKey = `${varyKey}||${groups
+  const compareKey = state.compareIds.join(",");
+  const structureKey = `${varyKey}||${compareKey}||${groups
     .map((gr) => gr.fixedKey + ":" + gr.runs.map((r) => `${r.id}:${r.video_path}`).join(","))
     .join(";")}`;
   const metaKey = groups
     .flatMap((gr) => gr.runs)
-    .map((r) => `${r.id}:${r.timed_s}:${r.sec_per_it}`)
-    .join("|");
+    .map((r) => `${r.id}:${r.timed_s}:${r.sec_per_it}:${r.rating ?? ""}`)
+    .join("|") + `|c:${compareKey}`;
 
   if (!done.length) {
     if (g.dataset.structureKey !== "empty") {
@@ -1164,6 +1411,84 @@ function renderGallery(allRuns) {
 }
 
 // ---------------------------------------------------------------------------
+// Scores tab — average rating by setting value
+// ---------------------------------------------------------------------------
+
+function renderScores(runs) {
+  const wrap = document.getElementById("tab-scores");
+  if (!wrap) return;
+  const rated = runs.filter(
+    (r) => r.rating != null && Number(r.rating) >= 1 && Number(r.rating) <= 10
+  );
+  const key = rated
+    .map((r) => `${r.id}:${r.rating}`)
+    .sort()
+    .join("|");
+  if (key === lastScoresKey && wrap.dataset.ready === "1") return;
+  lastScoresKey = key;
+
+  if (!rated.length) {
+    wrap.innerHTML = `<div class="empty-msg">
+      No ratings yet. Rate runs 1–10 in the List or Gallery tabs.
+      This board averages scores per setting value (e.g. which scheduler tends higher)
+      so you can see what lifts or hurts quality — not a rating of a single knob alone.
+    </div>`;
+    wrap.dataset.ready = "1";
+    return;
+  }
+
+  // For each dimension, average rating by discrete value
+  let html = `<p class="muted field-hint">
+    Based on <strong>${rated.length}</strong> rated run(s).
+    Each table shows mean ★ for that setting’s values across runs (other settings still vary).
+  </p>`;
+
+  for (const field of GALLERY_COMPARE_FIELDS) {
+    /** @type {Map<string, number[]>} */
+    const buckets = new Map();
+    for (const r of rated) {
+      const v = fieldValue(field, r.config || {}) || "(empty)";
+      if (!buckets.has(v)) buckets.set(v, []);
+      buckets.get(v).push(Number(r.rating));
+    }
+    if (buckets.size === 0) continue;
+    const rows = [...buckets.entries()]
+      .map(([val, scores]) => {
+        const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+        return { val, avg, n: scores.length, min: Math.min(...scores), max: Math.max(...scores) };
+      })
+      .sort((a, b) => b.avg - a.avg || b.n - a.n);
+
+    const globalAvg =
+      rated.reduce((s, r) => s + Number(r.rating), 0) / rated.length;
+
+    html += `<section class="score-block">
+      <h3 class="score-dim">${escapeHtml(field.label)}</h3>
+      <div class="table-wrap"><table class="list-table score-table">
+        <thead><tr>
+          <th>value</th><th>avg ★</th><th>n</th><th>min</th><th>max</th><th>vs mean</th>
+        </tr></thead><tbody>`;
+    for (const row of rows) {
+      const delta = row.avg - globalAvg;
+      const deltaStr = (delta >= 0 ? "+" : "") + delta.toFixed(2);
+      const cls = delta > 0.15 ? "score-up" : delta < -0.15 ? "score-down" : "";
+      html += `<tr>
+        <td class="row-label">${escapeHtml(row.val)}</td>
+        <td><strong>${row.avg.toFixed(2)}</strong></td>
+        <td>${row.n}</td>
+        <td>${row.min}</td>
+        <td>${row.max}</td>
+        <td class="${cls}">${deltaStr}</td>
+      </tr>`;
+    }
+    html += `</tbody></table></div></section>`;
+  }
+
+  wrap.innerHTML = html;
+  wrap.dataset.ready = "1";
+}
+
+// ---------------------------------------------------------------------------
 // Detail dialog
 // ---------------------------------------------------------------------------
 
@@ -1183,6 +1508,15 @@ function openDetail(runId) {
   const video = run.video_path
     ? `<video src="/${escapeHtml(run.video_path)}" controls preload="metadata"></video>`
     : `<p class="muted">No video yet.</p>`;
+  const ratingOpts = ['<option value="">—</option>']
+    .concat(
+      Array.from({ length: 10 }, (_, i) => {
+        const v = i + 1;
+        const sel = run.rating === v ? " selected" : "";
+        return `<option value="${v}"${sel}>${v}</option>`;
+      })
+    )
+    .join("");
   body.innerHTML = `
     <h3>${escapeHtml(run.id)}</h3>
     <div class="kv">
@@ -1190,6 +1524,8 @@ function openDetail(runId) {
       · status=<span>${escapeHtml(run.status || "?")}</span>
       · timed=<span>${escapeHtml(run.timed_s != null ? fmtSec(run.timed_s) : "—")}</span>
       · s/it=<span>${escapeHtml(fmtSecPerIt(run))}</span>
+      · rating=
+      <select id="detail-rating" class="rating-select">${ratingOpts}</select>
       ${run.warmup_s != null ? `· warmup=<span>${fmtSec(run.warmup_s)}</span> (legacy)` : ""}
       ${run.graph_cache_cleared != null ? `· graph_clear=<span>${run.graph_cache_cleared}</span>` : ""}
       ${run.sampler_cached != null ? `· sampler_cached=<span>${run.sampler_cached}</span>` : ""}
@@ -1199,6 +1535,12 @@ function openDetail(runId) {
     ${run.error ? `<p class="kv" style="color:var(--fail)">error: <span>${escapeHtml(run.error)}</span></p>` : ""}
     <pre>${escapeHtml(JSON.stringify(run, null, 2))}</pre>
   `;
+  const rateSel = document.getElementById("detail-rating");
+  if (rateSel) {
+    rateSel.addEventListener("change", () => {
+      submitRating(run.id, rateSel.value === "" ? null : Number(rateSel.value));
+    });
+  }
   document.getElementById("detail").showModal();
 }
 
@@ -1215,6 +1557,7 @@ async function tick() {
     renderList(runs);
     renderHeatmap(runs);
     renderGallery(runs);
+    renderScores(runs);
   } catch (e) {
     document.getElementById("status-line").textContent =
       `Waiting for results… (${e.message})`;
@@ -1229,6 +1572,7 @@ function boot() {
   wireForm();
   wireTabs();
   wireGalleryFilters();
+  wireCompareControls();
   formFromState();
   syncButtons();
 

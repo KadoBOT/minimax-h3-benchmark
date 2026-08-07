@@ -295,6 +295,54 @@ def test_api_upload_image(tmp_path, monkeypatch):
         reset_app()
 
 
+def test_api_rate(tmp_path, monkeypatch):
+    from bench import server as server_mod
+    from bench.models import Run, RunConfig, empty_suite
+    from bench.server import attach_runner, reset_app, start_server
+
+    monkeypatch.setattr(server_mod, "BENCHMARK_JSON", tmp_path / "benchmark.json")
+    monkeypatch.setattr(server_mod, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(store, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(store, "BENCHMARK_JSON", tmp_path / "benchmark.json")
+    monkeypatch.setattr(store, "VIDEOS_DIR", tmp_path / "videos")
+    monkeypatch.setattr(store, "RUNS_DIR", tmp_path / "runs")
+    store.ensure_dirs()
+    suite = empty_suite("rate", "http://127.0.0.1:8188")
+    suite.runs.append(
+        Run(id="r1", phase="manual", status="done", timed_s=1.0, config=RunConfig())
+    )
+    store.save_suite(suite)
+
+    class FakeRunner:
+        def __init__(self):
+            self.comfy = type("C", (), {"base_url": "http://fake"})()
+
+        def request_abort(self):
+            pass
+
+    reset_app()
+    runner = FakeRunner()
+    attach_runner(runner, suite)
+    port = _free_port()
+    httpd = start_server(port)
+    try:
+        body = json.dumps({"run_id": "r1", "rating": 7}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/rate",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode())
+        assert data["ok"] is True
+        assert data["rating"] == 7
+        assert store.load_suite().runs[0].rating == 7
+    finally:
+        httpd.shutdown()
+        reset_app()
+
+
 def test_api_abort(tmp_path, monkeypatch):
     reset_app()
     monkeypatch.setattr("bench.server.BENCHMARK_JSON", tmp_path / "benchmark.json")

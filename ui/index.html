@@ -173,20 +173,29 @@
         <button type="button" data-tab="list" class="active" role="tab" aria-selected="true">List</button>
         <button type="button" data-tab="heatmap" role="tab" aria-selected="false">Heatmap</button>
         <button type="button" data-tab="gallery" role="tab" aria-selected="false">Gallery</button>
+        <button type="button" data-tab="scores" role="tab" aria-selected="false">Scores</button>
       </div>
       <section id="tab-list" class="tab-panel" role="tabpanel"></section>
       <section id="tab-heatmap" class="tab-panel" role="tabpanel" hidden></section>
       <section id="tab-gallery" class="tab-panel" role="tabpanel" hidden>
         <div class="gallery-filter-bar">
           <p class="muted field-hint">
-            <strong>Compare mode:</strong> pick fields that are <em>allowed to differ</em>.
-            Only runs that match on every other setting are shown (so you can isolate scheduler, steps, etc.).
+            <strong>Filter:</strong> pick fields that are <em>allowed to differ</em>.
+            Only runs that match on every other setting are shown.
           </p>
           <div id="gallery-vary-axes" class="chip-row gallery-vary-row" aria-label="Fields allowed to differ"></div>
           <p id="gallery-filter-status" class="muted field-hint"></p>
+          <div class="compare-toolbar">
+            <strong class="field-label">Compare (pick 2):</strong>
+            <span id="compare-slot-a" class="chip compare-slot">A: —</span>
+            <span id="compare-slot-b" class="chip compare-slot">B: —</span>
+            <button type="button" id="btn-compare-play" class="primary compact" disabled>Play 50/50</button>
+            <button type="button" id="btn-compare-clear" class="compact">Clear</button>
+          </div>
         </div>
         <div id="gallery" class="gallery"></div>
       </section>
+      <section id="tab-scores" class="tab-panel" role="tabpanel" hidden></section>
     </main>
   </div>
 
@@ -196,6 +205,32 @@
       <button class="close" value="close">Close</button>
     </form>
     <div id="detail-body"></div>
+  </dialog>
+
+  <dialog id="video-expand">
+    <form method="dialog" class="detail-toolbar">
+      <span id="video-expand-title" class="muted"></span>
+      <button class="close" value="close">Close</button>
+    </form>
+    <div id="video-expand-body" class="video-expand-body"></div>
+  </dialog>
+
+  <dialog id="compare-dialog" class="compare-dialog">
+    <form method="dialog" class="detail-toolbar">
+      <span class="muted">Side-by-side compare (left = A, right = B) · synced play</span>
+      <button type="button" id="btn-compare-sync" class="compact">Play / Pause</button>
+      <button class="close" value="close">Close</button>
+    </form>
+    <div class="compare-stage">
+      <div class="compare-pane">
+        <div class="compare-label" id="compare-label-a">A</div>
+        <video id="compare-video-a" controls playsinline></video>
+      </div>
+      <div class="compare-pane">
+        <div class="compare-label" id="compare-label-b">B</div>
+        <video id="compare-video-b" controls playsinline></video>
+      </div>
+    </div>
   </dialog>
 
   <script src="/app.js"></script>

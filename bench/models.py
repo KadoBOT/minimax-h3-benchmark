@@ -91,6 +91,8 @@ class Run:
     error: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
+    # Human quality score 1–10 (optional); used for setting averages on Scores tab
+    rating: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -105,6 +107,13 @@ class Run:
         known["config"] = cfg
         known.setdefault("id", d.get("id"))
         known.setdefault("phase", d.get("phase", "manual"))
+        # Clamp rating if present
+        if "rating" in known and known["rating"] is not None:
+            try:
+                r = int(known["rating"])
+                known["rating"] = r if 1 <= r <= 10 else None
+            except (TypeError, ValueError):
+                known["rating"] = None
         return cls(**{k: v for k, v in known.items() if k in cls.__dataclass_fields__})
 
 
