@@ -118,6 +118,18 @@ input[type="file"] {
   font-size: 0.75rem;
 }
 
+.banner-info {
+  margin: 0.75rem 0 0;
+  background: rgba(61, 214, 140, 0.08);
+  border: 1px solid rgba(61, 214, 140, 0.35);
+  color: var(--ok);
+  line-height: 1.4;
+}
+
+#run-panel .banner-info {
+  margin-bottom: 0.25rem;
+}
+
 .header-actions {
   display: flex;
   flex-direction: column;

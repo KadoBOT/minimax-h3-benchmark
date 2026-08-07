@@ -427,6 +427,7 @@ function formFromState() {
   updateFirstFramePreview(c.first_frame || DEFAULT_FIRST_FRAME);
 
   syncDisabled();
+  updateDuplicateHint();
 }
 
 function stateFromForm() {
@@ -478,6 +479,7 @@ function stateFromForm() {
       ? `Loader: ${loaderLabel(state.config)} · ${diffusionModel}`
       : `Loader: ${loaderLabel(state.config)}`;
   }
+  updateDuplicateHint();
 }
 
 function syncDisabled() {
@@ -1072,6 +1074,55 @@ function fieldValue(field, cfg) {
   return field.get(cfg || {});
 }
 
+/** Full config fingerprint (all compare fields) for duplicate detection. */
+function fullConfigFingerprint(cfg) {
+  return GALLERY_COMPARE_FIELDS.map(
+    (f) => `${f.key}=${fieldValue(f, cfg || {})}`
+  ).join("|");
+}
+
+/**
+ * Non-excluded runs that already used the same settings as *cfg*.
+ * Prefers completed runs; also flags queued/timing duplicates.
+ */
+function findMatchingRuns(cfg, allRuns) {
+  const fp = fullConfigFingerprint(cfg);
+  const matches = includedRuns(allRuns || [...runIndex.values()]).filter(
+    (r) => fullConfigFingerprint(r.config || {}) === fp
+  );
+  return matches;
+}
+
+function updateDuplicateHint() {
+  const el = document.getElementById("dup-config-hint");
+  if (!el) return;
+  const matches = findMatchingRuns(state.config);
+  if (!matches.length) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  const done = matches.filter((r) => r.status === "done");
+  const pending = matches.filter((r) =>
+    ["queued", "warmup", "timing"].includes(r.status)
+  );
+  const ids = matches
+    .slice(0, 4)
+    .map((r) => r.id)
+    .join(", ");
+  const more = matches.length > 4 ? ` (+${matches.length - 4} more)` : "";
+  let msg = "";
+  if (done.length && pending.length) {
+    msg = `Info: this exact setup was already run (${done.length} done, ${pending.length} in queue/running). Examples: ${ids}${more}. You can still queue another.`;
+  } else if (done.length) {
+    msg = `Info: this exact setup was already benchmarked (${done.length} run${done.length === 1 ? "" : "s"}). Examples: ${ids}${more}. You can still queue another.`;
+  } else {
+    msg = `Info: this exact setup is already queued or running (${pending.length}). Examples: ${ids}${more}.`;
+  }
+  el.textContent = msg;
+  el.hidden = false;
+}
+
 function fixedFingerprint(cfg, varyKeys) {
   const parts = [];
   for (const f of GALLERY_COMPARE_FIELDS) {
@@ -1646,6 +1697,7 @@ async function tick() {
     renderHeatmap(runs);
     renderGallery(runs);
     renderScores(runs);
+    updateDuplicateHint();
   } catch (e) {
     document.getElementById("status-line").textContent =
       `Waiting for results… (${e.message})`;
