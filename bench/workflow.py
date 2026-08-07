@@ -65,9 +65,14 @@ from bench.presets import expand_presets
 
 TURBO_STEPS_DEFAULT = 4
 
-# Secondary / UI helper nodes not needed in the API prompt.
+# Secondary / UI helper nodes not needed in the API prompt (bench only needs
+# the primary VHS_VideoCombine). Including them without full wiring makes Comfy
+# reject the prompt (missing images/filename_prefix) and can hard-crash.
 NODE_SECONDARY_COMBINE = 150
 NODE_IMAGE_FROM_BATCH = 152
+NODE_SAVE_AUDIO = 149
+NODE_LAST_FRAME_INDEX = 151
+NODE_SAVE_LAST_FRAME = 153
 
 # Node types that exist only in the UI graph (no executable class_type).
 UI_ONLY_TYPES = frozenset(
@@ -512,7 +517,10 @@ def apply_config(
             fps = _primitive_value(api, NODE_BASE_FPS, 24)
         set_widget(api, NODE_VIDEO_COMBINE, "frame_rate", fps)
 
-    # --- Omit switches and unused turbo step plumbing ---
+    # --- Omit switches, turbo step plumbing, and non-bench outputs ---
+    # SaveAudio / SaveImage / last-frame extract are optional UI exports; their
+    # links break after we rewire the video path, and Comfy validates them as
+    # graph roots if left in the prompt.
     _omit(
         api,
         NODE_SWITCH_QUANT,  # v2 legacy
@@ -527,6 +535,9 @@ def apply_config(
         NODE_FLOAT_TO_INT,
         NODE_SECONDARY_COMBINE,
         NODE_IMAGE_FROM_BATCH,
+        NODE_SAVE_AUDIO,
+        NODE_LAST_FRAME_INDEX,
+        NODE_SAVE_LAST_FRAME,
     )
 
     # --- Variant widgets: cache keys only on cache node; sol keys only on SolAttn ---
@@ -554,5 +565,15 @@ def apply_config(
                 and ival[0] not in alive
             ):
                 del node["inputs"][ikey]
+
+    # Drop any remaining incomplete terminal saves (defensive).
+    for nid, node in list(api.items()):
+        ct = node.get("class_type") or ""
+        if ct in ("SaveImage", "SaveAudio"):
+            ins = node.get("inputs") or {}
+            if ct == "SaveImage" and ("images" not in ins or "filename_prefix" not in ins):
+                _omit(api, nid)
+            elif ct == "SaveAudio" and ("audio" not in ins or "filename_prefix" not in ins):
+                _omit(api, nid)
 
     return api

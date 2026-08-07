@@ -54,6 +54,28 @@ def test_first_frame_sets_load_image_and_strips_last_frame():
     assert api2[str(NODE_LOAD_IMAGE)]["inputs"]["image"] == "my_upload.png"
 
 
+def test_bench_prompt_omits_incomplete_save_outputs():
+    """Secondary SaveImage/SaveAudio/last-frame helpers must not enter the prompt.
+
+    Leaving them half-wired made Comfy fail validation (missing images /
+    filename_prefix) even when the main VHS path was fine.
+    """
+    ui = load_ui_workflow(WORKFLOW_PATH)
+    api = apply_config(ui, RunConfig())
+    types = {n["class_type"] for n in api.values()}
+    assert "SaveImage" not in types
+    assert "SaveAudio" not in types
+    assert "ImageFromBatch" not in types
+    # Primary video path present and complete
+    assert "VHS_VideoCombine" in types
+    vc = next(n for n in api.values() if n["class_type"] == "VHS_VideoCombine")
+    assert "images" in vc["inputs"]
+    assert "filename_prefix" in vc["inputs"]
+    # I2V first-frame only
+    assert "first_frame" in api[str(NODE_I2V)]["inputs"]
+    assert "last_frame" not in api[str(NODE_I2V)]["inputs"]
+
+
 def test_safetensor_int8_vs_nvfp4():
     ui = load_ui_workflow(WORKFLOW_PATH)
     api = apply_config(ui, RunConfig(model_path="safetensor", quant="int8"))
