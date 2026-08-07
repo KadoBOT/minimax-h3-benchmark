@@ -44,13 +44,12 @@
         <legend>Diffusion model</legend>
         <label class="field-label" for="diffusion_model">MiniMax H3 models (from Comfy folder)</label>
         <select id="diffusion_model" name="diffusion_model"></select>
-        <p id="diffusion-hint" class="muted field-hint">Loader path is inferred from the filename (GGUF / NVFP4 / INT).
-        </p>
+        <p id="diffusion-hint" class="muted field-hint">All .safetensors load on the UNETLoader node; .gguf uses GGUF.</p>
         <p id="loader-hint" class="muted field-hint">Loader: —</p>
       </fieldset>
 
+      <!-- Hidden radios kept for form state / apply-from-run -->
       <fieldset class="field-group" id="model-path-group" hidden>
-        <legend>Model path (derived)</legend>
         <div class="chip-row" role="radiogroup" aria-label="Model path">
           <label class="toggle-chip">
             <input type="radio" name="model_path" value="safetensor" checked />
@@ -62,17 +61,11 @@
           </label>
         </div>
       </fieldset>
-
       <fieldset class="field-group" id="quant-group" hidden>
-        <legend>Quant (derived)</legend>
         <div class="chip-row" role="radiogroup" aria-label="Quant">
           <label class="toggle-chip">
             <input type="radio" name="quant" value="nvfp4" checked />
             <span>NVFP4</span>
-          </label>
-          <label class="toggle-chip">
-            <input type="radio" name="quant" value="int8" />
-            <span>INT8</span>
           </label>
         </div>
       </fieldset>
