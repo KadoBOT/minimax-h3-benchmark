@@ -22,8 +22,21 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Serve results UI only (no Comfy attach / no runner)",
     )
+    p.add_argument(
+        "--fresh",
+        "--clear-results",
+        action="store_true",
+        dest="fresh",
+        help="Delete results/benchmark.json, videos, and run metas before start",
+    )
     args = p.parse_args(argv)
 
+    if args.fresh:
+        stats = store.clear_results()
+        print(
+            f"Cleared previous results "
+            f"({stats['files']} file(s) removed). Starting fresh."
+        )
     store.ensure_dirs()
 
     if args.ui_only:
@@ -43,11 +56,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"WARNING: ComfyUI not reachable at {args.comfy_url}: {e}", file=sys.stderr)
         print("UI will start; health/options will report fallbacks until Comfy is up.")
 
-    existing = store.try_load_suite()
+    existing = None if args.fresh else store.try_load_suite()
     runner = BenchmarkRunner(client, resume=False)
     suite = existing or runner.ensure_suite()
-    if not suite.runs:
+    if args.fresh or not suite.runs:
         suite.status = "idle"
+        suite.runs = []
+        suite.current = None
     store.save_suite(suite)
 
     attach_runner(runner, suite)

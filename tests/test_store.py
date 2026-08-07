@@ -74,3 +74,28 @@ def test_load_migrates_v1_phases(tmp_path, monkeypatch):
     assert len(loaded.runs) == 1
     assert loaded.runs[0].id == "speed_001"
     assert loaded.runs[0].config.model_path == "safetensor"
+
+
+def test_clear_results_wipes_suite_videos_and_runs(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(store, "BENCHMARK_JSON", tmp_path / "benchmark.json")
+    monkeypatch.setattr(store, "VIDEOS_DIR", tmp_path / "videos")
+    monkeypatch.setattr(store, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(store, "SUITE_LOG", tmp_path / "suite.log")
+    store.ensure_dirs()
+    suite = empty_suite("wipe-me", "http://127.0.0.1:8188")
+    suite.runs.append(Run(id="r1", phase="manual", status="done", timed_s=1.0))
+    store.save_suite(suite)
+    (tmp_path / "videos" / "r1.mp4").write_bytes(b"vid")
+    (tmp_path / "runs" / "r1.meta.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "suite.log").write_text("log\n", encoding="utf-8")
+
+    stats = store.clear_results()
+    assert stats["files"] >= 3
+    assert not (tmp_path / "benchmark.json").exists()
+    assert not (tmp_path / "suite.log").exists()
+    assert list((tmp_path / "videos").iterdir()) == []
+    assert list((tmp_path / "runs").iterdir()) == []
+    # dirs recreated
+    assert (tmp_path / "videos").is_dir()
+    assert (tmp_path / "runs").is_dir()

@@ -7,7 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from bench.constants import BENCHMARK_JSON, RESULTS_DIR, RUNS_DIR, VIDEOS_DIR
+from bench.constants import (
+    BENCHMARK_JSON,
+    RESULTS_DIR,
+    RUNS_DIR,
+    SUITE_LOG,
+    VIDEOS_DIR,
+)
 from bench.models import Suite
 
 # Re-bind for monkeypatch.setattr(store, "RESULTS_DIR", ...) in tests
@@ -22,6 +28,54 @@ def ensure_dirs() -> None:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def clear_results() -> dict[str, int]:
+    """Delete suite JSON, videos, run metas, and suite log. Recreate empty dirs.
+
+    Returns counts of removed files for logging.
+    """
+    removed = {"files": 0, "dirs_cleared": 0}
+
+    def _rm_file(path: Path) -> None:
+        nonlocal removed
+        if path.is_file():
+            path.unlink()
+            removed["files"] += 1
+
+    def _rm_tree_contents(path: Path) -> None:
+        nonlocal removed
+        if not path.is_dir():
+            return
+        for child in path.iterdir():
+            if child.is_file():
+                child.unlink()
+                removed["files"] += 1
+            elif child.is_dir():
+                # Nested dirs under videos/runs (rare)
+                for sub in child.rglob("*"):
+                    if sub.is_file():
+                        sub.unlink()
+                        removed["files"] += 1
+                # remove empty subdirs bottom-up
+                for sub in sorted(child.rglob("*"), reverse=True):
+                    if sub.is_dir():
+                        try:
+                            sub.rmdir()
+                        except OSError:
+                            pass
+                try:
+                    child.rmdir()
+                except OSError:
+                    pass
+        removed["dirs_cleared"] += 1
+
+    _rm_file(BENCHMARK_JSON)
+    _rm_file(SUITE_LOG)
+    _rm_tree_contents(VIDEOS_DIR)
+    _rm_tree_contents(RUNS_DIR)
+    ensure_dirs()
+    return removed
 
 
 def atomic_write_json(path: Path, data: dict[str, Any]) -> None:

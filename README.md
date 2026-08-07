@@ -26,6 +26,11 @@ Requires ComfyUI at http://127.0.0.1:8188 with MiniMax H3 models (nvfp4/int8/GGU
 | `--comfy-url` | `http://127.0.0.1:8188` | ComfyUI base URL |
 | `--port` | `8787` | Results UI port |
 | `--ui-only` | off | Serve existing results only (no runner) |
+| `--fresh` / `--clear-results` | off | Wipe `results/` (JSON + videos + run metas) and start empty |
+
+```bash
+python benchmark_runner.py --fresh
+```
 
 ## API
 
