@@ -56,7 +56,9 @@ from bench.constants import (
     NODE_TURBO_STEPS,
     NODE_UNET,
     NODE_UPSCALER,
+    NODE_VAE_AUDIO,
     NODE_VAE_DECODE,
+    NODE_VAE_DECODE_AUDIO,
     NODE_VIDEO_COMBINE,
     NVFP4_UNET,
 )
@@ -504,6 +506,14 @@ def apply_config(
 
     if prev_img is not None and str(NODE_VIDEO_COMBINE) in api:
         set_link(api, NODE_VIDEO_COMBINE, "images", prev_img, 0)
+
+    # Video-only: MiniMax audio latents often contain NaN/+Inf which makes VHS
+    # ffmpeg AAC mux fail even after the video track is written (broken outputs).
+    # Bench only needs the MP4 picture track.
+    _omit(api, NODE_VAE_DECODE_AUDIO, NODE_VAE_AUDIO)
+    if str(NODE_VIDEO_COMBINE) in api:
+        api[str(NODE_VIDEO_COMBINE)]["inputs"].pop("audio", None)
+        set_widget(api, NODE_VIDEO_COMBINE, "trim_to_audio", False)
 
     # Frame rate: RIFE uses interp FPS when active, else base FPS.
     if str(NODE_VIDEO_COMBINE) in api:

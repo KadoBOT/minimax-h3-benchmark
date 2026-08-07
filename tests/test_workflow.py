@@ -71,6 +71,9 @@ def test_bench_prompt_omits_incomplete_save_outputs():
     vc = next(n for n in api.values() if n["class_type"] == "VHS_VideoCombine")
     assert "images" in vc["inputs"]
     assert "filename_prefix" in vc["inputs"]
+    # Video-only: no audio mux (NaN audio latents crash ffmpeg AAC)
+    assert "audio" not in vc["inputs"]
+    assert "VAEDecodeAudio" not in types
     # I2V first-frame only
     assert "first_frame" in api[str(NODE_I2V)]["inputs"]
     assert "last_frame" not in api[str(NODE_I2V)]["inputs"]
