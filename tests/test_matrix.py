@@ -1,17 +1,22 @@
+"""Legacy matrix builders — still exercised by BenchmarkRunner.run_all tests.
+
+Product path is interactive run_one (POST /api/run), not auto Phase 1–3.
+These tests pin builder shape so legacy run_all keeps working until removed.
+"""
+
 from bench.matrix import build_quality_runs, build_scale_runs, build_speed_runs
 from bench.models import RunConfig
 
 
 def test_speed_core_includes_none_and_three_caches():
     runs = build_speed_runs()
-    caches = {r.config.cache for r in runs if r.config.cache_variant is None and r.config.sol_variant is None}
-    # core cells have no variants
     core = [r for r in runs if not r.config.cache_variant and not r.config.sol_variant]
     core_caches = {r.config.cache for r in core}
     assert core_caches == {"none", "spectrum", "easy", "h3"}
     assert len(core) == 16  # 4*2*2
     assert any(r.config.cache_variant == "easy_aggressive" for r in runs)
     assert len(runs) == 24  # 16 + 8 variants
+    assert all(r.config.seed == 42 for r in runs)
 
 
 def test_quality_one_factor():

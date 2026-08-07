@@ -39,7 +39,7 @@ def _now() -> str:
 
 
 def _ensure_legacy_phases(suite: Suite) -> None:
-    """Compat shim until Task 5 drops auto matrix phases."""
+    """Compat for legacy run_all only (interactive path uses flat suite.runs)."""
     for name in ("speed", "quality", "scale"):
         if name not in suite.phases:
             suite.phases[name] = PhaseState()
@@ -381,6 +381,7 @@ class BenchmarkRunner:
         self._emit(suite)
 
     def run_all(self, suite: Suite | None = None) -> Suite:
+        """Legacy auto Phase 1–3 matrix. Product path is ``run_one`` / interactive UI."""
         suite = self.init_suite(suite)
         try:
             # Phase 1 — speed

@@ -1,3 +1,11 @@
+"""Legacy Phase 1–3 matrix builders (not the interactive product path).
+
+The default product flow is one-shot ``BenchmarkRunner.run_one`` from the UI
+(``POST /api/run``). These builders remain for ``BenchmarkRunner.run_all`` and
+its unit tests. Prefer interactive Run configs over auto speed/quality/scale
+matrices.
+"""
+
 from __future__ import annotations
 
 from copy import deepcopy
