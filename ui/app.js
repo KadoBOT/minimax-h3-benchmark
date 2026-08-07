@@ -510,9 +510,10 @@ function syncDisabled() {
 
 function syncButtons() {
   const runBtn = document.getElementById("btn-run");
-  runBtn.disabled = state.busy;
+  // Always allow queueing more runs — ComfyUI + our FIFO handle the rest
+  runBtn.disabled = false;
   runBtn.classList.toggle("busy", state.busy);
-  runBtn.textContent = state.busy ? "Running…" : "Run this config";
+  runBtn.textContent = state.busy ? "Queue another run" : "Run this config";
 }
 
 function wireForm() {
@@ -553,10 +554,6 @@ async function runConfig() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (r.status === 409) {
-    alert("Busy — wait for current run");
-    return;
-  }
   if (!r.ok) {
     let msg = r.statusText;
     try {
@@ -571,6 +568,19 @@ async function runConfig() {
     }
     alert(msg || "Run failed");
     return;
+  }
+  // Queued successfully — poll will show status=queued / running
+  try {
+    const body = await r.json();
+    if (body.run_id) {
+      // light feedback via status line
+      const el = document.getElementById("status-line");
+      if (el) {
+        el.textContent = `Queued ${body.run_id} (depth ${body.queue_depth ?? "?"})`;
+      }
+    }
+  } catch {
+    /* ignore */
   }
   state.busy = true;
   syncButtons();

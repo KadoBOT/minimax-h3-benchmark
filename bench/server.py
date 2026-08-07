@@ -9,6 +9,7 @@ import threading
 import traceback
 import urllib.error
 import urllib.request
+from collections import deque
 from email import policy
 from email.parser import BytesParser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -41,6 +42,9 @@ class BenchApp:
     suite = None
     worker = None
     comfy_url = DEFAULT_COMFY_URL
+    # FIFO of run_id strings to process (Comfy also queues prompts; we run cells
+    # one-at-a-time for metrics + video download, but accept many POSTs).
+    job_queue: deque[str] = deque()
 
 
 APP = BenchApp()
@@ -59,6 +63,64 @@ def reset_app() -> None:
         APP.suite = None
         APP.worker = None
         APP.comfy_url = DEFAULT_COMFY_URL
+        APP.job_queue.clear()
+
+
+def _queue_depth() -> int:
+    return len(APP.job_queue)
+
+
+def _ensure_worker() -> None:
+    """Start background worker if the queue has work and no worker is running."""
+    if APP.worker is not None and APP.worker.is_alive():
+        return
+    t = threading.Thread(target=_job_worker, name="bench-queue-worker", daemon=True)
+    APP.worker = t
+    t.start()
+
+
+def _job_worker() -> None:
+    """Drain APP.job_queue sequentially (one full cell at a time)."""
+    while True:
+        with APP.lock:
+            if not APP.job_queue:
+                # Idle when nothing left
+                if APP.suite is not None and APP.suite.status != "aborted":
+                    pending = any(
+                        r.status in ("queued", "warmup", "timing")
+                        for r in APP.suite.all_runs()
+                    )
+                    if not pending:
+                        APP.suite.status = "idle"
+                        APP.suite.current = None
+                        try:
+                            store.save_suite(APP.suite)
+                        except Exception:
+                            pass
+                APP.worker = None
+                return
+            run_id = APP.job_queue.popleft()
+            runner = APP.runner
+            suite = APP.suite
+
+        if runner is None or suite is None:
+            continue
+
+        run = next((r for r in suite.all_runs() if r.id == run_id), None)
+        if run is None or run.status not in ("queued",):
+            continue
+        if run.excluded:
+            continue
+
+        try:
+            runner.process_run(suite, run)
+        except KeyboardInterrupt:
+            # Abort: leave remaining queue; _handle_abort clears it
+            with APP.lock:
+                APP.worker = None
+            return
+        except Exception:
+            traceback.print_exc()
 
 
 class BenchHandler(SimpleHTTPRequestHandler):
@@ -207,36 +269,62 @@ class BenchHandler(SimpleHTTPRequestHandler):
         return self._json(200, {"ok": True, "comfy_ok": comfy_ok, "comfy_url": url})
 
     def _handle_run(self, raw: bytes):
+        """Enqueue a run config. Always accepted when runner is attached (no 409 busy).
+
+        Jobs process one-at-a-time for metrics/video, but you can queue many;
+        ComfyUI also queues prompts as we submit each cell.
+        """
         if APP.runner is None or APP.suite is None:
             return self._json(503, {"error": "runner not attached"})
+        try:
+            body = json.loads(raw.decode() or "{}")
+        except json.JSONDecodeError:
+            return self._json(400, {"error": "invalid json"})
+        if not isinstance(body, dict):
+            return self._json(400, {"error": "body must be object"})
+        cfg = RunConfig.from_dict(body)
+
         with APP.lock:
-            if APP.worker is not None and APP.worker.is_alive():
-                return self._json(409, {"error": "busy"})
-            try:
-                body = json.loads(raw.decode() or "{}")
-            except json.JSONDecodeError:
-                return self._json(400, {"error": "invalid json"})
-            if not isinstance(body, dict):
-                return self._json(400, {"error": "body must be object"})
-            cfg = RunConfig.from_dict(body)
+            # Clear prior abort so a new queue can start after Abort
+            if hasattr(APP.runner, "clear_abort"):
+                APP.runner.clear_abort()
+            run = APP.runner.enqueue_run(APP.suite, cfg)
+            APP.job_queue.append(run.id)
+            depth = len(APP.job_queue)
+            _ensure_worker()
 
-            def job():
-                try:
-                    APP.runner.run_one(APP.suite, cfg)
-                except KeyboardInterrupt:
-                    pass
-                except Exception:
-                    traceback.print_exc()
-
-            t = threading.Thread(target=job, daemon=True)
-            APP.worker = t
-            t.start()
-        return self._json(202, {"status": "started"})
+        return self._json(
+            202,
+            {
+                "status": "queued",
+                "run_id": run.id,
+                "queue_depth": depth,
+            },
+        )
 
     def _handle_abort(self):
+        """Cancel current Comfy job and drop remaining queued runs."""
+        with APP.lock:
+            pending_ids = list(APP.job_queue)
+            APP.job_queue.clear()
+            suite = APP.suite
         if APP.runner is not None:
             APP.runner.request_abort()
-        return self._json(200, {"ok": True})
+        if suite is not None:
+            for r in suite.all_runs():
+                if r.id in pending_ids or r.status == "queued":
+                    r.status = "aborted"
+                    r.error = r.error or "aborted (queue cleared)"
+                    if not r.finished_at:
+                        from datetime import datetime, timezone
+
+                        r.finished_at = datetime.now(timezone.utc).isoformat()
+            suite.current = None
+            try:
+                store.save_suite(suite)
+            except Exception:
+                pass
+        return self._json(200, {"ok": True, "cleared_queued": len(pending_ids)})
 
     def _handle_rate(self, raw: bytes):
         """POST { run_id, rating: 1..10 | null } — human quality score."""

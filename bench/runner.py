@@ -70,6 +70,10 @@ class BenchmarkRunner:
         except Exception:
             pass
 
+    def clear_abort(self) -> None:
+        """Allow new runs after an abort (queue worker / next POST)."""
+        self._abort = False
+
     def _emit(self, suite: Suite) -> None:
         store.save_suite(suite)
         if self.on_update:
@@ -302,10 +306,10 @@ class BenchmarkRunner:
         sol = "solon" if cfg.sol_attn else "soloff"
         return f"run_{n:03d}_{path}_{cache}_{sol}"
 
-    def run_one(
+    def enqueue_run(
         self, suite: Suite, cfg: RunConfig, *, run_id: str | None = None
     ) -> Run:
-        """Append one run and execute a single generation. Caller ensures not already running."""
+        """Append a queued run (no execution). Safe to call while another run is active."""
         from bench.presets import expand_presets
 
         cfg = deepcopy(cfg)
@@ -318,14 +322,22 @@ class BenchmarkRunner:
         suite.runs.append(run)
         if not suite.started_at:
             suite.started_at = _now()
+        # Stay "running" if something is already in flight; else mark pending queue
+        if suite.status != "running":
+            suite.status = "running"
+        self._emit(suite)
+        return run
+
+    def process_run(self, suite: Suite, run: Run) -> Run:
+        """Execute a previously enqueued run (single generation)."""
+        self.clear_abort()
         suite.status = "running"
         self._emit(suite)
         try:
             self._execute_cell(suite, "manual", run)
             if run.status == "aborted":
                 suite.status = "aborted"
-            else:
-                suite.status = "idle"
+            # leave suite.status to the queue worker when more jobs remain
         except KeyboardInterrupt:
             run.status = "aborted"
             run.error = run.error or "aborted"
@@ -336,6 +348,21 @@ class BenchmarkRunner:
             raise
         suite.current = None
         self._emit(suite)
+        return run
+
+    def run_one(
+        self, suite: Suite, cfg: RunConfig, *, run_id: str | None = None
+    ) -> Run:
+        """Enqueue and immediately process one run (tests / single-shot)."""
+        run = self.enqueue_run(suite, cfg, run_id=run_id)
+        try:
+            self.process_run(suite, run)
+        finally:
+            if suite.status != "aborted" and not any(
+                r.status in ("queued", "warmup", "timing") for r in suite.all_runs()
+            ):
+                suite.status = "idle"
+                self._emit(suite)
         return run
 
     def run_phase(self, suite: Suite, phase: str) -> None:

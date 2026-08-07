@@ -137,7 +137,8 @@ class _FakeRunner:
             self._hold.set()
 
 
-def test_api_run_and_busy_409(tmp_path, monkeypatch):
+def test_api_run_queues_while_busy(tmp_path, monkeypatch):
+    """Second POST while first is running must enqueue (no 409), not reject."""
     reset_app()
     monkeypatch.setattr(store, "RESULTS_DIR", tmp_path)
     monkeypatch.setattr(store, "BENCHMARK_JSON", tmp_path / "benchmark.json")
@@ -149,6 +150,28 @@ def test_api_run_and_busy_409(tmp_path, monkeypatch):
     started = threading.Event()
     suite = empty_suite("run-suite", "http://127.0.0.1:8188")
     runner = _FakeRunner(hold=hold, started=started)
+    # FakeRunner needs enqueue_run / process_run for new server path
+    runner.enqueued = []
+
+    def enqueue_run(suite_arg, cfg, run_id=None):
+        from bench.models import Run
+
+        r = Run(id=f"q{len(runner.enqueued)+1}", phase="manual", status="queued", config=cfg)
+        suite_arg.runs.append(r)
+        runner.enqueued.append(r.id)
+        return r
+
+    def process_run(suite_arg, run):
+        runner.calls.append(run.config)
+        started.set()
+        if hold is not None:
+            hold.wait(timeout=10)
+        run.status = "done"
+        return run
+
+    runner.enqueue_run = enqueue_run
+    runner.process_run = process_run
+    runner.clear_abort = lambda: None
     attach_runner(runner, suite)
 
     port = _free_port()
@@ -163,10 +186,10 @@ def test_api_run_and_busy_409(tmp_path, monkeypatch):
         with urllib.request.urlopen(req) as resp:
             assert resp.status == 202
             body = json.load(resp)
-            assert body["status"] == "started"
+            assert body["status"] == "queued"
+            assert body["run_id"]
 
-        assert started.wait(timeout=5), "run_one was not invoked"
-        assert runner.calls
+        assert started.wait(timeout=5), "process_run was not invoked"
 
         req2 = urllib.request.Request(
             _url(port, "/api/run"),
@@ -174,15 +197,19 @@ def test_api_run_and_busy_409(tmp_path, monkeypatch):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            urllib.request.urlopen(req2)
-            assert False, "expected 409 busy"
-        except urllib.error.HTTPError as e:
-            assert e.code == 409
-            err = json.loads(e.read().decode())
-            assert err["error"] == "busy"
+        with urllib.request.urlopen(req2) as resp2:
+            assert resp2.status == 202
+            body2 = json.load(resp2)
+            assert body2["status"] == "queued"
+            assert body2["run_id"] != body["run_id"]
+            assert body2["queue_depth"] >= 1
+        assert len(runner.enqueued) == 2
     finally:
         hold.set()
+        # let worker drain
+        import time as _t
+
+        _t.sleep(0.3)
         httpd.shutdown()
         reset_app()
 
