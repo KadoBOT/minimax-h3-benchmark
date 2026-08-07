@@ -17,7 +17,7 @@ Requires ComfyUI at http://127.0.0.1:8188 with MiniMax H3 models (nvfp4/int8/GGU
 - Feature toggles mirror workflow groups (GGUF vs Safetensor, Turbo, RIFE, Cache, Sol-Attn, Upscaler, Clean VRAM).
 - Cache / Sol presets: conservative · moderate · aggressive.
 - Scheduler/sampler lists load from Comfy when available.
-- Each Run = warmup + timed protocol; results append to `results/benchmark.json`.
+- Each Run = **one** generation; results append to `results/benchmark.json` with wall time, **s/it**, and **it/s**.
 
 ## Options
 

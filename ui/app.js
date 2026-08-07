@@ -193,13 +193,34 @@ function fmtSec(s) {
   return `${Number(s).toFixed(1)}s`;
 }
 
-/** Wall time + ComfyUI s/it, e.g. "120.0s / 6.54s/it" */
+/** Sampler s/it if present and sane; else null. */
+function samplerSecPerIt(run) {
+  if (!run) return null;
+  const it = run.sec_per_it;
+  if (it == null || it === undefined) return null;
+  const n = Number(it);
+  if (!(n > 0) || !Number.isFinite(n)) return null;
+  return n;
+}
+
+/** Wall time + s/it + it/s, e.g. "120.0s · 6.54s/it · 0.15it/s" */
 function fmtRunTime(run) {
   if (!run || run.timed_s == null) return "—";
   const wall = fmtSec(run.timed_s);
-  const it = run.sec_per_it;
-  if (it == null || it === undefined || !(Number(it) >= 0.05)) return wall;
-  return `${wall} / ${Number(it).toFixed(2)}s/it`;
+  const spi = samplerSecPerIt(run);
+  if (spi == null) return wall;
+  const its = 1 / spi;
+  return `${wall} · ${spi.toFixed(2)}s/it · ${its.toFixed(2)}it/s`;
+}
+
+function fmtSecPerIt(run) {
+  const spi = samplerSecPerIt(run);
+  return spi == null ? "—" : `${spi.toFixed(2)}s/it`;
+}
+
+function fmtItPerSec(run) {
+  const spi = samplerSecPerIt(run);
+  return spi == null ? "—" : `${(1 / spi).toFixed(2)}it/s`;
 }
 
 function escapeHtml(s) {
@@ -634,7 +655,9 @@ function renderList(runs) {
   let html = `<div class="table-wrap"><table class="list-table"><thead><tr>
     <th class="row-label">id</th>
     <th>status</th>
-    <th>time</th>
+    <th>wall</th>
+    <th>s/it</th>
+    <th>it/s</th>
     <th>config</th>
     <th>video</th>
     <th></th>
@@ -645,10 +668,13 @@ function renderList(runs) {
     const vid = r.video_path
       ? `<a href="/${escapeHtml(r.video_path)}" target="_blank" rel="noopener">video</a>`
       : "—";
+    const wall = r.timed_s != null ? fmtSec(r.timed_s) : "—";
     html += `<tr class="clickable" data-run-id="${escapeHtml(r.id)}">
       <td class="row-label">${escapeHtml(r.id)}</td>
       <td><span class="chip ${escapeHtml(r.status || "queued")}">${escapeHtml(r.status || "queued")}</span></td>
-      <td>${escapeHtml(fmtRunTime(r))}</td>
+      <td>${escapeHtml(wall)}</td>
+      <td>${escapeHtml(fmtSecPerIt(r))}</td>
+      <td>${escapeHtml(fmtItPerSec(r))}</td>
       <td class="chips-cell"><div class="chips">${configChips(cfg)}</div></td>
       <td>${vid}</td>
       <td><button type="button" class="compact apply-btn" data-apply="${escapeHtml(r.id)}">Apply</button></td>
@@ -950,13 +976,10 @@ function openDetail(runId) {
     <div class="kv">
       phase=<span>${escapeHtml(run.phase || "?")}</span>
       · status=<span>${escapeHtml(run.status || "?")}</span>
-      · timed=<span>${escapeHtml(fmtRunTime(run))}</span>
-      · warmup=<span>${fmtSec(run.warmup_s)}</span>
-      ${
-        run.sec_per_it != null && Number(run.sec_per_it) >= 0.05
-          ? `· s/it=<span>${Number(run.sec_per_it).toFixed(2)}</span>`
-          : ""
-      }
+      · timed=<span>${escapeHtml(run.timed_s != null ? fmtSec(run.timed_s) : "—")}</span>
+      · s/it=<span>${escapeHtml(fmtSecPerIt(run))}</span>
+      · it/s=<span>${escapeHtml(fmtItPerSec(run))}</span>
+      ${run.warmup_s != null ? `· warmup=<span>${fmtSec(run.warmup_s)}</span> (legacy)` : ""}
       ${run.graph_cache_cleared != null ? `· graph_clear=<span>${run.graph_cache_cleared}</span>` : ""}
       ${run.sampler_cached != null ? `· sampler_cached=<span>${run.sampler_cached}</span>` : ""}
     </div>

@@ -117,11 +117,11 @@ def test_runner_speed_then_base(tmp_path, monkeypatch):
     r.run_phase(suite, "speed")
     assert all(x.status == "done" for x in suite.phases["speed"].runs)
     assert suite.phases["speed"].runs[0].timed_s is not None
-    assert suite.phases["speed"].runs[0].warmup_s is not None
+    assert suite.phases["speed"].runs[0].warmup_s is None  # single-gen protocol
     assert suite.phases["speed"].runs[0].sec_per_it == 0.5
     assert suite.phases["speed"].runs[0].video_path == "videos/s1.mp4"
     assert (tmp_path / "videos" / "s1.mp4").read_bytes() == b"fake"
-    # Graph cache cleared once per cell (warmup→timed), not more without retries
+    # Graph cache cleared once per cell (before the single gen)
     assert fake.cleared == 2  # two cells
     assert suite.phases["speed"].runs[0].graph_cache_cleared is True
     assert "protocol" in suite.baseline
@@ -173,7 +173,7 @@ def test_resume_skips_done(tmp_path, monkeypatch):
     suite = r.init_suite()
     r.run_phase(suite, "speed")
     n_after = comfy.n
-    assert n_after == 4  # 2 runs × (warmup + timed)
+    assert n_after == 2  # 2 runs × 1 gen each
 
     r2 = BenchmarkRunner(FakeComfy(), resume=True)
     # re-use suite with both done
@@ -185,8 +185,8 @@ def test_resume_skips_failed_unless_retry(tmp_path, monkeypatch):
     _patch_store(monkeypatch, tmp_path)
     _patch_matrix_and_workflow(monkeypatch)
 
-    # Fail timed run for first cell (call 2), second cell succeeds
-    comfy = FakeComfy(fail_on={2})
+    # Fail first cell gen (call 1); second cell succeeds
+    comfy = FakeComfy(fail_on={1})
     r = BenchmarkRunner(comfy)
     suite = r.init_suite()
     r.run_phase(suite, "speed")
@@ -205,20 +205,20 @@ def test_resume_skips_failed_unless_retry(tmp_path, monkeypatch):
     r3.run_phase(suite, "speed")
     assert suite.phases["speed"].runs[0].status == "done"
     assert suite.phases["speed"].runs[0].timed_s is not None
-    assert r3.comfy.n == 2  # warmup + timed for the one failed cell
+    assert r3.comfy.n == 1  # single gen for the one failed cell
 
 
 def test_failure_continues_to_next_run(tmp_path, monkeypatch):
     _patch_store(monkeypatch, tmp_path)
     _patch_matrix_and_workflow(monkeypatch)
 
-    # Fail warmup of first run (call 1); second run both succeed
+    # Fail first run (call 1); second run succeeds
     comfy = FakeComfy(fail_on={1})
     r = BenchmarkRunner(comfy)
     suite = r.init_suite()
     r.run_phase(suite, "speed")
     assert suite.phases["speed"].runs[0].status == "failed"
-    assert "warmup:" in (suite.phases["speed"].runs[0].error or "")
+    assert "run:" in (suite.phases["speed"].runs[0].error or "")
     assert suite.phases["speed"].runs[1].status == "done"
     assert suite.phases["speed"].status == "done"
 
@@ -227,7 +227,7 @@ def test_run_all_no_successful_speed_skips_later_phases(tmp_path, monkeypatch):
     _patch_store(monkeypatch, tmp_path)
     _patch_matrix_and_workflow(monkeypatch)
 
-    comfy = FakeComfy(fail_on={1, 2, 3, 4})  # all prompts fail
+    comfy = FakeComfy(fail_on={1, 2})  # both speed gens fail
     r = BenchmarkRunner(comfy)
     suite = r.run_all()
     assert suite.status == "completed"
@@ -266,13 +266,13 @@ def test_run_one_appends_and_completes(tmp_path, monkeypatch):
     assert suite.runs[0] is run
     assert run.phase == "manual"
     assert run.status == "done"
-    assert run.warmup_s is not None
+    assert run.warmup_s is None  # single-gen protocol
     assert run.timed_s is not None
     assert run.sec_per_it == 0.5
     assert run.video_path == f"videos/{run.id}.mp4"
     assert run.id.startswith("run_001_nvfp4_spectrum_solon")
     assert suite.status == "idle"
-    assert fake.cleared == 1  # one cell: warmup → timed
+    assert fake.cleared == 1  # one cell: clear then single gen
     # preset widgets resolved onto config for reproducibility
     assert "reuse_threshold" in (run.config.widgets or {}) or "warmup_steps" in (
         run.config.widgets or {}

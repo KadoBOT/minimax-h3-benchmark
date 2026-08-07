@@ -165,8 +165,10 @@ class ProgressCollector:
             out["progress_value"] = value
             out["progress_max"] = maximum
         rate = instant if instant is not None else best
-        if rate is not None and rate >= 0.05:
+        # Surface any positive rate (UI shows s/it and it/s); tiny burst junk is rare now
+        if rate is not None and rate > 0:
             out["sec_per_it"] = round(rate, 3)
+            out["it_per_s"] = round(1.0 / rate, 3)
         return out
 
     def sec_per_it(self, prompt_id: str | None = None) -> float | None:
@@ -179,13 +181,11 @@ class ProgressCollector:
             best = self._best_sec_per_it
             instant = self.instant_sec_per_it
             steps = self._best_steps
-        if best is not None and best >= 0.05:
+        # Prefer finalized sampler rate; accept faster GPUs (<0.05s/it).
+        if best is not None and best > 0 and steps >= 1:
             return best
-        # Fall back to live estimate only if sensible
-        if instant is not None and instant >= 0.05:
+        if instant is not None and instant > 0:
             return instant
-        if best is not None and steps >= 10:
-            return best
         return None
 
 

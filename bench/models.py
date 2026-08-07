@@ -184,27 +184,23 @@ class Suite:
 # Written into suite.baseline so the UI/results file document metric meaning.
 BENCHMARK_PROTOCOL: dict[str, Any] = {
     "warmup_s": (
-        "Full pipeline wall-clock for the first gen of this cell. Discarded for ranking. "
-        "May include model load on early cells; later cells keep weights in VRAM (no VRAM clean)."
+        "Deprecated: warmup gen removed. Field may be null on new runs."
     ),
     "timed_s": (
-        "Full pipeline wall-clock for the second gen of this cell (same seed/settings). "
-        "Ranked metric for end-to-end time. Includes VAE decode + video encode after sampling."
+        "Full pipeline wall-clock for the single gen of this cell. "
+        "Ranked metric for end-to-end time. Includes model init (first load), "
+        "VAE decode + video encode after sampling."
     ),
     "sec_per_it": (
-        "Sampler-only rate during the timed gen: wall time while the sampler node ran ÷ steps. "
-        "Best signal for EasyCache / Spectrum / H3 / quant / sol-attn speedups."
+        "Sampler-only rate: wall time while the sampler node ran ÷ steps (s/it). "
+        "it/s = 1 / sec_per_it. Best signal for cache / quant / attention speedups."
     ),
     "graph_execution_cache": (
-        "ComfyUI node-output cache is cleared once per cell: after warmup, before timed. "
-        "Not cleared between matrix cells. This is NOT Easy/Spectrum/H3 — those still apply "
-        "on every real sampling pass."
+        "ComfyUI node-output cache is cleared once before each cell gen. "
+        "This is NOT Easy/Spectrum/H3 — those still apply on real sampling passes."
     ),
     "vram_clean": False,
-    "identical_graphs": (
-        "Warmup and timed use the same sampling graph (same seed, cache, quant, sol-attn). "
-        "Only VHS filename_prefix differs so outputs do not overwrite each other."
-    ),
+    "single_gen": True,
 }
 
 
