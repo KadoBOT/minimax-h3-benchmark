@@ -177,6 +177,14 @@
       <section id="tab-list" class="tab-panel" role="tabpanel"></section>
       <section id="tab-heatmap" class="tab-panel" role="tabpanel" hidden></section>
       <section id="tab-gallery" class="tab-panel" role="tabpanel" hidden>
+        <div class="gallery-filter-bar">
+          <p class="muted field-hint">
+            <strong>Compare mode:</strong> pick fields that are <em>allowed to differ</em>.
+            Only runs that match on every other setting are shown (so you can isolate scheduler, steps, etc.).
+          </p>
+          <div id="gallery-vary-axes" class="chip-row gallery-vary-row" aria-label="Fields allowed to differ"></div>
+          <p id="gallery-filter-status" class="muted field-hint"></p>
+        </div>
         <div id="gallery" class="gallery"></div>
       </section>
     </main>

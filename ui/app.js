@@ -63,6 +63,8 @@ const state = {
   },
   options: null,
   busy: false,
+  /** @type {Set<string>} Field keys allowed to differ in gallery compare mode */
+  galleryVaryAxes: new Set(),
 };
 
 /** @type {Map<string, object>} */
@@ -72,6 +74,53 @@ let lastListKey = "";
 let lastHeatmapKey = "";
 let lastGalleryKey = "";
 let detailRunId = null;
+let galleryFiltersWired = false;
+
+/**
+ * Comparable config dimensions for gallery "allow-vary" filtering.
+ * `get` normalizes a RunConfig into a stable string for fingerprinting.
+ */
+const GALLERY_COMPARE_FIELDS = [
+  { key: "scheduler", label: "scheduler", get: (c) => String(c.scheduler ?? "") },
+  { key: "sampler", label: "sampler", get: (c) => String(c.sampler ?? "") },
+  { key: "steps", label: "steps", get: (c) => String(c.steps ?? "") },
+  {
+    key: "diffusion_model",
+    label: "model",
+    get: (c) => String(c.diffusion_model || c.quant || c.model_path || ""),
+  },
+  { key: "first_frame", label: "first frame", get: (c) => String(c.first_frame ?? "") },
+  {
+    key: "cache",
+    label: "cache",
+    get: (c) =>
+      !c.cache_enabled || c.cache === "none"
+        ? "none"
+        : `${c.cache}/${c.cache_preset || "moderate"}`,
+  },
+  {
+    key: "sol",
+    label: "sol-attn",
+    get: (c) => (c.sol_attn ? `on/${c.sol_preset || "moderate"}` : "off"),
+  },
+  { key: "turbo", label: "turbo", get: (c) => (c.turbo ? "on" : "off") },
+  { key: "rife", label: "rife", get: (c) => (c.rife ? "on" : "off") },
+  { key: "upscaler", label: "upscaler", get: (c) => (c.upscaler ? "on" : "off") },
+  {
+    key: "clean_vram",
+    label: "clean VRAM",
+    get: (c) => (c.clean_vram ? "on" : "off"),
+  },
+  { key: "mp", label: "MP", get: (c) => String(c.mp ?? "") },
+  { key: "duration_s", label: "duration", get: (c) => String(c.duration_s ?? "") },
+  { key: "seed", label: "seed", get: (c) => String(c.seed ?? "") },
+  {
+    key: "loader",
+    label: "loader",
+    get: (c) =>
+      c.model_path === "gguf" ? "gguf" : `safetensor/${c.quant || "nvfp4"}`,
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Fetch helpers
@@ -878,50 +927,144 @@ function bindCellClicks(wrap) {
 
 // ---------------------------------------------------------------------------
 // Gallery (incremental — never rewrite <video> for existing cards)
+// Compare filter: selected axes may differ; everything else must match.
 // ---------------------------------------------------------------------------
 
-function renderGallery(allRuns) {
-  const done = allRuns
-    .filter((r) => r.video_path)
-    .sort((a, b) => (b.finished_at || "").localeCompare(a.finished_at || ""));
-  const g = document.getElementById("gallery");
+function fieldValue(field, cfg) {
+  return field.get(cfg || {});
+}
 
-  const key = done
-    .map((r) => `${r.id}:${r.video_path}:${r.timed_s}:${r.sec_per_it}`)
-    .join("|");
-  const structureKey = done.map((r) => `${r.id}:${r.video_path}`).join("|");
+function fixedFingerprint(cfg, varyKeys) {
+  const parts = [];
+  for (const f of GALLERY_COMPARE_FIELDS) {
+    if (varyKeys.has(f.key)) continue;
+    parts.push(`${f.key}=${fieldValue(f, cfg)}`);
+  }
+  return parts.join("|");
+}
 
-  if (!done.length) {
-    if (g.dataset.structureKey !== "empty") {
-      g.innerHTML = `<div class="empty-msg">No videos yet.</div>`;
-      g.dataset.structureKey = "empty";
+function varySignature(cfg, varyKeys) {
+  const parts = [];
+  for (const f of GALLERY_COMPARE_FIELDS) {
+    if (!varyKeys.has(f.key)) continue;
+    parts.push(`${f.key}=${fieldValue(f, cfg)}`);
+  }
+  return parts.join("|");
+}
+
+/**
+ * Group runs that share all non-vary settings. Only groups with 2+ runs
+ * (true comparison sets) are returned when any vary axis is selected.
+ * @returns {{ groups: { fixedKey: string, fixedLabel: string, runs: object[] }[], status: string }}
+ */
+function galleryCompareGroups(doneRuns, varyKeys) {
+  if (!varyKeys.size) {
+    return {
+      groups: [
+        {
+          fixedKey: "all",
+          fixedLabel: "",
+          runs: doneRuns.slice(),
+        },
+      ],
+      status: `${doneRuns.length} video(s) · no compare filter (showing all)`,
+    };
+  }
+
+  /** @type {Map<string, object[]>} */
+  const buckets = new Map();
+  for (const r of doneRuns) {
+    const k = fixedFingerprint(r.config || {}, varyKeys);
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(r);
+  }
+
+  const axisLabels = GALLERY_COMPARE_FIELDS.filter((f) => varyKeys.has(f.key)).map(
+    (f) => f.label
+  );
+  const groups = [];
+  for (const [fixedKey, runs] of buckets) {
+    if (runs.length < 2) continue;
+    // Must actually differ on at least one allowed axis (otherwise not interesting)
+    const sigs = new Set(runs.map((r) => varySignature(r.config || {}, varyKeys)));
+    if (sigs.size < 2) continue;
+
+    const fixedLabel = GALLERY_COMPARE_FIELDS.filter((f) => !varyKeys.has(f.key))
+      .map((f) => `${f.label}=${fieldValue(f, runs[0].config || {})}`)
+      .join(" · ");
+
+    runs.sort((a, b) => {
+      // Order by vary signature then time
+      const sa = varySignature(a.config || {}, varyKeys);
+      const sb = varySignature(b.config || {}, varyKeys);
+      if (sa !== sb) return sa.localeCompare(sb);
+      return (a.timed_s ?? 1e12) - (b.timed_s ?? 1e12);
+    });
+
+    groups.push({ fixedKey, fixedLabel, runs });
+  }
+
+  groups.sort((a, b) => b.runs.length - a.runs.length);
+
+  const nRuns = groups.reduce((s, g) => s + g.runs.length, 0);
+  const status = groups.length
+    ? `${nRuns} video(s) in ${groups.length} set(s) · only ${axisLabels.join(" + ")} differ`
+    : `No sets where only ${axisLabels.join(" + ")} differ (need 2+ matching runs)`;
+
+  return { groups, status };
+}
+
+function wireGalleryFilters() {
+  if (galleryFiltersWired) return;
+  const host = document.getElementById("gallery-vary-axes");
+  if (!host) return;
+  galleryFiltersWired = true;
+  host.innerHTML = "";
+  for (const f of GALLERY_COMPARE_FIELDS) {
+    const label = document.createElement("label");
+    label.className = "toggle-chip";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = f.key;
+    input.dataset.varyKey = f.key;
+    input.checked = state.galleryVaryAxes.has(f.key);
+    input.addEventListener("change", () => {
+      if (input.checked) state.galleryVaryAxes.add(f.key);
+      else state.galleryVaryAxes.delete(f.key);
+      // Force full gallery rebuild with new filter
+      const g = document.getElementById("gallery");
+      if (g) g.dataset.structureKey = "";
       lastGalleryKey = "";
-    }
-    return;
+      // Re-render from last known runs via a soft tick path
+      const runs = [...runIndex.values()];
+      renderGallery(runs);
+    });
+    const span = document.createElement("span");
+    span.textContent = f.label;
+    label.appendChild(input);
+    label.appendChild(span);
+    host.appendChild(label);
   }
+}
 
-  if (g.dataset.structureKey !== structureKey) {
-    g.innerHTML = "";
-    g.dataset.structureKey = structureKey;
-    for (const r of done) {
-      g.appendChild(makeGalleryCard(r));
-    }
-    lastGalleryKey = key;
-    return;
+function updateGalleryCardMeta(card, r) {
+  const meta = card.querySelector(".meta");
+  if (!meta) return;
+  const vary = state.galleryVaryAxes;
+  let varyBits = "";
+  if (vary.size) {
+    const parts = GALLERY_COMPARE_FIELDS.filter((f) => vary.has(f.key)).map(
+      (f) => `${f.label}=${fieldValue(f, r.config || {})}`
+    );
+    varyBits = `<div class="chips">${parts
+      .map((p) => `<span class="chip">${escapeHtml(p)}</span>`)
+      .join("")}</div>`;
   }
-
-  if (key === lastGalleryKey) return;
-  lastGalleryKey = key;
-  for (const r of done) {
-    const card = [...g.querySelectorAll(".card")].find((el) => el.dataset.runId === r.id);
-    if (!card) continue;
-    const meta = card.querySelector(".meta");
-    if (!meta) continue;
-    meta.innerHTML = `
+  meta.innerHTML = `
         <strong>${escapeHtml(r.id)}</strong><br>
-        ${escapeHtml(fmtRunTime(r))} · ${escapeHtml(r.config?.cache || "?")} · ${escapeHtml(r.config?.quant || r.config?.model_path || "?")}
+        ${escapeHtml(fmtRunTime(r))}
+        ${varyBits}
         <div class="chips">${configChips(r.config)}</div>`;
-  }
 }
 
 function makeGalleryCard(r) {
@@ -937,18 +1080,94 @@ function makeGalleryCard(r) {
 
   const meta = document.createElement("div");
   meta.className = "meta";
-  meta.innerHTML = `
-        <strong>${escapeHtml(r.id)}</strong><br>
-        ${escapeHtml(fmtRunTime(r))} · ${escapeHtml(r.config?.cache || "?")} · ${escapeHtml(r.config?.quant || r.config?.model_path || "?")}
-        <div class="chips">${configChips(r.config)}</div>`;
-
   article.appendChild(video);
   article.appendChild(meta);
+  updateGalleryCardMeta(article, r);
   article.addEventListener("click", (e) => {
     if (e.target.tagName === "VIDEO") return;
     openDetail(article.dataset.runId);
   });
   return article;
+}
+
+function renderGallery(allRuns) {
+  wireGalleryFilters();
+  const done = allRuns
+    .filter((r) => r.video_path)
+    .sort((a, b) => (b.finished_at || "").localeCompare(a.finished_at || ""));
+  const g = document.getElementById("gallery");
+  const statusEl = document.getElementById("gallery-filter-status");
+  const varyKeys = state.galleryVaryAxes;
+  const varyKey = [...varyKeys].sort().join(",");
+  const { groups, status } = galleryCompareGroups(done, varyKeys);
+  if (statusEl) statusEl.textContent = status;
+
+  const flatIds = groups.flatMap((gr) => gr.runs.map((r) => r.id));
+  const structureKey = `${varyKey}||${groups
+    .map((gr) => gr.fixedKey + ":" + gr.runs.map((r) => `${r.id}:${r.video_path}`).join(","))
+    .join(";")}`;
+  const metaKey = groups
+    .flatMap((gr) => gr.runs)
+    .map((r) => `${r.id}:${r.timed_s}:${r.sec_per_it}`)
+    .join("|");
+
+  if (!done.length) {
+    if (g.dataset.structureKey !== "empty") {
+      g.innerHTML = `<div class="empty-msg">No videos yet.</div>`;
+      g.dataset.structureKey = "empty";
+      lastGalleryKey = "";
+    }
+    return;
+  }
+
+  if (!flatIds.length && varyKeys.size) {
+    if (g.dataset.structureKey !== "filtered-empty") {
+      g.innerHTML = `<div class="empty-msg">${escapeHtml(status)}</div>`;
+      g.dataset.structureKey = "filtered-empty";
+      lastGalleryKey = "";
+    }
+    return;
+  }
+
+  if (g.dataset.structureKey !== structureKey) {
+    g.innerHTML = "";
+    g.dataset.structureKey = structureKey;
+
+    if (!varyKeys.size) {
+      // Flat grid — all videos
+      for (const r of groups[0].runs) {
+        g.appendChild(makeGalleryCard(r));
+      }
+    } else {
+      for (const gr of groups) {
+        const section = document.createElement("div");
+        section.className = "gallery-group";
+        const header = document.createElement("div");
+        header.className = "gallery-group-header";
+        header.innerHTML = `<span class="title">Matched set (${gr.runs.length})</span>
+          <span class="muted field-hint">${escapeHtml(gr.fixedLabel)}</span>`;
+        const grid = document.createElement("div");
+        grid.className = "gallery";
+        for (const r of gr.runs) {
+          grid.appendChild(makeGalleryCard(r));
+        }
+        section.appendChild(header);
+        section.appendChild(grid);
+        g.appendChild(section);
+      }
+    }
+    lastGalleryKey = metaKey;
+    return;
+  }
+
+  if (metaKey === lastGalleryKey) return;
+  lastGalleryKey = metaKey;
+  // Same structure: update meta only (preserve <video>)
+  const cards = [...g.querySelectorAll(".card")];
+  for (const r of groups.flatMap((gr) => gr.runs)) {
+    const card = cards.find((el) => el.dataset.runId === r.id);
+    if (card) updateGalleryCardMeta(card, r);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1017,6 +1236,7 @@ async function tick() {
 function boot() {
   wireForm();
   wireTabs();
+  wireGalleryFilters();
   formFromState();
   syncButtons();
 
