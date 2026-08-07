@@ -93,6 +93,8 @@ class Run:
     finished_at: str | None = None
     # Human quality score 1–10 (optional); used for setting averages on Scores tab
     rating: int | None = None
+    # When true, run is hidden from gallery/heatmap/scores/compare (still listed)
+    excluded: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -107,6 +109,7 @@ class Run:
         known["config"] = cfg
         known.setdefault("id", d.get("id"))
         known.setdefault("phase", d.get("phase", "manual"))
+        known.setdefault("excluded", False)
         # Clamp rating if present
         if "rating" in known and known["rating"] is not None:
             try:
@@ -114,6 +117,8 @@ class Run:
                 known["rating"] = r if 1 <= r <= 10 else None
             except (TypeError, ValueError):
                 known["rating"] = None
+        if "excluded" in known:
+            known["excluded"] = bool(known["excluded"])
         return cls(**{k: v for k, v in known.items() if k in cls.__dataclass_fields__})
 
 

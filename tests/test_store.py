@@ -93,6 +93,21 @@ def test_set_run_rating(tmp_path, monkeypatch):
     assert store.load_suite().runs[0].rating is None
 
 
+def test_set_run_excluded(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(store, "BENCHMARK_JSON", tmp_path / "benchmark.json")
+    monkeypatch.setattr(store, "VIDEOS_DIR", tmp_path / "videos")
+    monkeypatch.setattr(store, "RUNS_DIR", tmp_path / "runs")
+    store.ensure_dirs()
+    suite = empty_suite("ex", "http://127.0.0.1:8188")
+    suite.runs.append(Run(id="r1", phase="manual", status="done", timed_s=1.0))
+    store.save_suite(suite)
+    store.set_run_excluded("r1", True)
+    assert store.load_suite().runs[0].excluded is True
+    store.set_run_excluded("r1", False)
+    assert store.load_suite().runs[0].excluded is False
+
+
 def test_clear_results_wipes_suite_videos_and_runs(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "RESULTS_DIR", tmp_path)
     monkeypatch.setattr(store, "BENCHMARK_JSON", tmp_path / "benchmark.json")

@@ -128,6 +128,8 @@ class BenchHandler(SimpleHTTPRequestHandler):
             return self._handle_abort()
         if parsed.path == "/api/rate":
             return self._handle_rate(raw)
+        if parsed.path == "/api/exclude":
+            return self._handle_exclude(raw)
         self.send_error(404)
 
     def do_HEAD(self):
@@ -267,6 +269,26 @@ class BenchHandler(SimpleHTTPRequestHandler):
         except FileNotFoundError:
             return self._json(404, {"error": "no suite on disk"})
         return self._json(200, {"ok": True, "run_id": run_id, "rating": rating})
+
+    def _handle_exclude(self, raw: bytes):
+        """POST { run_id, excluded: bool } — hide from compare/scores/heatmap."""
+        try:
+            body = json.loads(raw.decode() or "{}")
+        except json.JSONDecodeError:
+            return self._json(400, {"error": "invalid json"})
+        run_id = body.get("run_id")
+        if not run_id or not isinstance(run_id, str):
+            return self._json(400, {"error": "run_id required"})
+        excluded = bool(body.get("excluded", True))
+        try:
+            suite = store.set_run_excluded(run_id, excluded, suite=APP.suite)
+            if APP.suite is not None:
+                APP.suite = suite
+        except KeyError:
+            return self._json(404, {"error": f"run {run_id} not found"})
+        except FileNotFoundError:
+            return self._json(404, {"error": "no suite on disk"})
+        return self._json(200, {"ok": True, "run_id": run_id, "excluded": excluded})
 
     def _handle_upload_image(self):
         """Accept multipart image, write into ComfyUI input/, return basename for LoadImage."""

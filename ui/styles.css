@@ -761,6 +761,28 @@ button.linkish {
   font-weight: 600;
 }
 
+.row-excluded {
+  opacity: 0.55;
+}
+
+.row-excluded .row-label {
+  text-decoration: line-through;
+}
+
+.chip-excluded {
+  background: #4a3030;
+  color: var(--fail);
+  text-decoration: none !important;
+  font-size: 0.7rem;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+
 /* ----- Detail dialog ----- */
 
 dialog#detail {

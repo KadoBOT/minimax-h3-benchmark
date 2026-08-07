@@ -281,8 +281,13 @@ function escapeHtml(s) {
 
 function findFastest(runs) {
   return runs
-    .filter((r) => r.status === "done" && r.timed_s != null)
+    .filter((r) => r.status === "done" && r.timed_s != null && !r.excluded)
     .sort((a, b) => a.timed_s - b.timed_s)[0];
+}
+
+/** Runs that count for compare / heatmap / scores / fastest (not excluded). */
+function includedRuns(runs) {
+  return runs.filter((r) => !r.excluded);
 }
 
 function configChips(cfg) {
@@ -688,7 +693,7 @@ function renderList(runs) {
   const key = sorted
     .map(
       (r) =>
-        `${r.id}:${r.status}:${r.timed_s}:${r.sec_per_it}:${r.video_path || ""}:${r.rating ?? ""}:${expandedRunId || ""}`
+        `${r.id}:${r.status}:${r.timed_s}:${r.sec_per_it}:${r.video_path || ""}:${r.rating ?? ""}:${r.excluded ? 1 : 0}:${expandedRunId || ""}`
     )
     .join("|");
   if (key === lastListKey && wrap.dataset.ready === "1") return;
@@ -726,18 +731,23 @@ function renderList(runs) {
         })
       )
       .join("");
-    html += `<tr class="clickable" data-run-id="${escapeHtml(r.id)}">
-      <td class="row-label">${escapeHtml(r.id)}</td>
+    const exclCls = r.excluded ? " row-excluded" : "";
+    const exclLabel = r.excluded ? "Include" : "Exclude";
+    html += `<tr class="clickable${exclCls}" data-run-id="${escapeHtml(r.id)}">
+      <td class="row-label">${escapeHtml(r.id)}${r.excluded ? ' <span class="chip chip-excluded">excluded</span>' : ""}</td>
       <td><span class="chip ${escapeHtml(r.status || "queued")}">${escapeHtml(r.status || "queued")}</span></td>
       <td>${escapeHtml(wall)}</td>
       <td title="seconds per sampler step (same unit as Comfy tqdm)">${escapeHtml(fmtSecPerIt(r))}</td>
       <td><select class="rating-select" data-rate="${escapeHtml(r.id)}" title="Quality 1–10">${ratingOpts}</select></td>
       <td class="chips-cell"><div class="chips">${configChips(cfg)}</div></td>
       <td>${vid}</td>
-      <td><button type="button" class="compact apply-btn" data-apply="${escapeHtml(r.id)}">Apply</button></td>
+      <td class="row-actions">
+        <button type="button" class="compact apply-btn" data-apply="${escapeHtml(r.id)}">Apply</button>
+        <button type="button" class="compact ${r.excluded ? "" : "danger"}" data-exclude="${escapeHtml(r.id)}" data-excluded="${r.excluded ? "1" : "0"}" title="Hide from gallery, heatmap, scores, compare">${exclLabel}</button>
+      </td>
     </tr>`;
     if (expandedRunId === r.id && r.video_path) {
-      html += `<tr class="video-expand-row"><td colspan="8">
+      html += `<tr class="video-expand-row${exclCls}"><td colspan="8">
         <div class="inline-video-wrap">
           <video src="/${escapeHtml(r.video_path)}" controls autoplay playsinline></video>
           <button type="button" class="compact" data-collapse="${escapeHtml(r.id)}">Collapse</button>
@@ -760,6 +770,14 @@ function renderList(runs) {
       e.stopPropagation();
       const run = runIndex.get(btn.dataset.apply);
       if (run) applyConfigToPanel(run.config);
+    });
+  });
+  wrap.querySelectorAll("[data-exclude]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.exclude;
+      const currently = btn.dataset.excluded === "1";
+      submitExclude(id, !currently);
     });
   });
   wrap.querySelectorAll("[data-expand]").forEach((btn) => {
@@ -788,6 +806,41 @@ function renderList(runs) {
   });
 }
 
+async function submitExclude(runId, excluded) {
+  try {
+    const r = await fetch("/api/exclude", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_id: runId, excluded: !!excluded }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      alert(err.error || "Failed to update exclude");
+      return;
+    }
+    const run = runIndex.get(runId);
+    if (run) run.excluded = !!excluded;
+    // Drop from compare slots if excluded
+    if (excluded) {
+      state.compareIds = state.compareIds.filter((id) => id !== runId);
+      syncCompareToolbar();
+    }
+    lastListKey = "";
+    lastScoresKey = "";
+    lastHeatmapKey = "";
+    lastGalleryKey = "";
+    const g = document.getElementById("gallery");
+    if (g) g.dataset.structureKey = "";
+    const runs = [...runIndex.values()];
+    renderList(runs);
+    renderHeatmap(runs);
+    renderGallery(runs);
+    renderScores(runs);
+  } catch (e) {
+    alert(String(e.message || e));
+  }
+}
+
 async function submitRating(runId, rating) {
   try {
     const r = await fetch("/api/rate", {
@@ -807,6 +860,7 @@ async function submitRating(runId, rating) {
     lastGalleryKey = "";
     const g = document.getElementById("gallery");
     if (g) g.dataset.structureKey = "";
+    renderScores([...runIndex.values()]);
   } catch (e) {
     alert(String(e.message || e));
   }
@@ -844,9 +898,11 @@ function axisLabel(fn, cfg) {
 
 function renderHeatmap(runs) {
   const wrap = document.getElementById("tab-heatmap");
-  const done = runs.filter((r) => r.status === "done" && r.timed_s != null);
+  const done = includedRuns(runs).filter(
+    (r) => r.status === "done" && r.timed_s != null
+  );
   const key = runs
-    .map((r) => `${r.id}:${r.status}:${r.timed_s}`)
+    .map((r) => `${r.id}:${r.status}:${r.timed_s}:${r.excluded ? 1 : 0}`)
     .join("|");
   if (key === lastHeatmapKey && wrap.dataset.ready === "1") return;
   lastHeatmapKey = key;
@@ -1159,6 +1215,7 @@ function updateGalleryCardMeta(card, r) {
           <button type="button" class="compact ${inCompare ? "primary" : ""}" data-compare-toggle="${escapeHtml(r.id)}">
             ${inCompare ? "Unpick" : "Pick compare"}
           </button>
+          <button type="button" class="compact danger" data-exclude="${escapeHtml(r.id)}" data-excluded="0">Exclude</button>
         </div>`;
   meta.querySelectorAll("select[data-rate]").forEach((sel) => {
     sel.addEventListener("change", (e) => {
@@ -1171,6 +1228,12 @@ function updateGalleryCardMeta(card, r) {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       toggleComparePick(btn.dataset.compareToggle);
+    });
+  });
+  meta.querySelectorAll("[data-exclude]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      submitExclude(btn.dataset.exclude, true);
     });
   });
 }
@@ -1331,7 +1394,7 @@ function openCompareDialog() {
 
 function renderGallery(allRuns) {
   wireGalleryFilters();
-  const done = allRuns
+  const done = includedRuns(allRuns)
     .filter((r) => r.video_path)
     .sort((a, b) => (b.finished_at || "").localeCompare(a.finished_at || ""));
   const g = document.getElementById("gallery");
@@ -1417,13 +1480,13 @@ function renderGallery(allRuns) {
 function renderScores(runs) {
   const wrap = document.getElementById("tab-scores");
   if (!wrap) return;
-  const rated = runs.filter(
+  const rated = includedRuns(runs).filter(
     (r) => r.rating != null && Number(r.rating) >= 1 && Number(r.rating) <= 10
   );
-  const key = rated
-    .map((r) => `${r.id}:${r.rating}`)
-    .sort()
-    .join("|");
+  const key =
+    rated.map((r) => `${r.id}:${r.rating}`).sort().join("|") +
+    "|" +
+    runs.filter((r) => r.excluded).map((r) => r.id).join(",");
   if (key === lastScoresKey && wrap.dataset.ready === "1") return;
   lastScoresKey = key;
 
@@ -1518,7 +1581,7 @@ function openDetail(runId) {
     )
     .join("");
   body.innerHTML = `
-    <h3>${escapeHtml(run.id)}</h3>
+    <h3>${escapeHtml(run.id)}${run.excluded ? ' <span class="chip chip-excluded">excluded</span>' : ""}</h3>
     <div class="kv">
       phase=<span>${escapeHtml(run.phase || "?")}</span>
       · status=<span>${escapeHtml(run.status || "?")}</span>
@@ -1531,6 +1594,11 @@ function openDetail(runId) {
       ${run.sampler_cached != null ? `· sampler_cached=<span>${run.sampler_cached}</span>` : ""}
     </div>
     <div class="chips">${configChips(cfg)}</div>
+    <p class="card-actions">
+      <button type="button" id="detail-exclude" class="compact ${run.excluded ? "" : "danger"}">
+        ${run.excluded ? "Include in results" : "Exclude from results"}
+      </button>
+    </p>
     ${video}
     ${run.error ? `<p class="kv" style="color:var(--fail)">error: <span>${escapeHtml(run.error)}</span></p>` : ""}
     <pre>${escapeHtml(JSON.stringify(run, null, 2))}</pre>
@@ -1539,6 +1607,12 @@ function openDetail(runId) {
   if (rateSel) {
     rateSel.addEventListener("change", () => {
       submitRating(run.id, rateSel.value === "" ? null : Number(rateSel.value));
+    });
+  }
+  const exBtn = document.getElementById("detail-exclude");
+  if (exBtn) {
+    exBtn.addEventListener("click", () => {
+      submitExclude(run.id, !run.excluded).then(() => openDetail(run.id));
     });
   }
   document.getElementById("detail").showModal();

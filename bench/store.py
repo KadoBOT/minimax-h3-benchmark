@@ -167,6 +167,24 @@ def set_run_rating(run_id: str, rating: int | None, suite: Suite | None = None) 
     raise KeyError(f"run {run_id} not found")
 
 
+def set_run_excluded(
+    run_id: str, excluded: bool, suite: Suite | None = None
+) -> Suite:
+    """Mark a run excluded from compare/scores/heatmap (still in list)."""
+    excluded = bool(excluded)
+    target = suite
+    if target is None:
+        return patch_run(run_id, excluded=excluded)
+    if not target.runs:
+        target.runs = target.all_runs()
+    for r in target.all_runs():
+        if r.id == run_id:
+            r.excluded = excluded
+            save_suite(target)
+            return target
+    raise KeyError(f"run {run_id} not found")
+
+
 def video_dest(run_id: str, ext: str = ".mp4") -> Path:
     ensure_dirs()
     return VIDEOS_DIR / f"{run_id}{ext}"
