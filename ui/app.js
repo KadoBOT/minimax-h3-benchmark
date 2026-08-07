@@ -230,7 +230,10 @@ function indexRuns(runs) {
 function fillSelect(id, values, selected) {
   const el = document.getElementById(id);
   if (!el) return;
-  const list = values && values.length ? values : [selected].filter(Boolean);
+  // Must be a real array of strings — iterating a string yields single characters
+  // (that was the C/O/M/B/O bug when Comfy returned type "COMBO").
+  let list = Array.isArray(values) ? values.filter((v) => typeof v === "string" && v) : [];
+  if (!list.length && selected) list = [selected];
   el.innerHTML = "";
   let found = false;
   for (const v of list) {

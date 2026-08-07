@@ -101,7 +101,30 @@ def clear_options_cache() -> None:
 def _combo(url: str, field: str, timeout: float) -> list[str]:
     with urllib.request.urlopen(url, timeout=timeout) as resp:
         info = json.loads(resp.read().decode())
-    # object_info/{Node} → { "BasicScheduler": { "input": { "required": { field: [[...], {...}] }}}}
+    # object_info/{Node} → input.required[field] is a combo descriptor.
+    # Legacy Comfy:  [[ "opt1", "opt2", ... ], { ... }]
+    # Current Comfy: [ "COMBO", { "options": [ "opt1", ... ], "multiselect": false } ]
     node = next(iter(info.values()))
-    raw = node["input"]["required"][field][0]
-    return list(raw)
+    spec = node["input"]["required"][field]
+    return _parse_combo_spec(spec)
+
+
+def _parse_combo_spec(spec: Any) -> list[str]:
+    """Extract option strings from a ComfyUI combo input descriptor."""
+    if not isinstance(spec, (list, tuple)) or not spec:
+        return []
+    head, *rest = spec
+    # New format: ["COMBO", {"options": [...]}]
+    if isinstance(head, str) and head.upper() == "COMBO":
+        meta = rest[0] if rest else {}
+        if isinstance(meta, dict):
+            opts = meta.get("options") or meta.get("choices") or []
+            return [str(x) for x in opts if x is not None and str(x)]
+        return []
+    # Legacy format: first element is the list of choices
+    if isinstance(head, (list, tuple)):
+        return [str(x) for x in head if x is not None and str(x)]
+    # Single accidental string (would become letter-by-letter if list()'d)
+    if isinstance(head, str):
+        return []
+    return []

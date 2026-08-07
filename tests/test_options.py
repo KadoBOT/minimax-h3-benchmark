@@ -2,15 +2,30 @@ import json
 from urllib.error import URLError
 
 from bench.constants import FALLBACK_SAMPLERS, FALLBACK_SCHEDULERS
-from bench.options import clear_options_cache, fetch_comfy_options
+from bench.options import clear_options_cache, fetch_comfy_options, _parse_combo_spec
 
 
 def _object_info_body(node_name: str, field: str, values: list[str]) -> bytes:
+    """Legacy Comfy combo shape: [[opts...], {}]."""
     payload = {
         node_name: {
             "input": {
                 "required": {
                     field: [values, {}],
+                }
+            }
+        }
+    }
+    return json.dumps(payload).encode()
+
+
+def _object_info_body_combo(node_name: str, field: str, values: list[str]) -> bytes:
+    """Current Comfy combo shape: [\"COMBO\", {\"options\": [...]}]."""
+    payload = {
+        node_name: {
+            "input": {
+                "required": {
+                    field: ["COMBO", {"multiselect": False, "options": values}],
                 }
             }
         }
@@ -121,3 +136,42 @@ def test_fetch_fallback_on_empty_combo(monkeypatch):
     monkeypatch.setattr("bench.options.urllib.request.urlopen", fake_urlopen)
     data = fetch_comfy_options("http://x")
     assert data["source"] == "fallback"
+
+
+def test_parse_combo_spec_legacy_and_modern():
+    legacy = [["simple", "beta57"], {}]
+    assert _parse_combo_spec(legacy) == ["simple", "beta57"]
+    modern = ["COMBO", {"multiselect": False, "options": ["euler", "res_multistep"]}]
+    assert _parse_combo_spec(modern) == ["euler", "res_multistep"]
+    # Bug that showed as C/O/M/B/O in the UI
+    assert _parse_combo_spec(["COMBO", {}]) == []
+    assert "C" not in _parse_combo_spec(["COMBO", {"options": ["euler"]}])
+
+
+def test_fetch_from_modern_combo_object_info(monkeypatch):
+    clear_options_cache()
+    sched_vals = ["simple", "beta57", "beta"]
+    samp_vals = ["euler", "er_sde", "res_multistep"]
+
+    def fake_urlopen(url, timeout=None):
+        url = str(url)
+        if "BasicScheduler" in url:
+            return _FakeResp(
+                _object_info_body_combo("BasicScheduler", "scheduler", sched_vals)
+            )
+        if "KSamplerSelect" in url:
+            return _FakeResp(
+                _object_info_body_combo("KSamplerSelect", "sampler_name", samp_vals)
+            )
+        raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setattr("bench.options.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "bench.options.list_diffusion_models",
+        lambda: ["minimax_h3_fl2va_pruned_nvfp4.safetensors"],
+    )
+    data = fetch_comfy_options("http://127.0.0.1:8188")
+    assert data["source"] == "comfy"
+    assert data["schedulers"] == sched_vals
+    assert data["samplers"] == samp_vals
+    assert data["schedulers"] != list("COMBO")
