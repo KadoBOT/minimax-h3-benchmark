@@ -36,6 +36,11 @@ class RunConfig:
     cache_variant: str | None = None
     sol_variant: str | None = None
 
+    def __post_init__(self) -> None:
+        # cache="none" means caching disabled (ctor and from_dict)
+        if self.cache == "none":
+            self.cache_enabled = False
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -45,9 +50,6 @@ class RunConfig:
         # Defaults when missing from partial / legacy payloads
         data.setdefault("model_path", "safetensor")
         data.setdefault("seed", 42)
-        # Legacy: cache="none" means caching disabled
-        if data.get("cache") == "none":
-            data["cache_enabled"] = False
         return cls(**data)
 
 
@@ -188,19 +190,34 @@ BENCHMARK_PROTOCOL: dict[str, Any] = {
 
 
 def migrate_suite_dict(d: dict[str, Any]) -> Suite:
-    """Normalize v1 phases-only files into schema_version 2 flat runs."""
+    """Normalize v1 phases-only files into schema_version 2 flat runs.
+
+    Flat ``runs`` is authoritative. Short-circuit only when schema_version==2
+    and runs is already the product source of truth (non-empty, or present with
+    empty/missing phases). Schema 2 with runs=[] and non-empty phases still
+    flattens; phases are cleared after so to_dict does not persist dual copies.
+    """
     d = dict(d)
-    if d.get("schema_version") == 2 and d.get("runs") is not None:
-        return Suite.from_dict(d)
-    runs_raw: list = list(d.get("runs") or [])
+    runs_val = d.get("runs")
+    phases_raw = d.get("phases") or {}
+    has_phases = bool(phases_raw)
+
+    # Authoritative flat runs: schema 2 with non-empty runs, or runs present and no phases.
+    if d.get("schema_version") == 2 and runs_val is not None:
+        if (isinstance(runs_val, list) and len(runs_val) > 0) or not has_phases:
+            d["phases"] = {}
+            return Suite.from_dict(d)
+
+    runs_raw: list = list(runs_val or [])
     if not runs_raw:
-        for phase_name, phase in (d.get("phases") or {}).items():
+        for phase_name, phase in phases_raw.items():
             for r in (phase or {}).get("runs") or []:
                 rr = dict(r)
                 rr.setdefault("phase", phase_name)
                 runs_raw.append(rr)
     d["runs"] = runs_raw
     d["schema_version"] = 2
+    d["phases"] = {}  # clear so to_dict does not persist stale dual copies
     return Suite.from_dict(d)
 
 

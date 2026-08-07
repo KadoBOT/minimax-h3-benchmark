@@ -73,6 +73,10 @@ def test_migrate_v1_phases_to_runs():
     assert s.runs[0].config.model_path == "safetensor"
     assert s.runs[0].config.cache_enabled is False
     assert s.runs[0].config.cache == "none"
+    assert s.phases == {}
+    dumped = s.to_dict()
+    assert "runs" in dumped
+    assert "phases" not in dumped
 
 
 def test_run_roundtrip_legacy():
@@ -94,3 +98,45 @@ def test_runconfig_from_dict_ignores_unknown_and_defaults():
     assert c.quant == "int8"
     assert c.model_path == "safetensor"
     assert c.seed == 42
+
+
+def test_runconfig_cache_none_disables_cache_enabled():
+    c = RunConfig(cache="none")
+    assert c.cache_enabled is False
+    c2 = RunConfig.from_dict({"cache": "none"})
+    assert c2.cache_enabled is False
+    assert c2.cache == "none"
+
+
+def test_migrate_schema2_empty_runs_with_phases_flattens():
+    raw = {
+        "suite_id": "mixed",
+        "schema_version": 2,
+        "status": "completed",
+        "comfy_url": "http://127.0.0.1:8188",
+        "baseline": {},
+        "runs": [],
+        "phases": {
+            "speed": {
+                "status": "done",
+                "runs": [
+                    {
+                        "id": "speed_001",
+                        "phase": "speed",
+                        "status": "done",
+                        "config": {"cache": "easy"},
+                        "timed_s": 11.0,
+                    }
+                ],
+            }
+        },
+    }
+    s = migrate_suite_dict(raw)
+    assert s.schema_version == 2
+    assert len(s.runs) == 1
+    assert s.runs[0].id == "speed_001"
+    assert s.phases == {}
+    dumped = s.to_dict()
+    assert "runs" in dumped
+    assert len(dumped["runs"]) == 1
+    assert "phases" not in dumped or dumped.get("phases") in (None, {})
