@@ -52,19 +52,19 @@ def test_infer_loader():
         "safetensor",
         "nvfp4",
     )
+    # All safetensors use UNETLoader path (quant=nvfp4), including int8/convrot packs
     assert infer_loader("minimax_h3_fl2va_pruned_int8_convrot.safetensors") == (
         "safetensor",
-        "int8",
+        "nvfp4",
     )
     assert infer_loader("minimax_h3_fl2va_pruned_int4_convrot.safetensors") == (
         "safetensor",
-        "int8",
+        "nvfp4",
     )
     assert infer_loader("MiniMax_H3_FL2VA_pruned_mixed_int4_int8_convrot.safetensors") == (
         "safetensor",
-        "int8",
+        "nvfp4",
     )
-    # INT4Q uses UNETLoader in working Comfy exports — not OTUNet
     assert infer_loader("minimax_h3_fl2va_pruned_INT4Q.safetensors") == (
         "safetensor",
         "nvfp4",
@@ -75,7 +75,7 @@ def test_runconfig_aligns_path_from_diffusion_model():
     c = RunConfig(diffusion_model="MiniMax-H3-REF2VA-Q4_K_M.gguf")
     assert c.model_path == "gguf"
     c2 = RunConfig(diffusion_model="minimax_h3_fl2va_pruned_int8_convrot.safetensors")
-    assert c2.model_path == "safetensor" and c2.quant == "int8"
+    assert c2.model_path == "safetensor" and c2.quant == "nvfp4"
 
 
 def test_resolve_model_filename():
@@ -84,7 +84,7 @@ def test_resolve_model_filename():
         == "custom_minimax_h3.safetensors"
     )
     assert resolve_model_filename("", "gguf", "nvfp4") == GGUF_UNET
-    assert resolve_model_filename("", "safetensor", "int8") == INT8_UNET
+    assert resolve_model_filename("", "safetensor", "int8") == NVFP4_UNET
     assert resolve_model_filename("", "safetensor", "nvfp4") == NVFP4_UNET
 
 
@@ -93,12 +93,14 @@ def test_apply_config_uses_diffusion_model_filename():
     name = "minimax_h3_fl2va_pruned_nvfp4.safetensors"
     api = apply_config(ui, RunConfig(diffusion_model=name))
     assert str(NODE_UNET) in api
+    assert str(NODE_INT8) not in api
     assert api[str(NODE_UNET)]["inputs"]["unet_name"] == name
 
     name_i = "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
     api2 = apply_config(ui, RunConfig(diffusion_model=name_i))
-    assert str(NODE_INT8) in api2
-    assert api2[str(NODE_INT8)]["inputs"]["unet_name"] == name_i
+    assert str(NODE_UNET) in api2
+    assert str(NODE_INT8) not in api2
+    assert api2[str(NODE_UNET)]["inputs"]["unet_name"] == name_i
 
     name_g = "MiniMax-H3-FL2VA-Q4_K_M.gguf"
     api3 = apply_config(ui, RunConfig(diffusion_model=name_g))

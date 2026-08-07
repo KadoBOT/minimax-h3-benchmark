@@ -18,22 +18,15 @@ function inferLoader(filename) {
   const n = String(filename || "")
     .toLowerCase()
     .replace(/-/g, "_");
+  // GGUF → GGUF loader; every other model → UNETLoader (NVFP4 node)
   if (n.endsWith(".gguf")) return { model_path: "gguf", quant: "nvfp4" };
-  // INT4Q packs load via standard UNETLoader (not OTUNet) — matches Music Suite.
-  if (n.includes("int4q")) return { model_path: "safetensor", quant: "nvfp4" };
-  if (["convrot", "mixed", "w8a8"].some((t) => n.includes(t))) {
-    return { model_path: "safetensor", quant: "int8" };
-  }
-  if (n.includes("int8") && !n.includes("nvfp4")) {
-    return { model_path: "safetensor", quant: "int8" };
-  }
   return { model_path: "safetensor", quant: "nvfp4" };
 }
 
 function loaderLabel(cfg) {
   if (!cfg) return "—";
   if (cfg.model_path === "gguf") return "GGUF";
-  return cfg.quant === "int8" ? "OTUNet (convrot/int8)" : "UNETLoader";
+  return "UNETLoader";
 }
 
 const DEFAULT_FIRST_FRAME =
@@ -121,8 +114,7 @@ const GALLERY_COMPARE_FIELDS = [
   {
     key: "loader",
     label: "loader",
-    get: (c) =>
-      c.model_path === "gguf" ? "gguf" : `safetensor/${c.quant || "nvfp4"}`,
+    get: (c) => (c.model_path === "gguf" ? "gguf" : "unet"),
   },
 ];
 
@@ -295,8 +287,7 @@ function configChips(cfg) {
   const bits = [
     cfg.diffusion_model || null,
     cfg.first_frame ? `img:${cfg.first_frame}` : null,
-    cfg.model_path,
-    cfg.model_path === "gguf" ? null : cfg.quant,
+    cfg.model_path === "gguf" ? "gguf" : null,
     cfg.turbo ? "turbo" : null,
     cfg.rife ? "rife" : null,
     cfg.upscaler ? "upscaler" : null,
@@ -693,7 +684,9 @@ function wireTabs() {
 
 function renderList(runs) {
   const wrap = document.getElementById("tab-list");
-  const sorted = runs.slice().sort((a, b) => {
+  const excludedCount = runs.filter((r) => r.excluded).length;
+  // Excluded runs are not shown anywhere in the UI
+  const sorted = includedRuns(runs).slice().sort((a, b) => {
     const fa = a.finished_at || a.started_at || "";
     const fb = b.finished_at || b.started_at || "";
     if (fa !== fb) return fb.localeCompare(fa);
@@ -703,19 +696,27 @@ function renderList(runs) {
   const key = sorted
     .map(
       (r) =>
-        `${r.id}:${r.status}:${r.timed_s}:${r.sec_per_it}:${r.video_path || ""}:${r.rating ?? ""}:${r.excluded ? 1 : 0}:${expandedRunId || ""}`
+        `${r.id}:${r.status}:${r.timed_s}:${r.sec_per_it}:${r.video_path || ""}:${r.rating ?? ""}:${expandedRunId || ""}`
     )
-    .join("|");
+    .join("|") + `|ex:${excludedCount}`;
   if (key === lastListKey && wrap.dataset.ready === "1") return;
   lastListKey = key;
 
   if (!sorted.length) {
-    wrap.innerHTML = `<div class="empty-msg">No runs yet. Configure the panel and click Run.</div>`;
+    wrap.innerHTML = `<div class="empty-msg">${
+      excludedCount
+        ? `No visible runs (${excludedCount} excluded).`
+        : "No runs yet. Configure the panel and click Run."
+    }</div>`;
     wrap.dataset.ready = "1";
     return;
   }
 
-  let html = `<div class="table-wrap"><table class="list-table"><thead><tr>
+  let html = "";
+  if (excludedCount) {
+    html += `<p class="muted field-hint">${excludedCount} excluded run(s) hidden from all views.</p>`;
+  }
+  html += `<div class="table-wrap"><table class="list-table"><thead><tr>
     <th class="row-label">id</th>
     <th>status</th>
     <th>wall</th>
@@ -741,10 +742,8 @@ function renderList(runs) {
         })
       )
       .join("");
-    const exclCls = r.excluded ? " row-excluded" : "";
-    const exclLabel = r.excluded ? "Include" : "Exclude";
-    html += `<tr class="clickable${exclCls}" data-run-id="${escapeHtml(r.id)}">
-      <td class="row-label">${escapeHtml(r.id)}${r.excluded ? ' <span class="chip chip-excluded">excluded</span>' : ""}</td>
+    html += `<tr class="clickable" data-run-id="${escapeHtml(r.id)}">
+      <td class="row-label">${escapeHtml(r.id)}</td>
       <td><span class="chip ${escapeHtml(r.status || "queued")}">${escapeHtml(r.status || "queued")}</span></td>
       <td>${escapeHtml(wall)}</td>
       <td title="seconds per sampler step (same unit as Comfy tqdm)">${escapeHtml(fmtSecPerIt(r))}</td>
@@ -753,11 +752,11 @@ function renderList(runs) {
       <td>${vid}</td>
       <td class="row-actions">
         <button type="button" class="compact apply-btn" data-apply="${escapeHtml(r.id)}">Apply</button>
-        <button type="button" class="compact ${r.excluded ? "" : "danger"}" data-exclude="${escapeHtml(r.id)}" data-excluded="${r.excluded ? "1" : "0"}" title="Hide from gallery, heatmap, scores, compare">${exclLabel}</button>
+        <button type="button" class="compact danger" data-exclude="${escapeHtml(r.id)}" title="Hide this run from all views">Exclude</button>
       </td>
     </tr>`;
     if (expandedRunId === r.id && r.video_path) {
-      html += `<tr class="video-expand-row${exclCls}"><td colspan="8">
+      html += `<tr class="video-expand-row"><td colspan="8">
         <div class="inline-video-wrap">
           <video src="/${escapeHtml(r.video_path)}" controls autoplay playsinline></video>
           <button type="button" class="compact" data-collapse="${escapeHtml(r.id)}">Collapse</button>
@@ -785,9 +784,7 @@ function renderList(runs) {
   wrap.querySelectorAll("[data-exclude]").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      const id = btn.dataset.exclude;
-      const currently = btn.dataset.excluded === "1";
-      submitExclude(id, !currently);
+      submitExclude(btn.dataset.exclude, true);
     });
   });
   wrap.querySelectorAll("[data-expand]").forEach((btn) => {
@@ -1590,8 +1587,15 @@ function openDetail(runId) {
       })
     )
     .join("");
+  if (run.excluded) {
+    // Excluded runs are not shown in the UI; close if opened somehow
+    body.innerHTML = `<p class="muted">This run is excluded and hidden from the UI.</p>`;
+    applyBtn.hidden = true;
+    document.getElementById("detail").showModal();
+    return;
+  }
   body.innerHTML = `
-    <h3>${escapeHtml(run.id)}${run.excluded ? ' <span class="chip chip-excluded">excluded</span>' : ""}</h3>
+    <h3>${escapeHtml(run.id)}</h3>
     <div class="kv">
       phase=<span>${escapeHtml(run.phase || "?")}</span>
       · status=<span>${escapeHtml(run.status || "?")}</span>
@@ -1605,9 +1609,7 @@ function openDetail(runId) {
     </div>
     <div class="chips">${configChips(cfg)}</div>
     <p class="card-actions">
-      <button type="button" id="detail-exclude" class="compact ${run.excluded ? "" : "danger"}">
-        ${run.excluded ? "Include in results" : "Exclude from results"}
-      </button>
+      <button type="button" id="detail-exclude" class="compact danger">Exclude from results</button>
     </p>
     ${video}
     ${run.error ? `<p class="kv" style="color:var(--fail)">error: <span>${escapeHtml(run.error)}</span></p>` : ""}
@@ -1622,7 +1624,9 @@ function openDetail(runId) {
   const exBtn = document.getElementById("detail-exclude");
   if (exBtn) {
     exBtn.addEventListener("click", () => {
-      submitExclude(run.id, !run.excluded).then(() => openDetail(run.id));
+      submitExclude(run.id, true).then(() => {
+        document.getElementById("detail").close();
+      });
     });
   }
   document.getElementById("detail").showModal();

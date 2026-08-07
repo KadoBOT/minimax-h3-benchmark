@@ -76,10 +76,11 @@ def test_bench_prompt_omits_incomplete_save_outputs():
     assert "last_frame" not in api[str(NODE_I2V)]["inputs"]
 
 
-def test_safetensor_int8_vs_nvfp4():
+def test_safetensor_always_uses_unet_loader():
+    """int8 quant flag no longer selects OTUNet — always UNETLoader for safetensors."""
     ui = load_ui_workflow(WORKFLOW_PATH)
     api = apply_config(ui, RunConfig(model_path="safetensor", quant="int8"))
-    assert str(NODE_INT8) in api and str(NODE_UNET) not in api
+    assert str(NODE_UNET) in api and str(NODE_INT8) not in api
     api2 = apply_config(ui, RunConfig(model_path="safetensor", quant="nvfp4"))
     assert str(NODE_UNET) in api2 and str(NODE_INT8) not in api2
 

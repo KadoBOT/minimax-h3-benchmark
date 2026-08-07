@@ -401,7 +401,8 @@ def apply_config(
         cfg.model_path,
         cfg.quant,
     )
-    # diffusion_model (if set) already aligned model_path/quant via RunConfig.__post_init__
+    # diffusion_model (if set) already aligned model_path via RunConfig.__post_init__
+    # All non-GGUF models use the UNETLoader (NVFP4) node — no OTUNet / int8 split.
     if cfg.model_path == "gguf":
         loader = NODE_GGUF
         _omit(api, NODE_UNET, NODE_INT8, NODE_CLIP)
@@ -412,18 +413,10 @@ def apply_config(
         if str(NODE_I2V) in api and str(NODE_CLIP_GGUF) in api:
             set_link(api, NODE_I2V, "clip", NODE_CLIP_GGUF, 0)
     else:
-        # safetensor: INT8 (OTUNet) or NVFP4 (UNETLoader)
-        _omit(api, NODE_GGUF, NODE_CLIP_GGUF)
-        if cfg.quant == "int8":
-            loader = NODE_INT8
-            _omit(api, NODE_UNET)
-            if str(NODE_INT8) in api:
-                set_widget(api, NODE_INT8, "unet_name", model_file)
-        else:
-            loader = NODE_UNET
-            _omit(api, NODE_INT8)
-            if str(NODE_UNET) in api:
-                set_widget(api, NODE_UNET, "unet_name", model_file)
+        loader = NODE_UNET
+        _omit(api, NODE_GGUF, NODE_CLIP_GGUF, NODE_INT8)
+        if str(NODE_UNET) in api:
+            set_widget(api, NODE_UNET, "unet_name", model_file)
         if str(NODE_I2V) in api and str(NODE_CLIP) in api:
             set_link(api, NODE_I2V, "clip", NODE_CLIP, 0)
 

@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>H3 Benchmark</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
+
 <body>
   <header class="top">
     <div>
@@ -34,14 +36,16 @@
         <input type="file" id="first_frame_file" accept="image/*" />
         <p id="first-frame-name" class="muted field-hint">—</p>
         <img id="first-frame-preview" class="frame-preview" alt="First frame preview" hidden />
-        <p class="muted field-hint">Default: Cyberpunk outlaw (ComfyUI input). Upload replaces it for the next runs.</p>
+        <p class="muted field-hint">Default: Cyberpunk courier (ComfyUI input). Upload replaces it for the next runs.
+        </p>
       </fieldset>
 
       <fieldset class="field-group">
         <legend>Diffusion model</legend>
         <label class="field-label" for="diffusion_model">MiniMax H3 models (from Comfy folder)</label>
         <select id="diffusion_model" name="diffusion_model"></select>
-        <p id="diffusion-hint" class="muted field-hint">Loader path is inferred from the filename (GGUF / NVFP4 / INT).</p>
+        <p id="diffusion-hint" class="muted field-hint">Loader path is inferred from the filename (GGUF / NVFP4 / INT).
+        </p>
         <p id="loader-hint" class="muted field-hint">Loader: —</p>
       </fieldset>
 
@@ -235,4 +239,5 @@
 
   <script src="/app.js"></script>
 </body>
+
 </html>
