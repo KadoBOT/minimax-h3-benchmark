@@ -77,6 +77,7 @@ def test_fetch_from_object_info(monkeypatch):
     clear_options_cache()
     sched_vals = ["simple", "beta", "karras"]
     samp_vals = ["euler", "dpmpp_2m"]
+    aspect_vals = ["16:9 (Widescreen)", "1:1 (Square)"]
 
     def fake_urlopen(url, timeout=None):
         url = str(url)
@@ -87,6 +88,10 @@ def test_fetch_from_object_info(monkeypatch):
         if "KSamplerSelect" in url:
             return _FakeResp(
                 _object_info_body("KSamplerSelect", "sampler_name", samp_vals)
+            )
+        if "ResolutionSelector" in url:
+            return _FakeResp(
+                _object_info_body("ResolutionSelector", "aspect_ratio", aspect_vals)
             )
         raise AssertionError(f"unexpected url {url}")
 
@@ -99,6 +104,7 @@ def test_fetch_from_object_info(monkeypatch):
     assert data["source"] == "comfy"
     assert data["schedulers"] == sched_vals
     assert data["samplers"] == samp_vals
+    assert data["aspect_ratios"] == aspect_vals
     assert data["defaults"]["seed"] == 42
     assert data["diffusion_models"] == ["minimax_h3_fl2va_pruned_nvfp4.safetensors"]
 
@@ -114,6 +120,10 @@ def test_fetch_caches_for_ttl(monkeypatch):
             return _FakeResp(
                 _object_info_body("BasicScheduler", "scheduler", ["a"])
             )
+        if "ResolutionSelector" in url:
+            return _FakeResp(
+                _object_info_body("ResolutionSelector", "aspect_ratio", ["16:9 (Widescreen)"])
+            )
         return _FakeResp(
             _object_info_body("KSamplerSelect", "sampler_name", ["b"])
         )
@@ -122,7 +132,7 @@ def test_fetch_caches_for_ttl(monkeypatch):
     d1 = fetch_comfy_options("http://x")
     d2 = fetch_comfy_options("http://x")
     assert d1 is d2
-    assert calls["n"] == 2  # one pair of GETs only
+    assert calls["n"] == 3  # scheduler + sampler + aspect
 
 
 def test_fetch_fallback_on_empty_combo(monkeypatch):
@@ -152,6 +162,7 @@ def test_fetch_from_modern_combo_object_info(monkeypatch):
     clear_options_cache()
     sched_vals = ["simple", "beta57", "beta"]
     samp_vals = ["euler", "er_sde", "res_multistep"]
+    aspect_vals = ["16:9 (Widescreen)", "9:16 (Portrait Widescreen)"]
 
     def fake_urlopen(url, timeout=None):
         url = str(url)
@@ -162,6 +173,12 @@ def test_fetch_from_modern_combo_object_info(monkeypatch):
         if "KSamplerSelect" in url:
             return _FakeResp(
                 _object_info_body_combo("KSamplerSelect", "sampler_name", samp_vals)
+            )
+        if "ResolutionSelector" in url:
+            return _FakeResp(
+                _object_info_body_combo(
+                    "ResolutionSelector", "aspect_ratio", aspect_vals
+                )
             )
         raise AssertionError(f"unexpected url {url}")
 
@@ -174,4 +191,5 @@ def test_fetch_from_modern_combo_object_info(monkeypatch):
     assert data["source"] == "comfy"
     assert data["schedulers"] == sched_vals
     assert data["samplers"] == samp_vals
+    assert data["aspect_ratios"] == aspect_vals
     assert data["schedulers"] != list("COMBO")
