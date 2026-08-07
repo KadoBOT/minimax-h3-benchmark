@@ -192,8 +192,9 @@ BENCHMARK_PROTOCOL: dict[str, Any] = {
         "VAE decode + video encode after sampling."
     ),
     "sec_per_it": (
-        "Sampler-only rate: wall time while the sampler node ran ÷ steps (s/it). "
-        "it/s = 1 / sec_per_it. Best signal for cache / quant / attention speedups."
+        "Seconds per sampler step (s/it), same unit as Comfy tqdm: "
+        "wall time while the sampler node ran ÷ step count. "
+        "Best signal for cache / quant / attention speedups."
     ),
     "graph_execution_cache": (
         "ComfyUI node-output cache is cleared once before each cell gen. "

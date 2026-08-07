@@ -55,52 +55,86 @@ def node_label(node_id: str | int | None) -> str | None:
 
 
 class ProgressCollector:
-    """Derive ComfyUI s/it from WebSocket executing + progress events.
+    """Derive ComfyUI **s/it** (seconds per iteration) from WebSocket events.
 
-    Important: do **not** use inter-arrival times of progress messages alone.
-    Messages often arrive in bursts, which produced bogus ~0.01s/it. Instead:
+    Matches Comfy tqdm: wall time while the sampler-like node ran ÷ step count.
 
-    - Wall-clock while a node is *executing* (enter → leave via ``executing``)
-    - Divided by that node's progress ``max`` (step count), same idea as tqdm
+    Do **not** use inter-arrival times of progress messages alone — they often
+    arrive in a burst at the end (buffered), which produces bogus ~0.01 s/it
+    and inverted nonsense when shown as it/s.
     """
+
+    # Prefer the advanced sampler node when present (MiniMax H3 workflow).
+    PREFERRED_SAMPLER_NODES = frozenset({"10"})
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self.current_node: str | None = None
         self.progress_value: int | None = None
         self.progress_max: int | None = None
+        # First wall-clock touch for a node (executing preferred; never reset mid-run)
         self._node_enter: dict[str, float] = {}
         self._node_max: dict[str, int] = {}
         self._node_last_value: dict[str, int] = {}
-        # Best finalized s/it (prefer higher step counts = sampler)
+        self._node_finalized: set[str] = set()
+        # Best finalized s/it (prefer higher step counts = real sampler)
         self._best_sec_per_it: float | None = None
         self._best_steps: int = 0
         self.instant_sec_per_it: float | None = None
 
-    def _finalize_node(self, node: str, end_t: float) -> None:
+    def _is_plausible(self, duration: float, steps: int) -> bool:
+        """Reject burst-delivery artefacts (e.g. 20 steps in 0.17s → 0.008 s/it)."""
+        if steps <= 0 or duration <= 0:
+            return False
+        # Multi-step sampling cannot finish in a few hundred ms of wall time.
+        if steps >= 8 and duration < max(1.0, 0.15 * steps):
+            return False
+        candidate = duration / steps
+        # Sub-20ms/it on many steps is almost always WS buffering, not real denoise.
+        if steps >= 8 and candidate < 0.05:
+            return False
+        return True
+
+    def _consider(self, node: str, end_t: float) -> None:
         enter = self._node_enter.get(node)
         steps = self._node_max.get(node) or 0
         if enter is None or steps <= 0:
             return
         duration = end_t - enter
-        if duration <= 0:
+        if not self._is_plausible(duration, steps):
             return
         candidate = duration / steps
-        # Ignore pathological sub-50ms/it (burst artefacts / non-sampler noise)
-        if candidate < 0.05 and steps < 5:
-            return
-        if steps > self._best_steps or (
+        prefer_node = node in self.PREFERRED_SAMPLER_NODES
+        better_steps = steps > self._best_steps
+        same_steps_slower = (
             steps == self._best_steps
-            and (self._best_sec_per_it is None or candidate > self._best_sec_per_it)
-        ):
-            # Prefer more steps (sampler). On ties keep larger s/it only if previous
-            # was junk; otherwise keep first good sample.
-            if steps > self._best_steps or self._best_sec_per_it is None:
-                self._best_sec_per_it = candidate
-                self._best_steps = steps
-            elif candidate >= 0.05 and self._best_sec_per_it < 0.05:
-                self._best_sec_per_it = candidate
-                self._best_steps = steps
+            and self._best_sec_per_it is not None
+            and candidate > self._best_sec_per_it
+        )
+        # Prefer more steps (sampler). On equal steps keep the *slower* rate —
+        # burst finalize is too fast; a longer wall is more trustworthy.
+        # Always allow preferred sampler node to replace a non-sampler winner
+        # with fewer-or-equal steps.
+        if self._best_sec_per_it is None or better_steps or same_steps_slower:
+            self._best_sec_per_it = candidate
+            self._best_steps = steps
+        elif prefer_node and steps >= self._best_steps:
+            self._best_sec_per_it = candidate
+            self._best_steps = steps
+
+    def _finalize_node(self, node: str, end_t: float) -> None:
+        if node in self._node_finalized:
+            # Still allow a later (longer) plausible reading to win
+            self._consider(node, end_t)
+            return
+        self._consider(node, end_t)
+        if node in self._node_enter and self._node_max.get(node, 0) > 0:
+            # Only mark finalized if we had a plausible reading or enough wall time
+            enter = self._node_enter[node]
+            steps = self._node_max[node]
+            duration = end_t - enter
+            if self._is_plausible(duration, steps) or duration >= 1.0:
+                self._node_finalized.add(node)
 
     def on_progress(self, data: dict[str, Any]) -> None:
         try:
@@ -116,21 +150,25 @@ class ProgressCollector:
             node = str(raw_node) if raw_node is not None else self.current_node
             if node is None:
                 return
+            # Start clock only once. Prefer executing-based enter; progress only
+            # seeds enter when value is still 0 (model init) or 1 (first step).
             if node not in self._node_enter:
-                # Progress before executing event — start clock here
-                self._node_enter[node] = now
+                if value <= 1:
+                    self._node_enter[node] = now
+                # else: late/burst progress without enter — ignore for clock start
             self.current_node = node
             self.progress_value = value
             self.progress_max = maximum
             self._node_max[node] = max(self._node_max.get(node, 0), maximum)
             self._node_last_value[node] = value
-            enter = self._node_enter[node]
-            # Live estimate like tqdm: elapsed / completed steps
-            if value > 0 and now > enter:
-                self.instant_sec_per_it = (now - enter) / value
-            # If progress hits max, finalize this node's rate early
-            if value >= maximum and maximum >= 1:
-                self._finalize_node(node, now)
+            enter = self._node_enter.get(node)
+            if enter is not None and value > 0 and now > enter:
+                # Live tqdm-style estimate (may include model-init if enter was early)
+                est = (now - enter) / value
+                if self._is_plausible(now - enter, max(value, 1)) or value < 8:
+                    self.instant_sec_per_it = est
+            # Do NOT finalize on value==max alone — burst delivery hits max with
+            # near-zero wall. Finalize on executing leave instead.
 
     def on_executing(self, data: dict[str, Any]) -> None:
         raw = data.get("node")
@@ -146,8 +184,9 @@ class ProgressCollector:
                 return
             node = str(raw)
             self.current_node = node
-            # New node wall-clock start
-            self._node_enter[node] = now
+            # First enter only — never reset mid-node (re-sent executing events)
+            if node not in self._node_enter:
+                self._node_enter[node] = now
 
     def live_snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -164,27 +203,29 @@ class ProgressCollector:
             out["progress"] = f"{value}/{maximum}"
             out["progress_value"] = value
             out["progress_max"] = maximum
-        rate = instant if instant is not None else best
-        # Surface any positive rate (UI shows s/it and it/s); tiny burst junk is rare now
+        # Prefer best finalized; else live estimate. Unit is always s/it.
+        rate = best if best is not None else instant
         if rate is not None and rate > 0:
             out["sec_per_it"] = round(rate, 3)
-            out["it_per_s"] = round(1.0 / rate, 3)
         return out
 
     def sec_per_it(self, prompt_id: str | None = None) -> float | None:
-        """Best sampler s/it for the finished prompt (prompt_id ignored; WS-scoped)."""
-        del prompt_id  # events are already scoped to this collector / run
+        """Sampler s/it for the finished prompt (seconds per iteration)."""
+        del prompt_id
         with self._lock:
-            # Finalize current node if still open (prompt ending)
             if self.current_node is not None:
                 self._finalize_node(self.current_node, time.perf_counter())
+            # Also re-consider all known nodes (in case leave event was missed)
+            now = time.perf_counter()
+            for node in list(self._node_enter.keys()):
+                self._consider(node, now)
             best = self._best_sec_per_it
             instant = self.instant_sec_per_it
             steps = self._best_steps
-        # Prefer finalized sampler rate; accept faster GPUs (<0.05s/it).
         if best is not None and best > 0 and steps >= 1:
             return best
-        if instant is not None and instant > 0:
+        # Live fallback only if plausible multi-step estimate
+        if instant is not None and instant >= 0.05:
             return instant
         return None
 
@@ -495,8 +536,7 @@ class ComfyClient:
             if ws_thread is not None:
                 ws_thread.join(timeout=2.0)
         elapsed = time.perf_counter() - t0
-        # Prefer average over the full sampling series; fall back to last instant
+        # s/it only from ProgressCollector (plausibility-filtered). Do not fall
+        # back to raw instant — that is where burst-WS ~0.01 s/it came from.
         sec_per_it = collector.sec_per_it(pid) if track else None
-        if sec_per_it is None and track:
-            sec_per_it = collector.instant_sec_per_it
         return pid, elapsed, item, sec_per_it

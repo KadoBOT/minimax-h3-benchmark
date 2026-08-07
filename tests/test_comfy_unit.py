@@ -80,7 +80,7 @@ def test_progress_collector_ignores_burst_message_deltas(monkeypatch):
     monkeypatch.setattr(time, "perf_counter", lambda: t[0])
 
     c.on_executing({"node": "10"})
-    # Simulate wall clock advancing correctly even if we only "process" at end
+    # Wall advances correctly even if we process messages at spaced times
     for step in range(1, 21):
         t[0] = 1000.0 + step * 5.0
         c.on_progress({"value": step, "max": 20, "node": "10"})
@@ -90,3 +90,40 @@ def test_progress_collector_ignores_burst_message_deltas(monkeypatch):
     spi = c.sec_per_it()
     assert spi is not None
     assert spi > 1.0  # not 0.01
+    assert abs(spi - 5.0) < 0.1
+
+
+def test_progress_collector_rejects_end_burst_without_wall(monkeypatch):
+    """All 20 progress events in 0.17s after a late enter must not become s/it."""
+    c = ProgressCollector()
+    t = [1000.0]
+    monkeypatch.setattr(time, "perf_counter", lambda: t[0])
+
+    # No early executing — only a late burst (classic WS buffer symptom)
+    for step in range(1, 21):
+        t[0] = 1000.0 + step * 0.008
+        c.on_progress({"value": step, "max": 20, "node": "10"})
+    t[0] = 1000.2
+    c.on_executing({"node": None})
+
+    spi = c.sec_per_it()
+    assert spi is None  # rejected as implausible
+
+
+def test_progress_collector_matches_comfy_tqdm_style(monkeypatch):
+    """~113s for 20 steps → ~5.66 s/it like Comfy tqdm."""
+    c = ProgressCollector()
+    t = [0.0]
+    monkeypatch.setattr(time, "perf_counter", lambda: t[0])
+
+    c.on_executing({"node": "10"})
+    t[0] = 0.0
+    for step in range(0, 21):
+        t[0] = step * (113.2 / 20)
+        c.on_progress({"value": step, "max": 20, "node": "10"})
+    t[0] = 113.2
+    c.on_executing({"node": "125"})
+
+    spi = c.sec_per_it()
+    assert spi is not None
+    assert abs(spi - 5.66) < 0.15

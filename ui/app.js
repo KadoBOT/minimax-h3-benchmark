@@ -242,34 +242,29 @@ function fmtSec(s) {
   return `${Number(s).toFixed(1)}s`;
 }
 
-/** Sampler s/it if present and sane; else null. */
+/** Sampler s/it (seconds per iteration) if present and sane; else null. */
 function samplerSecPerIt(run) {
   if (!run) return null;
   const it = run.sec_per_it;
   if (it == null || it === undefined) return null;
   const n = Number(it);
-  if (!(n > 0) || !Number.isFinite(n)) return null;
+  // Reject inverted burst junk (e.g. 0.008s/it → 116 it/s) if it slipped into storage
+  if (!(n >= 0.05) || !Number.isFinite(n)) return null;
   return n;
 }
 
-/** Wall time + s/it + it/s, e.g. "120.0s · 6.54s/it · 0.15it/s" */
+/** Wall time + Comfy-style s/it (seconds per iteration), e.g. "113.0s · 5.66s/it" */
 function fmtRunTime(run) {
   if (!run || run.timed_s == null) return "—";
   const wall = fmtSec(run.timed_s);
   const spi = samplerSecPerIt(run);
   if (spi == null) return wall;
-  const its = 1 / spi;
-  return `${wall} · ${spi.toFixed(2)}s/it · ${its.toFixed(2)}it/s`;
+  return `${wall} · ${spi.toFixed(2)}s/it`;
 }
 
 function fmtSecPerIt(run) {
   const spi = samplerSecPerIt(run);
   return spi == null ? "—" : `${spi.toFixed(2)}s/it`;
-}
-
-function fmtItPerSec(run) {
-  const spi = samplerSecPerIt(run);
-  return spi == null ? "—" : `${(1 / spi).toFixed(2)}it/s`;
 }
 
 function escapeHtml(s) {
@@ -706,7 +701,6 @@ function renderList(runs) {
     <th>status</th>
     <th>wall</th>
     <th>s/it</th>
-    <th>it/s</th>
     <th>config</th>
     <th>video</th>
     <th></th>
@@ -722,8 +716,7 @@ function renderList(runs) {
       <td class="row-label">${escapeHtml(r.id)}</td>
       <td><span class="chip ${escapeHtml(r.status || "queued")}">${escapeHtml(r.status || "queued")}</span></td>
       <td>${escapeHtml(wall)}</td>
-      <td>${escapeHtml(fmtSecPerIt(r))}</td>
-      <td>${escapeHtml(fmtItPerSec(r))}</td>
+      <td title="seconds per sampler step (same unit as Comfy tqdm)">${escapeHtml(fmtSecPerIt(r))}</td>
       <td class="chips-cell"><div class="chips">${configChips(cfg)}</div></td>
       <td>${vid}</td>
       <td><button type="button" class="compact apply-btn" data-apply="${escapeHtml(r.id)}">Apply</button></td>
@@ -1197,7 +1190,6 @@ function openDetail(runId) {
       · status=<span>${escapeHtml(run.status || "?")}</span>
       · timed=<span>${escapeHtml(run.timed_s != null ? fmtSec(run.timed_s) : "—")}</span>
       · s/it=<span>${escapeHtml(fmtSecPerIt(run))}</span>
-      · it/s=<span>${escapeHtml(fmtItPerSec(run))}</span>
       ${run.warmup_s != null ? `· warmup=<span>${fmtSec(run.warmup_s)}</span> (legacy)` : ""}
       ${run.graph_cache_cleared != null ? `· graph_clear=<span>${run.graph_cache_cleared}</span>` : ""}
       ${run.sampler_cached != null ? `· sampler_cached=<span>${run.sampler_cached}</span>` : ""}
