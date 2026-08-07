@@ -76,6 +76,11 @@ NODE_SWITCH_CACHE = 127
 
 FIXED_SEED = 42
 
+# ComfyUI input folder + default first-frame image (FL2V)
+COMFY_INPUT_DIR = Path(r"C:\Users\ricar\Documents\ComfyUI\ComfyUI\input")
+DEFAULT_FIRST_FRAME = "Cyberpunk_outlaw_with_jagged_grin_202605230412.jpeg"
+DEFAULT_FIRST_FRAME_PATH = COMFY_INPUT_DIR / DEFAULT_FIRST_FRAME
+
 NVFP4_UNET = "minimax_h3_fl2va_pruned_nvfp4.safetensors"
 INT8_UNET = "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
 GGUF_UNET = "MiniMax-H3-FL2VA-Q4_K_M.gguf"

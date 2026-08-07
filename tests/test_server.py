@@ -252,6 +252,49 @@ def test_api_health(tmp_path, monkeypatch):
         reset_app()
 
 
+def test_api_upload_image(tmp_path, monkeypatch):
+    from bench import server as server_mod
+    from bench.server import attach_runner, reset_app, start_server
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    monkeypatch.setattr(server_mod, "COMFY_INPUT_DIR", input_dir)
+    monkeypatch.setattr(server_mod, "BENCHMARK_JSON", tmp_path / "benchmark.json")
+    monkeypatch.setattr(server_mod, "RESULTS_DIR", tmp_path)
+    reset_app()
+    port = _free_port()
+    httpd = start_server(port)
+    try:
+        boundary = "----benchboundary"
+        filename = "test_upload.png"
+        payload = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="image"; filename="{filename}"\r\n'
+            f"Content-Type: image/png\r\n\r\n"
+        ).encode() + b"\x89PNG\r\nfake" + f"\r\n--{boundary}--\r\n".encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/upload-image",
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Content-Length": str(len(payload)),
+            },
+        )
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode())
+        assert data["first_frame"] == filename
+        assert (input_dir / filename).is_file()
+
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/input-preview/{filename}"
+        ) as prev:
+            assert prev.read().startswith(b"\x89PNG")
+    finally:
+        httpd.shutdown()
+        reset_app()
+
+
 def test_api_abort(tmp_path, monkeypatch):
     reset_app()
     monkeypatch.setattr("bench.server.BENCHMARK_JSON", tmp_path / "benchmark.json")

@@ -30,11 +30,15 @@ function loaderLabel(cfg) {
   return cfg.quant === "int8" ? "INT (OTUNet)" : "NVFP4 (UNET)";
 }
 
+const DEFAULT_FIRST_FRAME =
+  "Cyberpunk_outlaw_with_jagged_grin_202605230412.jpeg";
+
 const state = {
   config: {
     model_path: "safetensor",
     quant: "nvfp4",
     diffusion_model: "",
+    first_frame: DEFAULT_FIRST_FRAME,
     turbo: false,
     rife: false,
     upscaler: false,
@@ -122,7 +126,46 @@ async function loadOptions() {
   if (d.mp != null) state.config.mp = d.mp;
   if (d.duration_s != null) state.config.duration_s = d.duration_s;
   if (d.seed != null) state.config.seed = d.seed;
+  if (d.first_frame) state.config.first_frame = d.first_frame;
+  else if (!state.config.first_frame) state.config.first_frame = DEFAULT_FIRST_FRAME;
+  updateFirstFramePreview(state.config.first_frame);
   formFromState();
+}
+
+function updateFirstFramePreview(name) {
+  const label = document.getElementById("first-frame-name");
+  const img = document.getElementById("first-frame-preview");
+  if (label) label.textContent = name ? `Using: ${name}` : "No image selected";
+  if (!img) return;
+  if (!name) {
+    img.hidden = true;
+    img.removeAttribute("src");
+    return;
+  }
+  img.src = `/api/input-preview/${encodeURIComponent(name)}?t=${Date.now()}`;
+  img.hidden = false;
+  img.onerror = () => {
+    img.hidden = true;
+  };
+}
+
+async function onFirstFrameFileChange(ev) {
+  const file = ev.target?.files?.[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append("image", file, file.name);
+  try {
+    const r = await fetch("/api/upload-image", { method: "POST", body: fd });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      alert(data.error || "Upload failed");
+      return;
+    }
+    state.config.first_frame = data.first_frame || file.name;
+    updateFirstFramePreview(state.config.first_frame);
+  } catch (e) {
+    alert(`Upload failed: ${e.message || e}`);
+  }
 }
 
 function applyInferredLoader(filename) {
@@ -171,6 +214,7 @@ function configChips(cfg) {
   if (!cfg) return "";
   const bits = [
     cfg.diffusion_model || null,
+    cfg.first_frame ? `img:${cfg.first_frame}` : null,
     cfg.model_path,
     cfg.model_path === "gguf" ? null : cfg.quant,
     cfg.turbo ? "turbo" : null,
@@ -309,6 +353,7 @@ function formFromState() {
   document.getElementById("seed").value = c.seed;
   document.getElementById("mp").value = c.mp;
   document.getElementById("duration_s").value = c.duration_s;
+  updateFirstFramePreview(c.first_frame || DEFAULT_FIRST_FRAME);
 
   syncDisabled();
 }
@@ -335,6 +380,7 @@ function stateFromForm() {
     model_path: inferred.model_path,
     quant: inferred.quant,
     diffusion_model: diffusionModel,
+    first_frame: state.config.first_frame || DEFAULT_FIRST_FRAME,
     turbo: document.getElementById("toggle-turbo").checked,
     rife: document.getElementById("toggle-rife").checked,
     upscaler: document.getElementById("toggle-upscaler").checked,
@@ -391,7 +437,11 @@ function syncButtons() {
 
 function wireForm() {
   const panel = document.getElementById("run-panel");
-  panel.addEventListener("change", () => {
+  panel.addEventListener("change", (e) => {
+    if (e.target && e.target.id === "first_frame_file") {
+      onFirstFrameFileChange(e);
+      return;
+    }
     stateFromForm();
     syncDisabled();
   });
@@ -400,6 +450,10 @@ function wireForm() {
       stateFromForm();
     }
   });
+  const ff = document.getElementById("first_frame_file");
+  if (ff) {
+    ff.addEventListener("change", onFirstFrameFileChange);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -463,6 +517,7 @@ function applyConfigToPanel(cfg) {
     model_path: inferred.model_path,
     quant: inferred.quant,
     diffusion_model: diffusionModel,
+    first_frame: cfg.first_frame || DEFAULT_FIRST_FRAME,
     turbo: !!cfg.turbo,
     rife: !!cfg.rife,
     upscaler: !!cfg.upscaler,

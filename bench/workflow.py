@@ -27,13 +27,18 @@ from bench.constants import (
     NODE_GGUF,
     NODE_GUIDER,
     NODE_H3_CACHE,
+    NODE_FIT_FIRST,
+    NODE_FIT_LAST,
     NODE_I2V,
     NODE_INT8,
     NODE_INTERP_FPS,
+    NODE_LAST_FRAME,
+    NODE_LOAD_IMAGE,
     NODE_MODEL_SWITCH,
     NODE_NOISE,
     NODE_OPTIONAL_LORA,
     NODE_PROMPT,
+    DEFAULT_FIRST_FRAME,
     NODE_RESOLUTION,
     NODE_RIFE,
     NODE_SAGE,
@@ -360,6 +365,21 @@ def apply_config(
         set_widget(api, NODE_RESOLUTION, "megapixels", float(cfg.mp))
     if str(NODE_DURATION) in api:
         set_widget(api, NODE_DURATION, "value", float(cfg.duration_s))
+
+    # --- First frame (FL2V): set LoadImage; strip last-frame path (UI bypass is not API) ---
+    first = (getattr(cfg, "first_frame", None) or DEFAULT_FIRST_FRAME).strip()
+    first = Path(first.replace("\\", "/")).name
+    if str(NODE_LOAD_IMAGE) in api:
+        set_widget(api, NODE_LOAD_IMAGE, "image", first)
+    # Force first-frame-only: omit last-frame load/scale even if UI had them linked
+    _omit(api, NODE_LAST_FRAME, NODE_FIT_LAST)
+    if str(NODE_I2V) in api:
+        api[str(NODE_I2V)]["inputs"].pop("last_frame", None)
+        # Ensure first_frame still comes from fit-first (146) or load image (20)
+        if str(NODE_FIT_FIRST) in api:
+            set_link(api, NODE_I2V, "first_frame", NODE_FIT_FIRST, 0)
+        elif str(NODE_LOAD_IMAGE) in api:
+            set_link(api, NODE_I2V, "first_frame", NODE_LOAD_IMAGE, 0)
 
     # Unique output name per execution (warmup vs timed, etc.)
     if str(NODE_VIDEO_COMBINE) in api:

@@ -29,6 +29,15 @@
       <h2>Run config</h2>
 
       <fieldset class="field-group">
+        <legend>First frame (FL2V)</legend>
+        <label class="field-label" for="first_frame_file">Start image</label>
+        <input type="file" id="first_frame_file" accept="image/*" />
+        <p id="first-frame-name" class="muted field-hint">—</p>
+        <img id="first-frame-preview" class="frame-preview" alt="First frame preview" hidden />
+        <p class="muted field-hint">Default: Cyberpunk outlaw (ComfyUI input). Upload replaces it for the next runs.</p>
+      </fieldset>
+
+      <fieldset class="field-group">
         <legend>Diffusion model</legend>
         <label class="field-label" for="diffusion_model">MiniMax H3 models (from Comfy folder)</label>
         <select id="diffusion_model" name="diffusion_model"></select>

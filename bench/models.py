@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 PhaseName = Literal["manual", "speed", "quality", "scale"]
@@ -18,6 +19,8 @@ class RunConfig:
     quant: QuantName = "nvfp4"
     # Basename under Comfy diffusion_models (MiniMax H3); empty → legacy quant defaults
     diffusion_model: str = ""
+    # Basename under ComfyUI input/ for LoadImage first frame (FL2V)
+    first_frame: str = ""
     turbo: bool = False
     rife: bool = False
     upscaler: bool = False
@@ -49,6 +52,13 @@ class RunConfig:
             path, quant = infer_loader(str(self.diffusion_model).strip())
             self.model_path = path
             self.quant = quant
+        if not (self.first_frame and str(self.first_frame).strip()):
+            from bench.constants import DEFAULT_FIRST_FRAME
+
+            self.first_frame = DEFAULT_FIRST_FRAME
+        else:
+            # LoadImage expects a basename in ComfyUI/input (no path separators)
+            self.first_frame = Path(str(self.first_frame).replace("\\", "/")).name
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

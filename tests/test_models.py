@@ -2,6 +2,8 @@ from bench.models import Run, RunConfig, Suite, empty_suite, migrate_suite_dict
 
 
 def test_runconfig_defaults_v2():
+    from bench.constants import DEFAULT_FIRST_FRAME
+
     c = RunConfig()
     assert c.model_path == "safetensor"
     assert c.quant == "nvfp4"
@@ -17,6 +19,7 @@ def test_runconfig_defaults_v2():
     assert c.rife is False
     assert c.upscaler is False
     assert c.clean_vram is False
+    assert c.first_frame == DEFAULT_FIRST_FRAME
 
 
 def test_run_roundtrip_new_fields():

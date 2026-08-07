@@ -8,6 +8,7 @@ import urllib.request
 from typing import Any
 
 from bench.constants import (
+    DEFAULT_FIRST_FRAME,
     DEFAULT_SAMPLER,
     DEFAULT_SCHEDULER,
     FALLBACK_SAMPLERS,
@@ -28,6 +29,7 @@ _DEFAULTS = {
     "steps": 20,
     "mp": 0.5,
     "duration_s": 5,
+    "first_frame": DEFAULT_FIRST_FRAME,
 }
 
 

@@ -41,6 +41,19 @@ def test_gguf_omits_safetensor_loaders():
     assert api[str(NODE_I2V)]["inputs"]["clip"][0] == str(NODE_CLIP_GGUF)
 
 
+def test_first_frame_sets_load_image_and_strips_last_frame():
+    from bench.constants import DEFAULT_FIRST_FRAME, NODE_LAST_FRAME, NODE_LOAD_IMAGE
+
+    ui = load_ui_workflow(WORKFLOW_PATH)
+    api = apply_config(ui, RunConfig(first_frame=DEFAULT_FIRST_FRAME))
+    assert api[str(NODE_LOAD_IMAGE)]["inputs"]["image"] == DEFAULT_FIRST_FRAME
+    assert str(NODE_LAST_FRAME) not in api
+    assert "last_frame" not in api[str(NODE_I2V)]["inputs"]
+    # Custom upload basename
+    api2 = apply_config(ui, RunConfig(first_frame="my_upload.png"))
+    assert api2[str(NODE_LOAD_IMAGE)]["inputs"]["image"] == "my_upload.png"
+
+
 def test_safetensor_int8_vs_nvfp4():
     ui = load_ui_workflow(WORKFLOW_PATH)
     api = apply_config(ui, RunConfig(model_path="safetensor", quant="int8"))
