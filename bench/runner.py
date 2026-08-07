@@ -29,12 +29,19 @@ from bench import store
 from bench.comfy import ComfyClient, ComfyError
 from bench.constants import NODE_SAMPLER_ADV, WORKFLOW_PATH
 from bench.matrix import build_quality_runs, build_scale_runs, build_speed_runs, pick_fastest
-from bench.models import Run, Suite, empty_suite
+from bench.models import PhaseState, Run, Suite, empty_suite
 from bench.workflow import apply_config, load_ui_workflow
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_legacy_phases(suite: Suite) -> None:
+    """Compat shim until Task 5 drops auto matrix phases."""
+    for name in ("speed", "quality", "scale"):
+        if name not in suite.phases:
+            suite.phases[name] = PhaseState()
 
 
 # Absolute floor: anything under this is almost certainly a graph-cache hit.
@@ -81,6 +88,7 @@ class BenchmarkRunner:
         if existing and self.resume:
             suite = existing
             suite.status = "running"
+            _ensure_legacy_phases(suite)
             if not suite.phases["speed"].runs:
                 suite.phases["speed"].runs = build_speed_runs()
             # Ensure protocol text is present on older result files
@@ -93,6 +101,7 @@ class BenchmarkRunner:
         suite = empty_suite(str(uuid4())[:8], self.comfy.base_url)
         suite.status = "running"
         suite.started_at = _now()
+        _ensure_legacy_phases(suite)
         suite.phases["speed"].runs = build_speed_runs()
         suite.phases["speed"].status = "pending"
         suite.phases["quality"].status = "pending"

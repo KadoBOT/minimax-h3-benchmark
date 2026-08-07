@@ -51,7 +51,9 @@ def save_suite(suite: Suite) -> None:
 def load_suite(path: Path | None = None) -> Suite:
     p = path or BENCHMARK_JSON
     data = json.loads(p.read_text(encoding="utf-8"))
-    return Suite.from_dict(data)
+    from bench.models import migrate_suite_dict
+
+    return migrate_suite_dict(data)
 
 
 def try_load_suite() -> Suite | None:
@@ -60,10 +62,14 @@ def try_load_suite() -> Suite | None:
     return load_suite()
 
 
-def patch_run(phase: str, run_id: str, **fields: Any) -> Suite:
+def patch_run(run_id: str, **fields: Any) -> Suite:
+    """Patch a run by id in suite.runs (after migration) or legacy phases."""
     suite = load_suite()
-    runs = suite.phases[phase].runs
-    for r in runs:
+    # Ensure flat list is the source of truth after load/migrate
+    if not suite.runs:
+        suite.runs = suite.all_runs()
+    found = False
+    for r in suite.all_runs():
         if r.id == run_id:
             for k, v in fields.items():
                 if k == "config" and isinstance(v, dict):
@@ -72,9 +78,10 @@ def patch_run(phase: str, run_id: str, **fields: Any) -> Suite:
                     setattr(r, k, RunConfig.from_dict(v))
                 else:
                     setattr(r, k, v)
+            found = True
             break
-    else:
-        raise KeyError(f"run {run_id} not found in phase {phase}")
+    if not found:
+        raise KeyError(f"run {run_id} not found")
     save_suite(suite)
     return suite
 
