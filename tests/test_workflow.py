@@ -1,101 +1,113 @@
 from bench.constants import (
     BASELINE_PROMPT,
-    INT8_UNET,
-    NODE_CLEAN_VRAM,
+    NODE_CLIP_GGUF,
     NODE_EASYCACHE,
+    NODE_GGUF,
     NODE_H3_CACHE,
+    NODE_I2V,
     NODE_INT8,
     NODE_PROMPT,
+    NODE_RIFE,
     NODE_SAGE,
+    NODE_SAMPLER,
+    NODE_SCHEDULER,
+    NODE_SEED,
     NODE_SOL_ATTN,
     NODE_SPECTRUM,
+    NODE_TURBO_LORA,
     NODE_UNET,
-    NVFP4_UNET,
+    NODE_UPSCALER,
     WORKFLOW_PATH,
 )
 from bench.models import RunConfig
 from bench.workflow import apply_config, load_ui_workflow, ui_to_api_prompt
 
 
-def test_ui_to_api_has_core_nodes():
+def test_ui_skips_rgthree_bypassers():
     ui = load_ui_workflow(WORKFLOW_PATH)
     api = ui_to_api_prompt(ui)
-    assert str(NODE_UNET) in api
-    assert str(NODE_PROMPT) in api
-    assert api[str(NODE_PROMPT)]["class_type"] == "PrimitiveStringMultiline"
-    assert api[str(NODE_UNET)]["class_type"] == "UNETLoader"
-    # Linked model path present in full conversion
-    assert api[str(NODE_SAGE)]["inputs"]["model"][0] in {
-        str(NODE_UNET),
-        str(NODE_INT8),
-        "126",
-    }
+    types = {n["class_type"] for n in api.values()}
+    assert "Fast Groups Bypasser (rgthree)" not in types
+    assert "Fast Bypasser (rgthree)" not in types
 
 
-def test_easy_cache_only_in_graph():
+def test_gguf_omits_safetensor_loaders():
     ui = load_ui_workflow(WORKFLOW_PATH)
-    api = apply_config(ui, RunConfig(cache="easy"))
-    assert str(NODE_EASYCACHE) in api
-    assert str(NODE_SPECTRUM) not in api
-    assert str(NODE_H3_CACHE) not in api
-    assert str(NODE_CLEAN_VRAM) not in api
-    # EasyCache model should come from sigma shift chain
-    assert api[str(NODE_EASYCACHE)]["inputs"]["model"][0] == "123"
-
-
-def test_no_cache_omits_all_three_caches():
-    ui = load_ui_workflow(WORKFLOW_PATH)
-    api = apply_config(ui, RunConfig(cache="none", quant="nvfp4", sol_attn=True))
-    assert str(NODE_EASYCACHE) not in api
-    assert str(NODE_SPECTRUM) not in api
-    assert str(NODE_H3_CACHE) not in api
-    # Scheduler/guider model should come from sigma shift directly
-    assert api["6"]["inputs"]["model"][0] == "123"
-    assert api["8"]["inputs"]["model"][0] == "123"
-
-
-def test_int8_vs_nvfp4_modes():
-    ui = load_ui_workflow(WORKFLOW_PATH)
-    api = apply_config(ui, RunConfig(quant="int8"))
-    assert str(NODE_INT8) in api
+    api = apply_config(ui, RunConfig(model_path="gguf"))
+    assert str(NODE_GGUF) in api
     assert str(NODE_UNET) not in api
-    assert api[str(NODE_INT8)]["inputs"]["unet_name"] == INT8_UNET
-    assert api[str(NODE_SAGE)]["inputs"]["model"][0] == str(NODE_INT8)
-
-    api2 = apply_config(ui, RunConfig(quant="nvfp4"))
-    assert str(NODE_UNET) in api2
-    assert str(NODE_INT8) not in api2
-    assert api2[str(NODE_UNET)]["inputs"]["unet_name"] == NVFP4_UNET
-    assert api2[str(NODE_SAGE)]["inputs"]["model"][0] == str(NODE_UNET)
+    assert str(NODE_INT8) not in api
+    assert str(NODE_CLIP_GGUF) in api
+    assert api[str(NODE_I2V)]["inputs"]["clip"][0] == str(NODE_CLIP_GGUF)
 
 
-def test_sol_attn_off_omits_sol():
+def test_safetensor_int8_vs_nvfp4():
+    ui = load_ui_workflow(WORKFLOW_PATH)
+    api = apply_config(ui, RunConfig(model_path="safetensor", quant="int8"))
+    assert str(NODE_INT8) in api and str(NODE_UNET) not in api
+    api2 = apply_config(ui, RunConfig(model_path="safetensor", quant="nvfp4"))
+    assert str(NODE_UNET) in api2 and str(NODE_INT8) not in api2
+
+
+def test_single_cache_spectrum():
+    ui = load_ui_workflow(WORKFLOW_PATH)
+    api = apply_config(ui, RunConfig(cache_enabled=True, cache="spectrum"))
+    assert str(NODE_SPECTRUM) in api
+    assert str(NODE_EASYCACHE) not in api
+    assert str(NODE_H3_CACHE) not in api
+
+
+def test_cache_off_omits_all():
+    ui = load_ui_workflow(WORKFLOW_PATH)
+    api = apply_config(ui, RunConfig(cache_enabled=False))
+    assert str(NODE_SPECTRUM) not in api
+    assert str(NODE_EASYCACHE) not in api
+    assert str(NODE_H3_CACHE) not in api
+
+
+def test_sol_off_uses_sage_only():
     ui = load_ui_workflow(WORKFLOW_PATH)
     api = apply_config(ui, RunConfig(sol_attn=False))
     assert str(NODE_SOL_ATTN) not in api
+    assert str(NODE_SAGE) in api
     # Sigma shift should take model from sage when sol is off
     assert api["123"]["inputs"]["model"][0] == str(NODE_SAGE)
 
 
-def test_prompt_is_timestamp_free():
+def test_turbo_includes_turbo_lora_and_steps():
+    ui = load_ui_workflow(WORKFLOW_PATH)
+    api = apply_config(ui, RunConfig(turbo=True, steps=20))
+    assert str(NODE_TURBO_LORA) in api
+    assert api[str(NODE_SCHEDULER)]["inputs"]["steps"] == 4
+
+
+def test_rife_upscaler_optional():
+    ui = load_ui_workflow(WORKFLOW_PATH)
+    api = apply_config(ui, RunConfig(rife=False, upscaler=False))
+    assert str(NODE_RIFE) not in api
+    assert str(NODE_UPSCALER) not in api
+    api2 = apply_config(ui, RunConfig(rife=True, upscaler=True))
+    assert str(NODE_RIFE) in api2
+    assert str(NODE_UPSCALER) in api2
+
+
+def test_scheduler_sampler_seed():
+    ui = load_ui_workflow(WORKFLOW_PATH)
+    api = apply_config(
+        ui, RunConfig(scheduler="simple", sampler="euler", seed=42, steps=18)
+    )
+    assert api[str(NODE_SCHEDULER)]["inputs"]["scheduler"] == "simple"
+    assert api[str(NODE_SCHEDULER)]["inputs"]["steps"] == 18
+    assert api[str(NODE_SAMPLER)]["inputs"]["sampler_name"] == "euler"
+    assert api[str(NODE_SEED)]["inputs"]["seed"] == 42
+
+
+def test_prompt_baseline_set():
     ui = load_ui_workflow(WORKFLOW_PATH)
     api = apply_config(ui, RunConfig())
     val = api[str(NODE_PROMPT)]["inputs"]["value"]
     assert val == BASELINE_PROMPT
     assert "0:00" not in val
-
-
-def test_clean_vram_omitted():
-    ui = load_ui_workflow(WORKFLOW_PATH)
-    api = apply_config(ui, RunConfig())
-    assert str(NODE_CLEAN_VRAM) not in api
-    assert "96" not in api  # RIFE
-    assert "111" not in api  # upscaler
-    assert "126" not in api  # quant switch
-    assert "127" not in api  # cache switch
-    # Video path rewired: decode samples from sampler, combine images from decode
-    assert api["125"]["inputs"]["samples"][0] == "10"
-    assert api["110"]["inputs"]["images"][0] == "125"
 
 
 def test_output_tag_sets_unique_filename_prefix():
@@ -104,3 +116,11 @@ def test_output_tag_sets_unique_filename_prefix():
     prefix = api["110"]["inputs"]["filename_prefix"]
     assert "speed_001_timed" in prefix
     assert prefix.startswith("bench/")
+
+
+def test_sol_on_omits_sage():
+    ui = load_ui_workflow(WORKFLOW_PATH)
+    api = apply_config(ui, RunConfig(sol_attn=True))
+    assert str(NODE_SOL_ATTN) in api
+    assert str(NODE_SAGE) not in api
+    assert api["123"]["inputs"]["model"][0] == str(NODE_SOL_ATTN)

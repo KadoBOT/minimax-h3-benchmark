@@ -3,31 +3,52 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from bench.constants import (
     BASELINE_PROMPT,
+    GGUF_CLIP,
+    GGUF_UNET,
     INT8_UNET,
+    NODE_ATTN_SWITCH,
+    NODE_BASE_FPS,
+    NODE_CLEAN_TE,
     NODE_CLEAN_VRAM,
+    NODE_CLIP,
+    NODE_CLIP_GGUF,
+    NODE_CLIP_SWITCH,
+    NODE_DEFAULT_STEPS,
     NODE_DURATION,
     NODE_EASYCACHE,
+    NODE_FLOAT_TO_INT,
+    NODE_FPS_SWITCH,
+    NODE_GGUF,
     NODE_GUIDER,
     NODE_H3_CACHE,
+    NODE_I2V,
     NODE_INT8,
+    NODE_INTERP_FPS,
+    NODE_MODEL_SWITCH,
     NODE_NOISE,
+    NODE_OPTIONAL_LORA,
     NODE_PROMPT,
     NODE_RESOLUTION,
     NODE_RIFE,
     NODE_SAGE,
     NODE_SAMPLER,
+    NODE_SAMPLER_ADV,
     NODE_SCHEDULER,
     NODE_SEED,
     NODE_SIGMA_SHIFT,
     NODE_SOL_ATTN,
     NODE_SPECTRUM,
+    NODE_STEPS_SWITCH,
     NODE_SWITCH_CACHE,
     NODE_SWITCH_QUANT,
+    NODE_TURBO_LORA,
+    NODE_TURBO_STEPS,
     NODE_UNET,
     NODE_UPSCALER,
     NODE_VAE_DECODE,
@@ -35,19 +56,20 @@ from bench.constants import (
     NVFP4_UNET,
 )
 from bench.models import RunConfig
+from bench.presets import expand_presets
 
-# Target-FPS primitive only used by RIFE (and optionally fps switch).
-NODE_TARGET_FPS = 95
-NODE_DEFAULT_FPS = 108
-NODE_FPS_SWITCH = 109
-NODE_MATH_LENGTH = 103
-NODE_SAMPLER_ADV = 10
+TURBO_STEPS_DEFAULT = 4
+
+# Secondary / UI helper nodes not needed in the API prompt.
+NODE_SECONDARY_COMBINE = 150
+NODE_IMAGE_FROM_BATCH = 152
 
 # Node types that exist only in the UI graph (no executable class_type).
 UI_ONLY_TYPES = frozenset(
     {
         "Note",
         "Fast Groups Bypasser (rgthree)",
+        "Fast Bypasser (rgthree)",
         "Reroute",
     }
 )
@@ -64,7 +86,17 @@ WIDGET_MAP: dict[str, list[str] | None] = {
         "enable_convrot",
         "lora_mode",
     ],
+    "GGUFLoaderKJ": [
+        "model_name",
+        "extra_model_name",
+        "dequant_dtype",
+        "patch_dtype",
+        "patch_on_device",
+        "enable_fp16_accumulation",
+        "attention_override",
+    ],
     "CLIPLoader": ["clip_name", "type", "device"],
+    "CLIPLoaderGGUF": ["clip_name", "type"],
     "VAELoader": ["vae_name"],
     "LoadImage": ["image"],
     "BasicScheduler": ["scheduler", "steps", "denoise"],
@@ -103,6 +135,10 @@ WIDGET_MAP: dict[str, list[str] | None] = {
         "verbose",
         "use_tma",
     ],
+    "MiniMaxH3TurboLoRA": ["lora_name", "strength_model"],
+    "LoraLoaderModelOnly": ["lora_name", "strength_model"],
+    "ImageScale": ["upscale_method", "width", "height", "crop"],
+    "CM_FloatToInt": ["a"],
     "ResolutionSelector": ["aspect_ratio", "megapixels", "multiple"],
     "PrimitiveFloat": ["value"],
     "PrimitiveStringMultiline": ["value"],
@@ -194,7 +230,7 @@ def ui_to_api_prompt(ui: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Convert a UI workflow dict to a ComfyUI API prompt graph.
 
     Returns ``{node_id_str: {"class_type": ..., "inputs": {...}}}``.
-    UI-only node types (Note, Fast Groups Bypasser, …) are skipped.
+    UI-only node types (Note, Fast Groups Bypasser, Fast Bypasser, …) are skipped.
 
     Autogrow inputs keep dotted names (e.g. ``values.a``) — nested
     ``values: {a: ...}`` fails Comfy validation when the node is depended on.
@@ -236,12 +272,14 @@ def _omit(api: dict[str, Any], *node_ids: int | str) -> None:
         api.pop(str(nid), None)
 
 
-def _active_cache_node(cache: str) -> int | None:
-    if cache == "easy":
+def _active_cache_node(cfg: RunConfig) -> int | None:
+    if not cfg.cache_enabled or cfg.cache == "none":
+        return None
+    if cfg.cache == "easy":
         return NODE_EASYCACHE
-    if cache == "spectrum":
+    if cfg.cache == "spectrum":
         return NODE_SPECTRUM
-    if cache == "h3":
+    if cfg.cache == "h3":
         return NODE_H3_CACHE
     return None
 
@@ -263,6 +301,13 @@ def _apply_widgets_to_node(
             node_inputs[key] = val
 
 
+def _primitive_value(api: dict[str, Any], node_id: int | str, default: Any) -> Any:
+    nid = str(node_id)
+    if nid not in api:
+        return default
+    return api[nid]["inputs"].get("value", default)
+
+
 def apply_config(
     ui: dict[str, Any],
     cfg: RunConfig,
@@ -274,10 +319,10 @@ def apply_config(
 
     MODEL path is rebuilt explicitly::
 
-        loader → Sage → [SolAttn?] → SigmaShift → [cache?] → Scheduler + Guider
+        loader → [TurboLoRA?] → Sol XOR Sage → SigmaShift → [cache?] → Scheduler + Guider
 
-    Unused quant loader, cache nodes, RIFE/upscaler/clean-VRAM, and Any Switches
-    126/127 are omitted. Video path is rewired around the omitted post-process nodes.
+    Unused loaders, cache nodes, switches, optional LoRA, and inactive post-process
+    nodes are omitted. Video path is rewired around the omitted post-process nodes.
 
     *output_tag* only changes VHS ``filename_prefix`` (unique output files). It must
     not alter sampling inputs. Graph-level re-execution after warmup is handled by
@@ -287,6 +332,8 @@ def apply_config(
     """
     del cache_bust  # no longer used — identical graphs for warmup vs timed
     api = ui_to_api_prompt(ui)
+
+    steps_eff = TURBO_STEPS_DEFAULT if cfg.turbo else int(cfg.steps)
 
     # --- Prompt / seed / schedule / resolution / duration ---
     if str(NODE_PROMPT) in api:
@@ -305,7 +352,8 @@ def apply_config(
 
     if str(NODE_SCHEDULER) in api:
         set_widget(api, NODE_SCHEDULER, "scheduler", cfg.scheduler)
-        set_widget(api, NODE_SCHEDULER, "steps", int(cfg.steps))
+        # Overwrite any linked steps (FloatToInt / turbo switch) with a scalar.
+        set_widget(api, NODE_SCHEDULER, "steps", steps_eff)
     if str(NODE_SAMPLER) in api:
         set_widget(api, NODE_SAMPLER, "sampler_name", cfg.sampler)
     if str(NODE_RESOLUTION) in api:
@@ -320,93 +368,152 @@ def apply_config(
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in tag)[:120]
         set_widget(api, NODE_VIDEO_COMBINE, "filename_prefix", f"bench/{safe}")
 
-    # --- Quant: keep one loader, set model filename ---
-    if cfg.quant == "int8":
-        loader = NODE_INT8
-        _omit(api, NODE_UNET)
-        if str(NODE_INT8) in api:
-            set_widget(api, NODE_INT8, "unet_name", INT8_UNET)
+    # --- Model loader + CLIP ---
+    if cfg.model_path == "gguf":
+        loader = NODE_GGUF
+        _omit(api, NODE_UNET, NODE_INT8, NODE_CLIP)
+        if str(NODE_GGUF) in api:
+            set_widget(api, NODE_GGUF, "model_name", GGUF_UNET)
+        if str(NODE_CLIP_GGUF) in api:
+            set_widget(api, NODE_CLIP_GGUF, "clip_name", GGUF_CLIP)
+        if str(NODE_I2V) in api and str(NODE_CLIP_GGUF) in api:
+            set_link(api, NODE_I2V, "clip", NODE_CLIP_GGUF, 0)
     else:
-        loader = NODE_UNET
-        _omit(api, NODE_INT8)
-        if str(NODE_UNET) in api:
-            set_widget(api, NODE_UNET, "unet_name", NVFP4_UNET)
+        # safetensor: INT8 or NVFP4
+        _omit(api, NODE_GGUF, NODE_CLIP_GGUF)
+        if cfg.quant == "int8":
+            loader = NODE_INT8
+            _omit(api, NODE_UNET)
+            if str(NODE_INT8) in api:
+                set_widget(api, NODE_INT8, "unet_name", INT8_UNET)
+        else:
+            loader = NODE_UNET
+            _omit(api, NODE_INT8)
+            if str(NODE_UNET) in api:
+                set_widget(api, NODE_UNET, "unet_name", NVFP4_UNET)
+        if str(NODE_I2V) in api and str(NODE_CLIP) in api:
+            set_link(api, NODE_I2V, "clip", NODE_CLIP, 0)
 
-    # Ensure loader node exists (should from UI conversion).
     if str(loader) not in api:
-        raise KeyError(f"Selected quant loader node {loader} missing from workflow")
+        raise KeyError(f"Selected model loader node {loader} missing from workflow")
 
-    # --- Rebuild MODEL path: loader → sage → [sol] → sigma → [cache] ---
+    # --- Rebuild MODEL path ---
+    # loader → [TurboLoRA?] → Sol XOR Sage → SigmaShift → [cache?] → Scheduler + Guider
     prev = str(loader)
-    set_link(api, NODE_SAGE, "model", prev, 0)
-    prev = str(NODE_SAGE)
+
+    if cfg.turbo and str(NODE_TURBO_LORA) in api:
+        set_link(api, NODE_TURBO_LORA, "model", prev, 0)
+        prev = str(NODE_TURBO_LORA)
+    else:
+        _omit(api, NODE_TURBO_LORA)
+
+    # Optional LoRA is always bypassed for the bench — link past it.
+    _omit(api, NODE_OPTIONAL_LORA)
 
     if cfg.sol_attn and str(NODE_SOL_ATTN) in api:
         set_link(api, NODE_SOL_ATTN, "model", prev, 0)
         prev = str(NODE_SOL_ATTN)
+        _omit(api, NODE_SAGE)
     else:
+        if str(NODE_SAGE) not in api:
+            raise KeyError(f"Sage attention node {NODE_SAGE} missing from workflow")
+        set_link(api, NODE_SAGE, "model", prev, 0)
+        prev = str(NODE_SAGE)
         _omit(api, NODE_SOL_ATTN)
 
     set_link(api, NODE_SIGMA_SHIFT, "model", prev, 0)
     prev = str(NODE_SIGMA_SHIFT)
 
-    cache_node = _active_cache_node(cfg.cache)
-    # Drop all three first, then re-add wiring for the active one.
+    cache_node = _active_cache_node(cfg)
     for cid in (NODE_EASYCACHE, NODE_SPECTRUM, NODE_H3_CACHE):
         if cache_node is None or cid != cache_node:
             _omit(api, cid)
 
     if cache_node is not None:
         if str(cache_node) not in api:
-            # Active cache was omitted above only if not selected; re-convert path
-            # means it should still be present. Rebuild from UI if missing.
             raise KeyError(f"Cache node {cache_node} missing from workflow")
         set_link(api, cache_node, "model", prev, 0)
         prev = str(cache_node)
 
-    # Consumers that were fed by switch 127.
     set_link(api, NODE_SCHEDULER, "model", prev, 0)
     set_link(api, NODE_GUIDER, "model", prev, 0)
 
-    # --- Omit switches and post-process path ---
+    # --- Guider conditioning (optional clean TE) ---
+    if cfg.clean_vram and str(NODE_CLEAN_TE) in api and str(NODE_I2V) in api:
+        set_link(api, NODE_CLEAN_TE, "anything", NODE_I2V, 0)
+        set_link(api, NODE_GUIDER, "conditioning", NODE_CLEAN_TE, 0)
+    else:
+        _omit(api, NODE_CLEAN_TE)
+        if str(NODE_GUIDER) in api and str(NODE_I2V) in api:
+            set_link(api, NODE_GUIDER, "conditioning", NODE_I2V, 0)
+
+    # --- Video post path: sampler → [clean?] → decode → [rife?] → [upscale?] → combine ---
+    if cfg.clean_vram and str(NODE_CLEAN_VRAM) in api:
+        set_link(api, NODE_CLEAN_VRAM, "anything", NODE_SAMPLER_ADV, 0)
+        if str(NODE_VAE_DECODE) in api:
+            set_link(api, NODE_VAE_DECODE, "samples", NODE_CLEAN_VRAM, 0)
+    else:
+        _omit(api, NODE_CLEAN_VRAM)
+        if str(NODE_VAE_DECODE) in api and str(NODE_SAMPLER_ADV) in api:
+            set_link(api, NODE_VAE_DECODE, "samples", NODE_SAMPLER_ADV, 0)
+
+    prev_img = str(NODE_VAE_DECODE) if str(NODE_VAE_DECODE) in api else None
+
+    if cfg.rife and str(NODE_RIFE) in api and prev_img is not None:
+        set_link(api, NODE_RIFE, "images", prev_img, 0)
+        prev_img = str(NODE_RIFE)
+    else:
+        _omit(api, NODE_RIFE)
+        if not cfg.rife:
+            _omit(api, NODE_INTERP_FPS)
+
+    if cfg.upscaler and str(NODE_UPSCALER) in api and prev_img is not None:
+        set_link(api, NODE_UPSCALER, "images", prev_img, 0)
+        prev_img = str(NODE_UPSCALER)
+    else:
+        _omit(api, NODE_UPSCALER)
+
+    if prev_img is not None and str(NODE_VIDEO_COMBINE) in api:
+        set_link(api, NODE_VIDEO_COMBINE, "images", prev_img, 0)
+
+    # Frame rate: RIFE uses interp FPS when active, else base FPS.
+    if str(NODE_VIDEO_COMBINE) in api:
+        if cfg.rife:
+            fps = _primitive_value(api, NODE_INTERP_FPS, 60)
+        else:
+            fps = _primitive_value(api, NODE_BASE_FPS, 24)
+        set_widget(api, NODE_VIDEO_COMBINE, "frame_rate", fps)
+
+    # --- Omit switches and unused turbo step plumbing ---
     _omit(
         api,
-        NODE_SWITCH_QUANT,
-        NODE_SWITCH_CACHE,
-        NODE_CLEAN_VRAM,
-        NODE_RIFE,
-        NODE_UPSCALER,
-        NODE_TARGET_FPS,
+        NODE_SWITCH_QUANT,  # v2 legacy
+        NODE_SWITCH_CACHE,  # v2 legacy
+        NODE_CLIP_SWITCH,
+        NODE_MODEL_SWITCH,
+        NODE_ATTN_SWITCH,
+        NODE_STEPS_SWITCH,
+        NODE_FPS_SWITCH,
+        NODE_TURBO_STEPS,
+        NODE_DEFAULT_STEPS,
+        NODE_FLOAT_TO_INT,
+        NODE_SECONDARY_COMBINE,
+        NODE_IMAGE_FROM_BATCH,
     )
 
-    # Rewire video: sampler → VAEDecode → VideoCombine (skip clean/rife/upscale).
-    if str(NODE_VAE_DECODE) in api and str(NODE_SAMPLER_ADV) in api:
-        set_link(api, NODE_VAE_DECODE, "samples", NODE_SAMPLER_ADV, 0)
-    if str(NODE_VIDEO_COMBINE) in api and str(NODE_VAE_DECODE) in api:
-        set_link(api, NODE_VIDEO_COMBINE, "images", NODE_VAE_DECODE, 0)
+    # --- Variant widgets: cache keys only on cache node; sol keys only on SolAttn ---
+    # Expand separately so shared start_percent/end_percent never cross-contaminate.
+    if cache_node is not None:
+        cache_widgets = expand_presets(replace(cfg, sol_attn=False))
+        if cfg.widgets:
+            cache_widgets = {**cache_widgets, **cfg.widgets}
+        _apply_widgets_to_node(api, cache_node, cache_widgets)
 
-    # Drop fps switch feed from omitted target-fps; keep default fps if switch remains.
-    if str(NODE_FPS_SWITCH) in api:
-        fps_inputs = api[str(NODE_FPS_SWITCH)]["inputs"]
-        # Remove any link pointing at omitted target fps node.
-        for k, v in list(fps_inputs.items()):
-            if isinstance(v, list) and len(v) == 2 and str(v[0]) == str(NODE_TARGET_FPS):
-                del fps_inputs[k]
-        if str(NODE_DEFAULT_FPS) in api and not any(
-            isinstance(v, list) for v in fps_inputs.values()
-        ):
-            set_link(api, NODE_FPS_SWITCH, "any_01", NODE_DEFAULT_FPS, 0)
-
-    # --- Variant widgets onto active cache and/or SolAttn ---
-    widgets = cfg.widgets or {}
-    if widgets:
-        if cache_node is not None:
-            _apply_widgets_to_node(api, cache_node, widgets)
-        if cfg.sol_attn and str(NODE_SOL_ATTN) in api:
-            _apply_widgets_to_node(api, NODE_SOL_ATTN, widgets)
-
-    # Keep patch/cache verbose flags at workflow defaults (no per-stage mutation).
-    # Fairness: warmup and timed must use the same sampling graph.
+    if cfg.sol_attn and str(NODE_SOL_ATTN) in api:
+        sol_widgets = expand_presets(replace(cfg, cache_enabled=False, cache="none"))
+        if cfg.widgets:
+            sol_widgets = {**sol_widgets, **cfg.widgets}
+        _apply_widgets_to_node(api, NODE_SOL_ATTN, sol_widgets)
 
     # --- Prune dangling references to omitted nodes ---
     alive = set(api.keys())
