@@ -1,6 +1,7 @@
 const POLL_MS = 1500;
 
 const AXIS_PRIORITY = [
+  (c) => c.diffusion_model || (c.model_path === "gguf" ? "gguf" : c.quant),
   (c) => (!c.cache_enabled || c.cache === "none" ? "none" : c.cache),
   (c) => (c.model_path === "gguf" ? "gguf" : c.quant),
   (c) => (c.sol_attn ? "sol_on" : "sol_off"),
@@ -12,10 +13,28 @@ const AXIS_PRIORITY = [
   (c) => c.sol_preset,
 ];
 
+/** Infer loader path from diffusion model basename (mirrors bench.diffusion_models.infer_loader). */
+function inferLoader(filename) {
+  const n = String(filename || "").toLowerCase();
+  if (n.endsWith(".gguf")) return { model_path: "gguf", quant: "nvfp4" };
+  if (["int8", "int4", "mixed", "w8a8"].some((t) => n.includes(t))) {
+    return { model_path: "safetensor", quant: "int8" };
+  }
+  if (n.includes("nvfp4")) return { model_path: "safetensor", quant: "nvfp4" };
+  return { model_path: "safetensor", quant: "nvfp4" };
+}
+
+function loaderLabel(cfg) {
+  if (!cfg) return "—";
+  if (cfg.model_path === "gguf") return "GGUF";
+  return cfg.quant === "int8" ? "INT (OTUNet)" : "NVFP4 (UNET)";
+}
+
 const state = {
   config: {
     model_path: "safetensor",
     quant: "nvfp4",
+    diffusion_model: "",
     turbo: false,
     rife: false,
     upscaler: false,
@@ -69,14 +88,30 @@ async function loadOptions() {
   }
   fillSelect("scheduler", state.options.schedulers, state.config.scheduler);
   fillSelect("sampler", state.options.samplers, state.config.sampler);
+  const models = state.options.diffusion_models || [];
+  const d = state.options.defaults || {};
+  const defaultModel = d.diffusion_model || models[0] || "";
+  if (!state.config.diffusion_model || !models.includes(state.config.diffusion_model)) {
+    state.config.diffusion_model = defaultModel;
+  }
+  fillSelect("diffusion_model", models, state.config.diffusion_model);
+  applyInferredLoader(state.config.diffusion_model);
+
   const banner = document.getElementById("options-banner");
   if (state.options.source === "fallback") {
     banner.hidden = false;
   } else {
     banner.hidden = true;
   }
+  const hint = document.getElementById("diffusion-hint");
+  if (hint) {
+    const src = state.options.diffusion_models_source || "?";
+    hint.textContent =
+      src === "disk"
+        ? `Found ${models.length} MiniMax H3 model(s) on disk.`
+        : `Using fallback model names (${src}); check DIFFUSION_MODELS_DIR.`;
+  }
   // Prefer live defaults when provided
-  const d = state.options.defaults || {};
   if (d.scheduler && state.options.schedulers.includes(d.scheduler)) {
     state.config.scheduler = d.scheduler;
   }
@@ -88,6 +123,16 @@ async function loadOptions() {
   if (d.duration_s != null) state.config.duration_s = d.duration_s;
   if (d.seed != null) state.config.seed = d.seed;
   formFromState();
+}
+
+function applyInferredLoader(filename) {
+  if (!filename) return;
+  const inf = inferLoader(filename);
+  state.config.model_path = inf.model_path;
+  state.config.quant = inf.quant;
+  state.config.diffusion_model = filename;
+  const el = document.getElementById("loader-hint");
+  if (el) el.textContent = `Loader: ${loaderLabel(state.config)} · ${filename}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +170,7 @@ function findFastest(runs) {
 function configChips(cfg) {
   if (!cfg) return "";
   const bits = [
+    cfg.diffusion_model || null,
     cfg.model_path,
     cfg.model_path === "gguf" ? null : cfg.quant,
     cfg.turbo ? "turbo" : null,
@@ -208,6 +254,16 @@ function fillSelect(id, values, selected) {
 
 function formFromState() {
   const c = state.config;
+  const dm = document.getElementById("diffusion_model");
+  if (dm && c.diffusion_model) {
+    if (![...dm.options].some((o) => o.value === c.diffusion_model)) {
+      const opt = document.createElement("option");
+      opt.value = c.diffusion_model;
+      opt.textContent = c.diffusion_model;
+      dm.appendChild(opt);
+    }
+    dm.value = c.diffusion_model;
+  }
   const mpRadio = document.querySelector(
     `input[name="model_path"][value="${c.model_path}"]`
   );
@@ -215,6 +271,13 @@ function formFromState() {
 
   const qRadio = document.querySelector(`input[name="quant"][value="${c.quant}"]`);
   if (qRadio) qRadio.checked = true;
+
+  const loaderEl = document.getElementById("loader-hint");
+  if (loaderEl) {
+    loaderEl.textContent = c.diffusion_model
+      ? `Loader: ${loaderLabel(c)} · ${c.diffusion_model}`
+      : `Loader: ${loaderLabel(c)}`;
+  }
 
   document.getElementById("toggle-turbo").checked = !!c.turbo;
   document.getElementById("toggle-rife").checked = !!c.rife;
@@ -248,17 +311,27 @@ function formFromState() {
 }
 
 function stateFromForm() {
-  const modelPath =
-    document.querySelector('input[name="model_path"]:checked')?.value || "safetensor";
-  const quant =
-    document.querySelector('input[name="quant"]:checked')?.value || "nvfp4";
+  const diffusionModel =
+    document.getElementById("diffusion_model")?.value ||
+    state.config.diffusion_model ||
+    "";
+  const inferred = diffusionModel
+    ? inferLoader(diffusionModel)
+    : {
+        model_path:
+          document.querySelector('input[name="model_path"]:checked')?.value ||
+          "safetensor",
+        quant:
+          document.querySelector('input[name="quant"]:checked')?.value || "nvfp4",
+      };
   const cacheEnabled = document.getElementById("toggle-cache").checked;
   const cache =
     document.querySelector('input[name="cache"]:checked')?.value || "spectrum";
 
   state.config = {
-    model_path: modelPath,
-    quant,
+    model_path: inferred.model_path,
+    quant: inferred.quant,
+    diffusion_model: diffusionModel,
     turbo: document.getElementById("toggle-turbo").checked,
     rife: document.getElementById("toggle-rife").checked,
     upscaler: document.getElementById("toggle-upscaler").checked,
@@ -279,19 +352,19 @@ function stateFromForm() {
   if (!cacheEnabled) {
     state.config.cache = "none";
   }
+  const loaderEl = document.getElementById("loader-hint");
+  if (loaderEl) {
+    loaderEl.textContent = diffusionModel
+      ? `Loader: ${loaderLabel(state.config)} · ${diffusionModel}`
+      : `Loader: ${loaderLabel(state.config)}`;
+  }
 }
 
 function syncDisabled() {
-  const modelPath =
-    document.querySelector('input[name="model_path"]:checked')?.value || "safetensor";
   const cacheOn = document.getElementById("toggle-cache").checked;
   const solOn = document.getElementById("toggle-sol").checked;
 
-  const quantGroup = document.getElementById("quant-group");
-  quantGroup.classList.toggle("disabled", modelPath === "gguf");
-  quantGroup.querySelectorAll("input").forEach((el) => {
-    el.disabled = modelPath === "gguf";
-  });
+  // model_path / quant are derived from diffusion_model (hidden groups)
 
   const cacheGroup = document.getElementById("cache-group");
   cacheGroup.classList.toggle("disabled", !cacheOn);
@@ -376,9 +449,17 @@ function abortRun() {
 
 function applyConfigToPanel(cfg) {
   if (!cfg) return;
+  const diffusionModel = cfg.diffusion_model || "";
+  const inferred = diffusionModel
+    ? inferLoader(diffusionModel)
+    : {
+        model_path: cfg.model_path || "safetensor",
+        quant: cfg.quant || "nvfp4",
+      };
   state.config = {
-    model_path: cfg.model_path || "safetensor",
-    quant: cfg.quant || "nvfp4",
+    model_path: inferred.model_path,
+    quant: inferred.quant,
+    diffusion_model: diffusionModel,
     turbo: !!cfg.turbo,
     rife: !!cfg.rife,
     upscaler: !!cfg.upscaler,
@@ -402,6 +483,8 @@ function applyConfigToPanel(cfg) {
   if (state.options) {
     fillSelect("scheduler", state.options.schedulers, state.config.scheduler);
     fillSelect("sampler", state.options.samplers, state.config.sampler);
+    const models = state.options.diffusion_models || [];
+    fillSelect("diffusion_model", models, state.config.diffusion_model);
   }
   formFromState();
 }

@@ -32,13 +32,17 @@ class _FakeResp:
         return False
 
 
-def test_fetch_fallback_on_bad_url(monkeypatch):
+def test_fetch_fallback_on_bad_url(monkeypatch, tmp_path):
     clear_options_cache()
+    (tmp_path / "minimax_h3_custom.safetensors").write_bytes(b"x")
 
     def boom(*args, **kwargs):
         raise URLError("connection refused")
 
     monkeypatch.setattr("bench.options.urllib.request.urlopen", boom)
+    monkeypatch.setattr("bench.options.list_diffusion_models", lambda: [
+        "minimax_h3_custom.safetensors"
+    ])
     data = fetch_comfy_options("http://127.0.0.1:1", timeout=0.1)
     assert data["source"] == "fallback"
     assert data["schedulers"] == list(FALLBACK_SCHEDULERS)
@@ -49,6 +53,9 @@ def test_fetch_fallback_on_bad_url(monkeypatch):
     assert data["defaults"]["steps"] == 20
     assert data["defaults"]["mp"] == 0.5
     assert data["defaults"]["duration_s"] == 5
+    assert "minimax_h3_custom.safetensors" in data["diffusion_models"]
+    assert data["defaults"]["diffusion_model"] == "minimax_h3_custom.safetensors"
+    assert data["diffusion_models_source"] == "disk"
 
 
 def test_fetch_from_object_info(monkeypatch):
@@ -69,11 +76,16 @@ def test_fetch_from_object_info(monkeypatch):
         raise AssertionError(f"unexpected url {url}")
 
     monkeypatch.setattr("bench.options.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "bench.options.list_diffusion_models",
+        lambda: ["minimax_h3_fl2va_pruned_nvfp4.safetensors"],
+    )
     data = fetch_comfy_options("http://127.0.0.1:8188")
     assert data["source"] == "comfy"
     assert data["schedulers"] == sched_vals
     assert data["samplers"] == samp_vals
     assert data["defaults"]["seed"] == 42
+    assert data["diffusion_models"] == ["minimax_h3_fl2va_pruned_nvfp4.safetensors"]
 
 
 def test_fetch_caches_for_ttl(monkeypatch):

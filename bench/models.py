@@ -16,6 +16,8 @@ PresetName = Literal["conservative", "moderate", "aggressive", "custom"]
 class RunConfig:
     model_path: ModelPath = "safetensor"
     quant: QuantName = "nvfp4"
+    # Basename under Comfy diffusion_models (MiniMax H3); empty → legacy quant defaults
+    diffusion_model: str = ""
     turbo: bool = False
     rife: bool = False
     upscaler: bool = False
@@ -40,6 +42,13 @@ class RunConfig:
         # cache="none" means caching disabled (ctor and from_dict)
         if self.cache == "none":
             self.cache_enabled = False
+        # When a concrete file is set, keep model_path/quant aligned with the loader
+        if self.diffusion_model and str(self.diffusion_model).strip():
+            from bench.diffusion_models import infer_loader
+
+            path, quant = infer_loader(str(self.diffusion_model).strip())
+            self.model_path = path
+            self.quant = quant
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

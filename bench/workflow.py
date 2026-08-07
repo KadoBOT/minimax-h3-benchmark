@@ -369,28 +369,36 @@ def apply_config(
         set_widget(api, NODE_VIDEO_COMBINE, "filename_prefix", f"bench/{safe}")
 
     # --- Model loader + CLIP ---
+    from bench.diffusion_models import resolve_model_filename
+
+    model_file = resolve_model_filename(
+        getattr(cfg, "diffusion_model", None) or "",
+        cfg.model_path,
+        cfg.quant,
+    )
+    # diffusion_model (if set) already aligned model_path/quant via RunConfig.__post_init__
     if cfg.model_path == "gguf":
         loader = NODE_GGUF
         _omit(api, NODE_UNET, NODE_INT8, NODE_CLIP)
         if str(NODE_GGUF) in api:
-            set_widget(api, NODE_GGUF, "model_name", GGUF_UNET)
+            set_widget(api, NODE_GGUF, "model_name", model_file)
         if str(NODE_CLIP_GGUF) in api:
             set_widget(api, NODE_CLIP_GGUF, "clip_name", GGUF_CLIP)
         if str(NODE_I2V) in api and str(NODE_CLIP_GGUF) in api:
             set_link(api, NODE_I2V, "clip", NODE_CLIP_GGUF, 0)
     else:
-        # safetensor: INT8 or NVFP4
+        # safetensor: INT8 (OTUNet) or NVFP4 (UNETLoader)
         _omit(api, NODE_GGUF, NODE_CLIP_GGUF)
         if cfg.quant == "int8":
             loader = NODE_INT8
             _omit(api, NODE_UNET)
             if str(NODE_INT8) in api:
-                set_widget(api, NODE_INT8, "unet_name", INT8_UNET)
+                set_widget(api, NODE_INT8, "unet_name", model_file)
         else:
             loader = NODE_UNET
             _omit(api, NODE_INT8)
             if str(NODE_UNET) in api:
-                set_widget(api, NODE_UNET, "unet_name", NVFP4_UNET)
+                set_widget(api, NODE_UNET, "unet_name", model_file)
         if str(NODE_I2V) in api and str(NODE_CLIP) in api:
             set_link(api, NODE_I2V, "clip", NODE_CLIP, 0)
 

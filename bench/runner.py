@@ -328,7 +328,12 @@ class BenchmarkRunner:
 
     def _next_run_id(self, suite: Suite, cfg: RunConfig) -> str:
         n = len(suite.all_runs()) + 1
-        path = "gguf" if cfg.model_path == "gguf" else cfg.quant
+        if cfg.diffusion_model:
+            stem = Path(cfg.diffusion_model).stem
+            safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem)[:40]
+            path = safe or ("gguf" if cfg.model_path == "gguf" else cfg.quant)
+        else:
+            path = "gguf" if cfg.model_path == "gguf" else cfg.quant
         cache = "none" if not cfg.cache_enabled else cfg.cache
         sol = "solon" if cfg.sol_attn else "soloff"
         return f"run_{n:03d}_{path}_{cache}_{sol}"

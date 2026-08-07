@@ -29,7 +29,15 @@
       <h2>Run config</h2>
 
       <fieldset class="field-group">
-        <legend>Model path</legend>
+        <legend>Diffusion model</legend>
+        <label class="field-label" for="diffusion_model">MiniMax H3 models (from Comfy folder)</label>
+        <select id="diffusion_model" name="diffusion_model"></select>
+        <p id="diffusion-hint" class="muted field-hint">Loader path is inferred from the filename (GGUF / NVFP4 / INT).</p>
+        <p id="loader-hint" class="muted field-hint">Loader: —</p>
+      </fieldset>
+
+      <fieldset class="field-group" id="model-path-group" hidden>
+        <legend>Model path (derived)</legend>
         <div class="chip-row" role="radiogroup" aria-label="Model path">
           <label class="toggle-chip">
             <input type="radio" name="model_path" value="safetensor" checked />
@@ -42,8 +50,8 @@
         </div>
       </fieldset>
 
-      <fieldset class="field-group" id="quant-group">
-        <legend>Quant</legend>
+      <fieldset class="field-group" id="quant-group" hidden>
+        <legend>Quant (derived)</legend>
         <div class="chip-row" role="radiogroup" aria-label="Quant">
           <label class="toggle-chip">
             <input type="radio" name="quant" value="nvfp4" checked />

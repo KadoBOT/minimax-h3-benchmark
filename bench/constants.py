@@ -12,6 +12,9 @@ SUITE_LOG = RESULTS_DIR / "suite.log"
 DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
 DEFAULT_UI_PORT = 8787
 
+# ComfyUI diffusion_models folder (filenames only are sent to loaders)
+DIFFUSION_MODELS_DIR = Path(r"E:\AI\Models\diffusion_models")
+
 MODE_ACTIVE = 0
 MODE_BYPASS = 4
 

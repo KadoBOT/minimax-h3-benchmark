@@ -49,3 +49,7 @@ pytest -v
 - Default seed is **42** (fixed mode).
 - Suite schema v2 uses a flat `runs` list (legacy phase matrices are migrated on load).
 - `bench/matrix.py` builders are **legacy** (used only by `run_all` / unit tests), not the interactive product path.
+
+## Diffusion models
+
+The Run panel lists basenames from `E:\AI\Models\diffusion_models` whose names contain both **MiniMax** and **H3** (case-insensitive). The loader (GGUF / NVFP4 UNET / INT OTUNet) is inferred from the filename. Add or remove files in that folder and refresh the UI — nothing is hard-coded beyond the folder path in `bench/constants.py` (`DIFFUSION_MODELS_DIR`).
