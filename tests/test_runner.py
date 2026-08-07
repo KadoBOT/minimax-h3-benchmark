@@ -234,3 +234,86 @@ def test_run_all_no_successful_speed_skips_later_phases(tmp_path, monkeypatch):
     assert suite.base_config is None
     assert suite.phases["quality"].runs == []
     assert suite.phases["scale"].runs == []
+
+
+def test_ensure_suite_idle_and_reuses_existing(tmp_path, monkeypatch):
+    _patch_store(monkeypatch, tmp_path)
+    monkeypatch.setattr("bench.runner.load_ui_workflow", lambda p: {})
+
+    r = BenchmarkRunner(FakeComfy())
+    s1 = r.ensure_suite()
+    assert s1.status == "idle"
+    assert s1.runs == []
+    s2 = r.ensure_suite(s1)
+    assert s2 is s1
+
+
+def test_run_one_appends_and_completes(tmp_path, monkeypatch):
+    _patch_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "bench.runner.apply_config",
+        lambda ui, cfg, output_tag=None, cache_bust=0: {"1": {}},
+    )
+    monkeypatch.setattr("bench.runner.load_ui_workflow", lambda p: {})
+
+    fake = FakeComfy()
+    r = BenchmarkRunner(fake)
+    suite = r.ensure_suite()
+    cfg = RunConfig(model_path="safetensor", quant="nvfp4", cache="spectrum", sol_attn=True)
+    run = r.run_one(suite, cfg)
+
+    assert len(suite.runs) == 1
+    assert suite.runs[0] is run
+    assert run.phase == "manual"
+    assert run.status == "done"
+    assert run.warmup_s is not None
+    assert run.timed_s is not None
+    assert run.sec_per_it == 0.5
+    assert run.video_path == f"videos/{run.id}.mp4"
+    assert run.id.startswith("run_001_nvfp4_spectrum_solon")
+    assert suite.status == "idle"
+    assert fake.cleared == 1  # one cell: warmup → timed
+    # preset widgets resolved onto config for reproducibility
+    assert "reuse_threshold" in (run.config.widgets or {}) or "warmup_steps" in (
+        run.config.widgets or {}
+    )
+
+
+def test_run_one_id_gguf_and_sequence(tmp_path, monkeypatch):
+    _patch_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "bench.runner.apply_config",
+        lambda ui, cfg, output_tag=None, cache_bust=0: {"1": {}},
+    )
+    monkeypatch.setattr("bench.runner.load_ui_workflow", lambda p: {})
+
+    r = BenchmarkRunner(FakeComfy())
+    suite = r.ensure_suite()
+    r1 = r.run_one(suite, RunConfig(model_path="gguf", cache_enabled=False, sol_attn=False))
+    r2 = r.run_one(suite, RunConfig(model_path="gguf", cache="easy", sol_attn=True))
+    assert r1.id == "run_001_gguf_none_soloff"
+    assert r2.id == "run_002_gguf_easy_solon"
+    assert len(suite.runs) == 2
+
+
+def test_run_one_abort_sets_aborted(tmp_path, monkeypatch):
+    _patch_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "bench.runner.apply_config",
+        lambda ui, cfg, output_tag=None, cache_bust=0: {"1": {}},
+    )
+    monkeypatch.setattr("bench.runner.load_ui_workflow", lambda p: {})
+
+    class AbortComfy(FakeComfy):
+        def run_prompt(self, prompt, track=True, on_live=None):
+            raise KeyboardInterrupt("benchmark aborted")
+
+    r = BenchmarkRunner(AbortComfy())
+    suite = r.ensure_suite()
+    try:
+        r.run_one(suite, RunConfig())
+        assert False, "expected KeyboardInterrupt"
+    except KeyboardInterrupt:
+        pass
+    assert suite.runs[0].status == "aborted"
+    assert suite.status == "aborted"

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import time
 import traceback
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -29,7 +30,7 @@ from bench import store
 from bench.comfy import ComfyClient, ComfyError
 from bench.constants import NODE_SAMPLER_ADV, WORKFLOW_PATH
 from bench.matrix import build_quality_runs, build_scale_runs, build_speed_runs, pick_fastest
-from bench.models import PhaseState, Run, Suite, empty_suite
+from bench.models import PhaseState, Run, RunConfig, Suite, empty_suite
 from bench.workflow import apply_config, load_ui_workflow
 
 
@@ -254,7 +255,7 @@ class BenchmarkRunner:
             run.warmup_s = warm_s
             run.prompt_id = pid
         except KeyboardInterrupt:
-            run.status = "failed"
+            run.status = "aborted"
             run.error = "aborted during warmup"
             run.finished_at = _now()
             suite.current = None
@@ -303,7 +304,7 @@ class BenchmarkRunner:
             run.status = "done"
             run.finished_at = _now()
         except KeyboardInterrupt:
-            run.status = "failed"
+            run.status = "aborted"
             run.error = "aborted during timed run"
             run.finished_at = _now()
             suite.current = None
@@ -315,6 +316,58 @@ class BenchmarkRunner:
             run.finished_at = _now()
         suite.current = None
         self._emit(suite)
+
+    def ensure_suite(self, existing: Suite | None = None) -> Suite:
+        """Return existing suite (already migrated via store) or create an idle empty suite."""
+        if existing:
+            return existing
+        s = empty_suite(str(uuid4())[:8], self.comfy.base_url)
+        s.status = "idle"
+        self._emit(s)
+        return s
+
+    def _next_run_id(self, suite: Suite, cfg: RunConfig) -> str:
+        n = len(suite.all_runs()) + 1
+        path = "gguf" if cfg.model_path == "gguf" else cfg.quant
+        cache = "none" if not cfg.cache_enabled else cfg.cache
+        sol = "solon" if cfg.sol_attn else "soloff"
+        return f"run_{n:03d}_{path}_{cache}_{sol}"
+
+    def run_one(
+        self, suite: Suite, cfg: RunConfig, *, run_id: str | None = None
+    ) -> Run:
+        """Append one run and execute warmup+timed. Caller ensures not already running."""
+        from bench.presets import expand_presets
+
+        cfg = deepcopy(cfg)
+        resolved = expand_presets(cfg)
+        if cfg.cache_preset != "custom" or cfg.sol_preset != "custom":
+            cfg.widgets = {**(cfg.widgets or {}), **resolved}
+
+        rid = run_id or self._next_run_id(suite, cfg)
+        run = Run(id=rid, phase="manual", status="queued", config=cfg)
+        suite.runs.append(run)
+        if not suite.started_at:
+            suite.started_at = _now()
+        suite.status = "running"
+        self._emit(suite)
+        try:
+            self._execute_cell(suite, "manual", run)
+            if run.status == "aborted":
+                suite.status = "aborted"
+            else:
+                suite.status = "idle"
+        except KeyboardInterrupt:
+            run.status = "aborted"
+            run.error = run.error or "aborted"
+            run.finished_at = run.finished_at or _now()
+            suite.status = "aborted"
+            suite.current = None
+            self._emit(suite)
+            raise
+        suite.current = None
+        self._emit(suite)
+        return run
 
     def run_phase(self, suite: Suite, phase: str) -> None:
         suite.phases[phase].status = "running"
