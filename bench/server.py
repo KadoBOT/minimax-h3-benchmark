@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import re
+import sys
 import threading
 import traceback
 import urllib.error
@@ -19,6 +20,9 @@ from bench.options import fetch_comfy_options
 # Re-bind for monkeypatch.setattr("bench.server.BENCHMARK_JSON", ...) in tests
 
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
+
+# Browser cancels video range requests on seek/reload — not a server bug.
+_CLIENT_DISCONNECT = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 
 
 class BenchApp:
@@ -53,6 +57,35 @@ class BenchHandler(SimpleHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         pass  # quieter; optional write to suite.log
+
+    def log_error(self, fmt, *args):
+        # Suppress expected disconnect noise from video clients
+        msg = fmt % args if args else str(fmt)
+        if "ConnectionResetError" in msg or "BrokenPipeError" in msg:
+            return
+        if "10054" in msg or "10053" in msg:
+            return
+        super().log_error(fmt, *args)
+
+    def finish(self) -> None:
+        try:
+            super().finish()
+        except _CLIENT_DISCONNECT:
+            pass
+
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        except _CLIENT_DISCONNECT:
+            pass
+
+    def _safe_write(self, data: bytes) -> bool:
+        """Write body bytes; return False if the client already disconnected."""
+        try:
+            self.wfile.write(data)
+            return True
+        except _CLIENT_DISCONNECT:
+            return False
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -99,12 +132,15 @@ class BenchHandler(SimpleHTTPRequestHandler):
 
     def _json(self, code: int, obj: dict) -> None:
         body = json.dumps(obj).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self._safe_write(body)
+        except _CLIENT_DISCONNECT:
+            return
 
     def _send_results(self):
         # Prefer in-memory suite (same object runner updates); else disk; else idle.
@@ -123,12 +159,15 @@ class BenchHandler(SimpleHTTPRequestHandler):
             body = json.dumps(data).encode()
         else:
             body = json.dumps({"status": "idle", "phases": {}, "runs": []}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self._safe_write(body)
+        except _CLIENT_DISCONNECT:
+            return
 
     def _send_options(self):
         data = fetch_comfy_options(APP.comfy_url)
@@ -198,58 +237,78 @@ class BenchHandler(SimpleHTTPRequestHandler):
         if path.suffix.lower() == ".mp4" and ctype == "application/octet-stream":
             ctype = "video/mp4"
 
-        range_header = self.headers.get("Range")
-        if range_header:
-            m = _RANGE_RE.match(range_header.strip())
-            if not m:
-                self.send_error(416, "Invalid Range")
-                return
-            start_s, end_s = m.group(1), m.group(2)
-            start = int(start_s) if start_s else 0
-            end = int(end_s) if end_s else file_size - 1
-            if start >= file_size or end >= file_size or start > end:
-                self.send_response(416)
-                self.send_header("Content-Range", f"bytes */{file_size}")
+        try:
+            range_header = self.headers.get("Range")
+            if range_header:
+                m = _RANGE_RE.match(range_header.strip())
+                if not m:
+                    self.send_error(416, "Invalid Range")
+                    return
+                start_s, end_s = m.group(1), m.group(2)
+                start = int(start_s) if start_s else 0
+                end = int(end_s) if end_s else file_size - 1
+                if start >= file_size or end >= file_size or start > end:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{file_size}")
+                    self.end_headers()
+                    return
+                length = end - start + 1
+                self.send_response(206)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+                self.send_header("Content-Length", str(length))
+                self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
+                if not head_only:
+                    with open(path, "rb") as f:
+                        f.seek(start)
+                        remaining = length
+                        while remaining > 0:
+                            chunk = f.read(min(65536, remaining))
+                            if not chunk:
+                                break
+                            if not self._safe_write(chunk):
+                                return
+                            remaining -= len(chunk)
                 return
-            length = end - start + 1
-            self.send_response(206)
+
+            self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
-            self.send_header("Content-Length", str(length))
+            self.send_header("Content-Length", str(file_size))
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             if not head_only:
                 with open(path, "rb") as f:
-                    f.seek(start)
-                    remaining = length
-                    while remaining > 0:
-                        chunk = f.read(min(65536, remaining))
+                    while True:
+                        chunk = f.read(65536)
                         if not chunk:
                             break
-                        self.wfile.write(chunk)
-                        remaining -= len(chunk)
+                        if not self._safe_write(chunk):
+                            return
+        except _CLIENT_DISCONNECT:
             return
 
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Content-Length", str(file_size))
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-        if not head_only:
-            with open(path, "rb") as f:
-                while True:
-                    chunk = f.read(65536)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
+
+class QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """Threading server that does not dump client-disconnect stack traces."""
+
+    daemon_threads = True
+
+    def handle_error(self, request, client_address) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, _CLIENT_DISCONNECT):
+            return
+        # Also match nested OSError with WinError 10054/10053
+        if isinstance(exc, OSError) and getattr(exc, "winerror", None) in (10053, 10054):
+            return
+        super().handle_error(request, client_address)
 
 
 def start_server(port: int = 8787) -> ThreadingHTTPServer:
     UI_DIR.mkdir(parents=True, exist_ok=True)
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), BenchHandler)
+    httpd = QuietThreadingHTTPServer(("127.0.0.1", port), BenchHandler)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
     return httpd
