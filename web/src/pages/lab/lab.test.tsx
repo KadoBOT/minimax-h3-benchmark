@@ -86,6 +86,159 @@ describe("the lab", () => {
     })
   })
 
+  it("offers all three frame interpolation choices and queues the one picked", async () => {
+    const { calls } = fakeApi({ ...BASELINE_ROUTES, "POST /api/runs": [makeView()] })
+
+    renderApp(<LabPage />)
+    expect(await screen.findByRole("button", { name: "Off" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "RIFE" })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole("button", { name: "FILM Net" }))
+    await userEvent.click(screen.getByRole("button", { name: /queue run/i }))
+
+    await waitFor(() => {
+      const queued = calls.find((call) => call.method === "POST" && call.path === "/api/runs")
+      expect((queued?.body as { config: { interp: string } }).config.interp).toBe("film")
+    })
+  })
+
+  it("names what each interpolation choice does to the frame rate", async () => {
+    fakeApi({ ...BASELINE_ROUTES })
+    renderApp(<LabPage />)
+    expect(await screen.findByText(/48/)).toBeInTheDocument()
+  })
+
+  // --- the turbo LoRA -------------------------------------------------------
+
+  it("asks which LoRA only once turbo is on", async () => {
+    fakeApi({ ...BASELINE_ROUTES })
+    renderApp(<LabPage />)
+
+    expect(await screen.findByRole("switch", { name: /turbo/i })).toBeInTheDocument()
+    expect(screen.queryByRole("combobox", { name: /turbo lora/i })).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole("switch", { name: /turbo/i }))
+
+    expect(await screen.findByRole("combobox", { name: /turbo lora/i })).toHaveTextContent(
+      "4step"
+    )
+  })
+
+  it("queues the LoRA that was picked, not the one the template ships with", async () => {
+    const { calls } = fakeApi({ ...BASELINE_ROUTES, "POST /api/runs": [makeView()] })
+
+    renderApp(<LabPage />)
+    await userEvent.click(await screen.findByRole("switch", { name: /turbo/i }))
+    await userEvent.click(screen.getByRole("combobox", { name: /turbo lora/i }))
+    await userEvent.click(await screen.findByRole("option", { name: "8step" }))
+    await userEvent.click(screen.getByRole("button", { name: /queue run/i }))
+
+    await waitFor(() => {
+      const queued = calls.find((call) => call.method === "POST" && call.path === "/api/runs")
+      const config = (queued?.body as { config: Record<string, unknown> })?.config
+      expect(config?.turbo_lora).toBe("minimax_h3_turbo_8step.safetensors")
+      expect(config?.turbo).toBe(true)
+    })
+  })
+
+  it("says which schedule the picked LoRA samples at", async () => {
+    /** A 4-step LoRA and an 8-step one are not the same experiment, and the form has to say so. */
+    fakeApi({ ...BASELINE_ROUTES })
+    renderApp(<LabPage />)
+
+    await userEvent.click(await screen.findByRole("switch", { name: /turbo/i }))
+    expect(await screen.findByText(/this lora samples at 4 steps/i)).toBeInTheDocument()
+    expect(screen.getByRole("spinbutton", { name: /steps/i })).toBeDisabled()
+
+    await userEvent.click(screen.getByRole("combobox", { name: /turbo lora/i }))
+    await userEvent.click(await screen.findByRole("option", { name: "8step" }))
+
+    expect(await screen.findByText(/this lora samples at 8 steps/i)).toBeInTheDocument()
+  })
+
+  it("shows the schedule in the steps field, and gives the typed count back", async () => {
+    /**
+     * The number in the box is what anybody reads. Leaving the ignored count on screen while
+     * the hint said otherwise made the form claim a 20-step run that would sample at four.
+     */
+    fakeApi({ ...BASELINE_ROUTES })
+    renderApp(<LabPage />)
+
+    const steps = await screen.findByRole("spinbutton", { name: /steps/i })
+    // `fireEvent` rather than typing: jsdom refuses a selection range on a number input, so
+    // `userEvent` can only ever append to the 20 that is already there.
+    fireEvent.change(steps, { target: { value: "28" } })
+    expect(steps).toHaveValue(28)
+
+    await userEvent.click(screen.getByRole("switch", { name: /turbo/i }))
+    expect(steps).toHaveValue(4)
+
+    await userEvent.click(screen.getByRole("combobox", { name: /turbo lora/i }))
+    await userEvent.click(await screen.findByRole("option", { name: "8step" }))
+    expect(steps).toHaveValue(8)
+
+    // Turbo off returns the run to the count that was typed, not to the LoRA's.
+    await userEvent.click(screen.getByRole("switch", { name: /turbo/i }))
+    expect(steps).toHaveValue(28)
+    expect(steps).toBeEnabled()
+  })
+
+  it("queues a strength the keyboard moved", async () => {
+    const { calls } = fakeApi({ ...BASELINE_ROUTES, "POST /api/runs": [makeView()] })
+
+    renderApp(<LabPage />)
+    await userEvent.click(await screen.findByRole("switch", { name: /turbo/i }))
+
+    // By label rather than by role: base-ui reveals the thumb after measuring the track, which
+    // never happens in jsdom, and a hidden element has no computed accessible name to match on.
+    const strength = await screen.findByLabelText("Turbo strength")
+    expect(strength).toHaveAttribute("type", "range")
+    expect(strength).toHaveAttribute("aria-valuenow", "1")
+    strength.focus()
+    await userEvent.keyboard("{ArrowLeft}")
+    await userEvent.click(screen.getByRole("button", { name: /queue run/i }))
+
+    await waitFor(() => {
+      const queued = calls.find((call) => call.method === "POST" && call.path === "/api/runs")
+      const config = (queued?.body as { config: Record<string, number> })?.config
+      expect(config?.turbo_lora_strength).toBeLessThan(1)
+    })
+  })
+
+  it("keeps a LoRA a preset named even when this machine does not have it", async () => {
+    fakeApi({ ...BASELINE_ROUTES })
+    window.localStorage.setItem(
+      "h3lab.draft",
+      JSON.stringify({ ...CONFIG, turbo: true, turbo_lora: "borrowed_from_the_other_box.safetensors" })
+    )
+
+    renderApp(<LabPage />)
+    expect(await screen.findByRole("combobox", { name: /turbo lora/i })).toHaveTextContent(
+      "borrowed_from_the_other_box"
+    )
+  })
+
+  it("offers the turbo LoRA as a sweep axis over the files ComfyUI has", async () => {
+    fakeApi({ ...BASELINE_ROUTES })
+    renderApp(<LabPage />)
+
+    await userEvent.click(await screen.findByRole("combobox", { name: "Add a sweep axis" }))
+    await userEvent.click(await screen.findByRole("option", { name: "Turbo LoRA" }))
+
+    expect(await screen.findByRole("button", { name: "4step" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "8step" })).toBeInTheDocument()
+  })
+
+  it("warns that a LoRA sweep with turbo off is one run repeated", async () => {
+    fakeApi({ ...BASELINE_ROUTES })
+    renderApp(<LabPage />)
+
+    await userEvent.click(await screen.findByRole("combobox", { name: "Add a sweep axis" }))
+    await userEvent.click(await screen.findByRole("option", { name: "Turbo LoRA" }))
+
+    expect(await screen.findByText(/turbo is off/i)).toBeInTheDocument()
+  })
+
   // A machine with none of the baseline media in ComfyUI's input folder. There is nothing to
   // pre-fill with, so the gap the mode opens stays open — which is what these two check.
   const NO_DEFAULTS = { ...CATALOG, default_first_frame: "", default_ref_images: [] }

@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from h3lab.domain.config import config_hash
+from h3lab.domain.config import (
+    DEFAULT_TURBO_LORA,
+    DEFAULT_TURBO_STRENGTH,
+    config_hash,
+    recipe_hash,
+)
 from h3lab.domain.rating import Rating
 from h3lab.domain.run import Artifact, RunMetrics
 from h3lab.storage import (
@@ -24,8 +29,9 @@ from h3lab.storage import (
     current_version,
     open_store,
 )
-from h3lab.storage.db import transaction
+from h3lab.storage.db import scalar, transaction
 from h3lab.storage.legacy import backfill_previews, import_legacy
+from h3lab.storage.migrations import MIGRATIONS
 
 
 @pytest.fixture
@@ -80,6 +86,100 @@ def test_rollback_inside_a_transaction_leaves_no_row(tmp_path: Path):
             raise RuntimeError("boom")
     assert conn.execute("SELECT COUNT(*) FROM app_state WHERE key='x'").fetchone()[0] == 0
     conn.close()
+
+
+def _pre_rename_db(path: Path, config_json: str) -> None:
+    """A database as it stood at version 1, holding one run and one preset."""
+    conn = sqlite3.connect(path)
+    conn.executescript(MIGRATIONS[0].sql)
+    conn.execute(
+        "INSERT INTO runs (id, seq, label, status, mode, config_json, config_hash, "
+        "recipe_hash, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("r1", 1, "#1 old", "succeeded", "flf2v", config_json, "stale", "stale", "2026-01-01"),
+    )
+    conn.execute(
+        "INSERT INTO presets (id, name, config_json, created_at) VALUES (?,?,?,?)",
+        ("p1", "old", config_json, "2026-01-01"),
+    )
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('schema_version', '1')")
+    conn.commit()
+    conn.close()
+
+
+def test_a_database_written_before_the_rename_opens_with_its_hashes_moved(
+    tmp_path: Path, base_config
+):
+    stored = json.loads(base_config.model_dump_json())
+    stored["rife"] = stored.pop("interp") == "rife"
+    _pre_rename_db(tmp_path / "pre.db", json.dumps(stored))
+
+    store = open_store(tmp_path / "pre.db")
+    run = RunRepository(store).require("r1")
+
+    assert run.config.interp == "off"
+    assert run.config_hash == config_hash(run.config)
+    assert run.recipe_hash == recipe_hash(run.config)
+    written = scalar(store(), "SELECT config_json FROM runs WHERE id = 'r1'")
+    assert "rife" not in json.loads(written)
+
+
+def test_the_rename_reaches_saved_presets_too(tmp_path: Path, base_config):
+    stored = json.loads(base_config.model_dump_json())
+    del stored["interp"]
+    stored["rife"] = True
+    _pre_rename_db(tmp_path / "pre.db", json.dumps(stored))
+
+    store = open_store(tmp_path / "pre.db")
+    preset = PresetRepository(store).get("p1")
+
+    assert preset is not None
+    assert preset.config.interp == "rife"
+    written = json.loads(scalar(store(), "SELECT config_json FROM presets WHERE id = 'p1'"))
+    assert written["interp"] == "rife" and "rife" not in written
+
+
+def test_a_turbo_run_from_before_the_lora_axis_names_the_lora_it_ran_with(
+    tmp_path: Path, base_config
+):
+    """`turbo: true` used to mean one LoRA. v3 writes that one in, so the row stays comparable."""
+    stored = json.loads(base_config.merged(turbo=True).model_dump_json())
+    del stored["turbo_lora"]
+    del stored["turbo_lora_strength"]
+    _pre_rename_db(tmp_path / "pre.db", json.dumps(stored))
+
+    store = open_store(tmp_path / "pre.db")
+    run = RunRepository(store).require("r1")
+
+    assert run.config.turbo_lora == DEFAULT_TURBO_LORA
+    assert run.config.turbo_lora_strength == DEFAULT_TURBO_STRENGTH
+    assert run.config_hash == config_hash(run.config)
+    assert run.recipe_hash == recipe_hash(run.config)
+    written = json.loads(scalar(store(), "SELECT config_json FROM runs WHERE id = 'r1'"))
+    assert written["turbo_lora"] == DEFAULT_TURBO_LORA
+
+
+def test_a_non_turbo_run_from_before_the_lora_axis_still_claims_no_lora(
+    tmp_path: Path, base_config
+):
+    stored = json.loads(base_config.merged(turbo=False).model_dump_json())
+    del stored["turbo_lora"]
+    del stored["turbo_lora_strength"]
+    _pre_rename_db(tmp_path / "pre.db", json.dumps(stored))
+
+    run = RunRepository(open_store(tmp_path / "pre.db")).require("r1")
+
+    assert run.config.turbo_lora == ""
+    assert run.config_hash == config_hash(run.config)
+
+
+def test_a_config_the_rename_cannot_parse_is_left_exactly_as_it_was(tmp_path: Path):
+    _pre_rename_db(tmp_path / "pre.db", '{"mode": "flf2v", "first_frame": ')
+
+    conn = open_store(tmp_path / "pre.db")()
+    row = conn.execute("SELECT config_json, config_hash FROM runs WHERE id = 'r1'").fetchone()
+
+    assert row[0] == '{"mode": "flf2v", "first_frame": '
+    assert row[1] == "stale"
 
 
 def test_foreign_keys_cascade_a_deleted_run(runs, ratings, votes, base_config):

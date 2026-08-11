@@ -13,8 +13,8 @@ around the harder question: *of everything I have generated, what should I gener
 - **Judge two ways.** 1–10 stars for absolute quality, and pairwise votes for the
   comparisons a star scale is bad at. Votes drive a replayable Elo.
 - **Vote on like for like.** The arena only ever shows two clips that already agree on
-  subject, resolution, duration, RIFE and upscaling, so the preference you state is about
-  the sampler, the scheduler, or the weights — and the standings rank those settings.
+  subject, resolution, duration, interpolation and upscaling, so the preference you state is
+  about the sampler, the scheduler, or the weights — and the standings rank those settings.
 - **One score, no black box.** The leaderboard blends normalised quality and normalised
   speed using *your* weights, and always shows both halves plus the guardrails (failure
   rate, wall clock, sample size) beside the number.
@@ -24,6 +24,9 @@ around the harder question: *of everything I have generated, what should I gener
   instead of dressed up as a near-tie.
 - **Reuse the good ones.** Save any run's config as a named preset, pin one as the
   baseline, re-run it with one click, or open it in the Lab and change one field.
+- **Edit the workflows freely.** The templates are yours to re-export from ComfyUI. The lab
+  finds the nodes it needs by what they *are*, reads an edited file back without a restart, and
+  says which part it no longer recognises instead of failing a run to tell you.
 
 See [CONTEXT.md](CONTEXT.md) for the glossary these words come from — code, database
 columns, and UI labels all use the same terms.
@@ -59,15 +62,20 @@ python -m h3lab check
 ```
 
 It reports the two failures that used to cost the most time — ComfyUI unreachable, and a
-workflow template that cannot be patched — plus the model folder, ffmpeg, and whether the
-front end is built. Exit code is non-zero only when something fatal is wrong.
+workflow template that cannot be patched — plus every role it could find in each template, what
+the installed nodes say is wrong with the graph, the model folder, ffmpeg, and whether the front
+end is built. Exit code is non-zero only when something fatal is wrong.
+
+```bash
+python -m h3lab check --roles          # and which node plays each part
+```
 
 ### Commands
 
 | Command | Purpose |
 |---------|---------|
 | `serve` | Run the web app (this is the default, so bare `h3lab` works) |
-| `check` | Report what is wrong without queueing anything (`--json` for scripts) |
+| `check` | Report what is wrong without queueing anything (`--roles` for the role table, `--json` for scripts) |
 | `import-legacy` | Pull runs, ratings, and videos out of the previous lab's `benchmark.db` |
 | `routes` | List every route the API answers |
 | `openapi` | Print the OpenAPI schema the front end's types are generated from |
@@ -86,6 +94,7 @@ environment variable; flags win.
 | Listen host / port | `H3LAB_HOST` / `H3LAB_PORT` | `127.0.0.1` / `8787` |
 | Data directory | `H3LAB_DATA_DIR` | `results/` |
 | Diffusion models | `H3LAB_MODELS_DIR` | `E:\AI\Models\diffusion_models` |
+| LoRA models | `H3LAB_LORAS_DIR` | `loras/` beside the models directory |
 | ComfyUI input folder | `H3LAB_COMFY_INPUT_DIR` | ComfyUI's `input/` |
 | Workflow templates | `H3LAB_WORKFLOW_DIR` | repo root |
 | Built front end | `H3LAB_WEB_DIST` | `web/dist` |
@@ -108,8 +117,107 @@ and **3 standalone audio** clips. Tag them in the prompt as `<Picture 1>`, `<Vid
 
 The templates are ComfyUI editor exports. The lab converts them to API prompt format and
 patches them per run — wiring the loader implied by the weights filename, and pruning
-whole groups (LoRA, attention, caches, RIFE, upscaler) when a toggle is off. Add or remove
-model files in the models directory and refresh; nothing about them is hard-coded.
+whole groups (LoRA, attention, caches, interpolation, upscaler) when a toggle is off. Add or
+remove model files in the models directory and refresh; nothing about them is hard-coded.
+
+## Surviving workflow changes
+
+The templates are meant to be edited. Re-export one from ComfyUI and the numbers move: fold a
+branch into a subgraph and node 10 becomes `169:10`, rebuild a group and every id shifts. An
+earlier version of this lab addressed nodes by id, so one re-export broke every mode at once.
+
+Nothing is addressed by id now. Four rules, each doing one job:
+
+| Rule | Where | What it survives |
+|------|-------|------------------|
+| Read the graph ComfyUI would execute | `comfy/workflow.py` | Subgraphs, nested subgraphs, both link formats, promoted widgets, bypassed nodes. A template is flattened to the same execution ids ComfyUI's own executor uses. |
+| Ask the node what its widgets are called | `comfy/schema.py` | A node pack renaming or adding a widget. `/object_info` is the authority; the order saved in the template answers when ComfyUI is off; a required widget nobody set gets the node's own default. |
+| Find nodes by what they are | `comfy/roles.py` | Renumbering, retitling, reordering. A role is resolved from the title tag, then the class, then the wiring, then the id it once had. `MS_ROLE:duration` in a title is an override that beats every guess. |
+| Prune instead of rebuild | `comfy/graph.py` | Extra nodes, reordered chains, a branch you added. Disabled parts are removed and their links passed through by type, so a config selects a subgraph of your graph rather than reconstructing an assumed one. |
+
+What that buys, concretely:
+
+- **Edit a template while the lab is running.** Its modification time is checked on the way into
+  every run: an edited file is re-read and announced in the browser, an untouched one is a cache
+  hit, and a run always holds one graph from start to finish so a mid-sweep edit cannot rewrite
+  what a finished run claims to have executed.
+- **Ask what the lab can still see.** `h3lab check --roles` prints the node playing each part and
+  the rule that found it. A role found only by *first of class* is reported as a guess, an
+  essential role with nobody to play it fails the check, and every template is validated against
+  the installed nodes before anything reaches the GPU.
+- **Read progress in words.** The live readout names the executing node by its class, so it says
+  `Sampler` and not `node 169:10`.
+- **Add a node the lab has never heard of.** It is carried through untouched as long as something
+  the run needs is downstream of it.
+
+Two things still have to be true of a template: the pipeline must end at a video output node,
+and the nodes the lab writes settings into must exist. `check` names both.
+
+### The Turbo LoRA
+
+`turbo` applies a distilled LoRA so a clip takes four steps instead of twenty. Which LoRA is a
+setting, not a fixture of the template:
+
+| Field | Meaning |
+|-------|---------|
+| `turbo` | Whether the LoRA is in the model chain at all |
+| `turbo_lora` | Which file — the list comes from the loader node's own combo options |
+| `turbo_lora_strength` | How hard it is applied, 0 to 2 |
+
+The picker offers what ComfyUI has, so a LoRA dropped into the folder appears on the next
+refresh; when ComfyUI is unreachable the lab scans the LoRA folder instead, and falls back to the
+name the template ships with. Both fields are part of a run's identity — two turbo runs with
+different LoRAs are two experiments, not replicates — so both are hashed, both are contested in
+the arena, and both are sweepable:
+
+```
+axis: turbo_lora        → minimax_h3_turbo_4step_comfyui_pruned, minimax_h3_turbo_4step_ema_ckpt850
+axis: turbo_lora_strength → 0.6, 0.8, 1.0
+```
+
+A turbo run samples at the step count its LoRA was distilled for, read from the filename
+(`..._4step_...` → 4 steps), which is why the step field goes inert and says so while turbo is
+on. Turning turbo off clears both fields, so every non-turbo run still hashes alike no matter
+which LoRA was picked before.
+
+### Frame interpolation
+
+Between the decode and the muxer a run can put one interpolator, or none:
+
+| `interp` | Graph | Frame rate |
+|----------|-------|------------|
+| `off` | decode → combine | 24 — every frame sampled |
+| `film` | decode → `FrameInterpolate` → combine | 48 — FILM Net doubles the frames it is given |
+| `rife` | decode → `RIFEInterpolation` → combine | 60 — RIFE resamples to a rate it is told |
+
+The frame rate is not cosmetic. FILM multiplies the frames it is handed without being told a
+target rate, so the muxer has to be told the multiplied rate too — leaving it at 24 produces a
+valid file that plays at half speed. RIFE is told its target and the muxer is told the same.
+
+Only the chosen interpolator survives into the prompt. Both branches end at the video node, and
+ComfyUI validates an unused one as a graph root all the same, so the loser is dropped rather
+than merely left unconnected.
+
+FILM's checkpoint is the template's own `model_name` widget (`film_net_fp16.safetensors` here);
+the lab does not choose it, for the same reason it does not choose the CLIP model. The multiplier
+is fixed at 2 — the setting exists so a run can be compared with and without interpolation, not
+so the factor can be swept.
+
+### Taking a run back to ComfyUI
+
+Every run can be reopened as the graph that produced it, two ways:
+
+- **Download workflow** on the run page (`GET /api/runs/{id}/workflow`) gives you the template's
+  own layout with that run's settings applied — nodes, links, groups and all. Not the API prompt,
+  which opens as a heap of unpositioned boxes.
+- **The still saved beside the video** carries the same graph. The lab sends it as
+  `extra_data.extra_pnginfo.workflow` when it queues, which is the key ComfyUI's frontend prefers
+  when you drag an image onto the canvas, so a dropped frame reopens as a readable graph.
+
+Both are built by applying the config to the template as it is on disk now, then projecting the
+patched prompt back into editor form. `to_api_prompt(export) == prompt` holds for every prompt
+`apply_config` produces, which is what makes the downloaded file, the graph in the PNG, and the
+run itself one graph rather than three descriptions of one.
 
 ### Picking media
 
@@ -190,8 +298,8 @@ things:
 
 | Class | Fields | Why |
 |-------|--------|-----|
-| **Held** | mode, prompt, media, aspect, megapixels, duration, RIFE, upscaler | Must match on both sides. RIFE and the upscaler make a clip *look* better without making the generation better, and size and length flatter a clip the same way — a voter who can see one is answering a different question. |
-| **Contested** | weights, sampler, scheduler, steps, turbo, cache, Sol-Attn, presets | Allowed to differ. These are what the standings rank. |
+| **Held** | mode, prompt, media, aspect, megapixels, duration, interpolation, upscaler | Must match on both sides. Interpolation and the upscaler make a clip *look* better without making the generation better, and size and length flatter a clip the same way — a voter who can see one is answering a different question. |
+| **Contested** | weights, sampler, scheduler, steps, turbo, turbo LoRA and its strength, cache, Sol-Attn, presets | Allowed to differ. These are what the standings rank. |
 | **Ignored** | seed, clean VRAM | Clearing VRAM cannot change a pixel. The seed can change everything, but holding it would empty the arena, so a matchup says whether it is *seed-matched* or *seed-pooled* instead. |
 
 Runs sharing every held setting form a **pool**, and pairs are only ever drawn from inside
@@ -219,12 +327,12 @@ already imported are counted and skipped, not duplicated.
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                       # 461 backend tests
+pytest -q                       # 618 backend tests
 
 cd web
 npm run dev                     # Vite on :5173, proxying /api to :8787
 npm run typecheck
-npm test                        # 107 DOM tests
+npm test                        # 120 DOM tests
 npm run build
 ```
 
@@ -249,9 +357,10 @@ It walks every page, fails on console errors, on horizontal overflow, and on the
 regressions that have bitten before (a disabled sweep that queued anyway, a leaderboard
 label overlapping its score, a thumbnail whose `src` resolved but never decoded, a live
 stream that stayed open and delivered nothing, a hover preview that autoplay policy refused
-to start or that opened off the edge of the screen). It also casts a real vote in the arena
-and reads the result on the standings page, and fails if the settings under test are in the
-document before the disclosure is opened.
+to start or that opened off the edge of the screen, a steps field that kept showing the count
+a turbo run would ignore). It also casts a real vote in the arena and reads the result on the
+standings page, picks a turbo LoRA and sweeps it, and fails if the settings under test are in
+the document before the disclosure is opened.
 
 None of that replaces one real generation. The worst bugs found while building this —
 including a default cache preset that could not run at all, and a hardcoded text encoder
@@ -264,13 +373,39 @@ minutes:
 ```bash
 python -u scripts/live_cache_check.py          # every cache family at every level
 python -u scripts/live_cache_check.py spectrum # just one family
+python -u scripts/verify_interp.py             # one clip per interpolation choice
+python -u scripts/verify_workflow.py           # one clip per template, an edited template, two LoRAs
 ```
 
-It queues a four-step clip per preset level against your real ComfyUI and fails on any level
-the nodes refuse. A node's own `INPUT_TYPES` and its `validate()` are the authority on what
-a preset may contain — read them after an update rather than guessing, because the values
-move. `docs/superpowers/specs/2026-08-07-spectrum-node-upgrade.md` shows what that looked
-like the last time Spectrum changed.
+`live_cache_check.py` queues a four-step clip per preset level and fails on any level the
+nodes refuse. A node's own `INPUT_TYPES` and its `validate()` are the authority on what a
+preset may contain — read them after an update rather than guessing, because the values move.
+`docs/superpowers/specs/2026-08-07-spectrum-node-upgrade.md` shows what that looked like the
+last time Spectrum changed.
+
+`verify_interp.py` queues one clip per interpolation choice and then reads the files: ffprobe
+for the frame rate the muxer actually wrote, and the PNG beside each video for the editor
+graph it should carry. It checks the frame *count* as well as the rate, because a graph that
+silently skipped the interpolator would still produce a file claiming 48 fps.
+
+`verify_workflow.py` is the one to run after editing a template. It generates one clip per mode,
+then renumbers a copy of the t2v template on disk *between* two runs and requires the second run
+to carry the new ids, then runs two clips differing only in `turbo_lora` and requires each graph
+to name its own file and the two configs to hash differently. Finally it reads every export back
+into a prompt and asks the installed nodes whether they object to any of it. A suite can only
+prove the lab believes its own graph; this asks the GPU.
+
+And if you want to see what ComfyUI makes of a run's graph, hand it one:
+
+```bash
+cd web
+node scripts/comfy-drop.mjs <png-or-workflow.json> [comfy-url]
+```
+
+It performs the actual gesture — a real drag-and-drop onto the canvas — and reports what the
+frontend built: how many nodes, whether they have positions, which groups survived. An API
+prompt arrives as an unpositioned column with no groups, so the two cases are easy to tell
+apart, which is the whole point.
 
 ## Layout
 
@@ -278,12 +413,18 @@ like the last time Spectrum changed.
 h3lab/
   domain/    config, sweeps, rating, scoring, insights, arena — no I/O, no framework
   storage/   SQLite repositories, versioned migrations, legacy import
-  comfy/     HTTP + WebSocket client, graph patching, catalog, progress
+  comfy/     workflow reader, node schemas, roles, graph patching, editor export,
+             HTTP + WebSocket client, catalog, progress
   engine/    durable queue, worker, event bus, artifact processing, Lab facade
   api/       FastAPI routes, dependencies, one Problem shape for every failure
 web/         React 19 + TypeScript + Tailwind v4 + Base UI
-scripts/     type generation, browser smoke test
+scripts/     type generation, browser smoke test, live verification
 ```
+
+Inside `comfy/`, the four modules that make a template replaceable are layered and each knows
+only about the one below it: `workflow.py` (what nodes exist) → `schema.py` (what they take) →
+`roles.py` (which one is which) → `graph.py` (fit them to a config). `editor.py` projects the
+result back for a person to read.
 
 `domain/` knows nothing about the database, ComfyUI, or HTTP. That is what makes the
 scoring and comparison logic testable without a GPU in the room.

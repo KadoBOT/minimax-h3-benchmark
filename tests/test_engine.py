@@ -12,6 +12,7 @@ from typing import Iterator
 import pytest
 
 from h3lab.comfy.client import ComfyError, PromptRejected
+from h3lab.comfy.editor import prompt_of
 from h3lab.domain.run import Artifact
 from h3lab.domain.sweeps import SweepAxis, SweepSpec
 from h3lab.engine import artifacts
@@ -135,6 +136,33 @@ def test_the_stream_emits_a_heartbeat_when_idle():
         assert next(stream).kind == "heartbeat"
         bus.publish("run.created", run_id="R1")
         assert next(stream).kind == "run.created"
+
+
+def test_event_bus_close_unblocks_subscriptions():
+    import threading
+    import time
+
+    bus = EventBus()
+    sub = bus.subscribe()
+
+    started = time.monotonic()
+    result = []
+
+    def getter():
+        result.append(sub.get(timeout=10.0))
+
+    t = threading.Thread(target=getter)
+    t.start()
+    time.sleep(0.05)
+    bus.close()
+    t.join(timeout=1.0)
+
+    elapsed = time.monotonic() - started
+    assert not t.is_alive()
+    assert elapsed < 1.0
+    assert result == [None]
+    assert sub.closed
+
 
 
 # --- artifacts -------------------------------------------------------------
@@ -270,6 +298,23 @@ def wait_for(predicate, *, timeout: float = 8.0, interval: float = 0.05) -> bool
     return False
 
 
+def drained_until(subscription, kind: str, *, timeout: float = 8.0) -> list:
+    """Everything the subscriber saw up to and including ``kind``.
+
+    A status the storage already reports is not proof the matching event was published —
+    the worker writes the row first and announces it a moment later. Draining on the
+    status alone therefore misses the last event about one run in a few hundred.
+    """
+    deadline = time.monotonic() + timeout
+    seen: list = []
+    while time.monotonic() < deadline:
+        seen.extend(subscription.drain())
+        if any(event.kind == kind for event in seen):
+            break
+        time.sleep(0.02)
+    return seen
+
+
 def test_preflight_reports_a_missing_input_file(lab_settings, base_config):
     assert preflight(base_config.merged(first_frame="frame.png"), lab_settings) == []
     problems = preflight(base_config.merged(first_frame="absent.png"), lab_settings)
@@ -294,11 +339,66 @@ def test_the_worker_runs_a_queued_run_to_completion(runner_setup, base_config, s
     assert stub.cache_clears == 1
     assert stub.downloads == ["stub.mp4"]
 
-    kinds = [event.kind for event in subscription.drain()]
+    kinds = [event.kind for event in drained_until(subscription, "run.finished")]
     assert "run.started" in kinds
     assert "run.progress" in kinds
     assert "run.finished" in kinds
     subscription.close()
+
+
+def test_progress_names_the_node_by_what_it_is(runner_setup, base_config, stub):
+    """The browser shows a node name. It must survive the template being renumbered."""
+    runner, runs, bus = runner_setup
+    subscription = bus.subscribe()
+    run = runs.create(base_config.merged(first_frame="frame.png"))
+    runner.start()
+
+    assert wait_for(lambda: runs.require(run.id).status == "succeeded")
+    progress = [event for event in subscription.drain() if event.kind == "run.progress"]
+    subscription.close()
+    assert progress, "the worker published no progress"
+    first = progress[0].data
+    assert first["node_label"] == "Sampler"
+    # The id it came with is a subgraph-flattened one, which the old label table never had.
+    assert ":" in str(first["node"])
+
+
+def test_a_rejected_graph_makes_the_lab_read_the_node_schemas_again(
+    runner_setup, base_config, stub
+):
+    """A rejection is what a node pack update looks like from here, so stop trusting the cache."""
+    runner, runs, _bus = runner_setup
+    stub.raise_on_execute = PromptRejected("9.low_vram: required input is missing")
+    first = runs.create(base_config.merged(first_frame="frame.png"))
+    runner.start()
+    assert wait_for(lambda: runs.require(first.id).status == "failed")
+    reads = stub.object_info_reads
+
+    stub.raise_on_execute = None
+    second = runs.create(base_config.merged(first_frame="frame.png", seed=7))
+    runner.nudge()
+    assert wait_for(lambda: runs.require(second.id).status == "succeeded")
+    assert stub.object_info_reads > reads
+
+
+def test_a_submission_carries_the_editor_workflow_for_the_saved_image(
+    runner_setup, base_config, stub
+):
+    """ComfyUI passes `extra_pnginfo` through to VHS, which writes it into the PNG.
+
+    Without it the only graph in the saved image is the API prompt, and dragging that image
+    onto the canvas rebuilds the run as unpositioned boxes instead of the workflow.
+    """
+    runner, runs, _bus = runner_setup
+    run = runs.create(base_config.merged(first_frame="frame.png", interp="film"))
+    runner.start()
+
+    assert wait_for(lambda: runs.require(run.id).status == "succeeded")
+    [workflow] = stub.workflows
+    assert workflow is not None
+    assert prompt_of(workflow) == stub.submitted[0]
+    assert workflow["extra"]["h3lab"]["run_id"] == run.id
+    assert "FrameInterpolate" in {node["type"] for node in workflow["nodes"]}
 
 
 def test_a_rejected_graph_marks_the_run_failed_with_the_reason(runner_setup, base_config, stub):
@@ -464,6 +564,60 @@ def test_an_unknown_mode_has_no_template(lab_settings):
 
     with pytest.raises(WorkflowError):
         WorkflowCache(lab_settings).get("nonsense")
+
+
+def _copy_template(settings, mode: str, source: str = "flf2v") -> Path:
+    """A writable template in the settings' own workflow folder."""
+    target = settings.workflow_path(mode)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(Settings().workflow_path(source).read_text(encoding="utf-8"), "utf-8")
+    return target
+
+
+def test_a_template_edited_on_disk_is_read_again(tmp_path, lab_settings):
+    """Editing a workflow used to need a restart, which is how a stale graph got benchmarked."""
+    settings = lab_settings.with_overrides(workflow_dir=tmp_path / "workflows")
+    path = _copy_template(settings, "flf2v")
+    cache = WorkflowCache(settings)
+
+    first = cache.get("flf2v")
+    assert cache.get("flf2v") is first
+
+    edited = json.loads(path.read_text(encoding="utf-8"))
+    edited["extra"] = {**edited.get("extra", {}), "h3lab_edit": "after the first read"}
+    path.write_text(json.dumps(edited), encoding="utf-8")
+
+    second = cache.get("flf2v")
+    assert second is not first
+    assert second["extra"]["h3lab_edit"] == "after the first read"
+
+
+def test_a_template_reload_is_announced(tmp_path, lab_settings):
+    settings = lab_settings.with_overrides(workflow_dir=tmp_path / "workflows")
+    path = _copy_template(settings, "t2v")
+    bus = EventBus()
+    cache = WorkflowCache(settings, events=bus)
+    cache.get("t2v")
+
+    with bus.subscribe() as subscription:
+        edited = json.loads(path.read_text(encoding="utf-8"))
+        edited["extra"] = {**edited.get("extra", {}), "h3lab_edit": "again"}
+        path.write_text(json.dumps(edited), encoding="utf-8")
+        cache.get("t2v")
+        texts = [event.data.get("text") or "" for event in subscription.drain()]
+
+    assert any("t2v" in text and "reloaded" in text for text in texts)
+
+
+def test_a_template_nobody_touched_is_not_reloaded(tmp_path, lab_settings):
+    """Re-reading a 130 kB file per run is waste; re-parsing it mid-sweep is a changed history."""
+    settings = lab_settings.with_overrides(workflow_dir=tmp_path / "workflows")
+    _copy_template(settings, "flf2v")
+    cache = WorkflowCache(settings)
+
+    first = cache.get("flf2v")
+    for _ in range(3):
+        assert cache.get("flf2v") is first
 
 
 # --- the Lab facade --------------------------------------------------------
@@ -786,12 +940,35 @@ def test_arena_standings_replay_the_votes_the_lab_recorded(lab, base_config):
     for _ in range(4):
         lab.vote(first.run.id, second.run.id, second.run.id)
 
-    board = lab.arena_standings()
+    board = lab.arena_standings(min_stars=None)
     cache = next(axis for axis in board.axes if axis.axis == "cache")
     assert [row.key for row in cache.standings] == ["h3", "easy"]
     assert cache.verdict.kind == "winner"
     assert cache.verdict.value == "h3"
     assert board.votes_counted == 4
+
+
+def test_arena_filters_participants_by_min_stars(lab, base_config):
+    base = base_config.merged(first_frame="frame.png")
+    r1 = _finish(lab, lab.enqueue(base.merged(cache="easy"))[0], sec_per_it=8.0)
+    r2 = _finish(lab, lab.enqueue(base.merged(cache="h3"))[0], sec_per_it=6.0)
+    r3 = _finish(lab, lab.enqueue(base.merged(cache="none"))[0], sec_per_it=4.0)
+
+    lab.rate(r1.run.id, stars=8)
+    lab.rate(r2.run.id, stars=7)
+    lab.rate(r3.run.id, stars=5)
+
+    # Default / min_stars=7 includes r1 and r2 (stars >= 7), but excludes r3 (stars=5)
+    high = [item.run_id for item in lab.arena_runs(min_stars=7)]
+    assert set(high) == {r1.run.id, r2.run.id}
+
+    # min_stars=8 includes only r1
+    eight = [item.run_id for item in lab.arena_runs(min_stars=8)]
+    assert set(eight) == {r1.run.id}
+
+    # min_stars=None includes all runs with video
+    all_runs = [item.run_id for item in lab.arena_runs(min_stars=None)]
+    assert set(all_runs) == {r1.run.id, r2.run.id, r3.run.id}
 
 
 def test_listing_runs_hides_archived_ones_by_default(lab, base_config):

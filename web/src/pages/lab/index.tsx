@@ -22,6 +22,16 @@ import { SweepBuilder } from "./sweep-builder"
 
 const DRAFT_KEY = "h3lab.draft"
 
+/** The config a previous session left behind, or nothing when there is none worth reading. */
+function storedDraft(): Partial<Draft> | null {
+  try {
+    const raw = window.localStorage.getItem(DRAFT_KEY)
+    return raw ? (JSON.parse(raw) as Draft) : null
+  } catch {
+    return null
+  }
+}
+
 export function LabPage() {
   const meta = useMeta()
   const catalog = useCatalog()
@@ -44,17 +54,10 @@ export function LabPage() {
   // already be editing is how a setting changes under someone's hands.
   useEffect(() => {
     if (draft || !meta.data || catalog.isLoading) return
-    let stored: Draft | null = null
-    try {
-      const raw = window.localStorage.getItem(DRAFT_KEY)
-      stored = raw ? (JSON.parse(raw) as Draft) : null
-    } catch {
-      stored = null
-    }
     setDraft({
       ...(meta.data.defaults as Draft),
       ...((catalog.data?.defaults ?? {}) as Partial<Draft>),
-      ...(stored ?? {}),
+      ...(storedDraft() ?? {}),
     })
   }, [meta.data, catalog.data, catalog.isLoading, draft])
 
@@ -132,6 +135,7 @@ export function LabPage() {
               schedulers: catalog.data?.schedulers ?? [],
               aspect_ratios: catalog.data?.aspect_ratios ?? [],
               diffusion_models: catalog.data?.diffusion_models ?? [],
+              turbo_loras: catalog.data?.turbo_loras ?? [],
             }}
           />
         </div>

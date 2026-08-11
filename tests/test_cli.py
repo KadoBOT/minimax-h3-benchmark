@@ -133,6 +133,35 @@ def test_check_emits_machine_readable_json(settings: Settings):
     assert all({"check", "ok", "detail"} <= set(item) for item in payload["checks"])
 
 
+def test_check_says_whether_it_still_recognises_each_template(settings: Settings):
+    """After editing a workflow, the question is whether the lab can still find its parts."""
+    _code, text = run_inline(*as_flags(settings), "check")
+    for mode in ("t2v", "flf2v", "r2v"):
+        line = check_row(text, f"roles {mode}")
+        assert line.startswith("ok  "), line
+        assert "roles" in line
+
+
+def test_check_names_the_node_playing_each_role_when_asked(settings: Settings):
+    _code, text = run_inline(*as_flags(settings), "check", "--roles")
+    assert "conditioning" in text
+    assert "MiniMaxH3ImageToVideo" in text  # the flf2v conditioning node, found by class
+    assert "turbo_lora" in text
+    # The rule that found it is the diagnostic: a role found by "first of class" is a guess.
+    assert "class" in text
+
+
+def test_the_role_report_travels_in_the_json_too(settings: Settings):
+    _code, text = run_inline(*as_flags(settings), "check", "--roles", "--json")
+    payload = json.loads(text)
+    assert set(payload["roles"]) == {"t2v", "flf2v", "r2v"}
+    rows = payload["roles"]["flf2v"]
+    sampler = next(row for row in rows if row["role"] == "sampler")
+    assert sampler["class_type"] == "SamplerCustomAdvanced"
+    assert sampler["node"]
+    assert sampler["how"]
+
+
 def test_check_notices_a_built_front_end(settings: Settings):
     settings.web_dist.mkdir(parents=True, exist_ok=True)
     (settings.web_dist / "index.html").write_text("<!doctype html>")

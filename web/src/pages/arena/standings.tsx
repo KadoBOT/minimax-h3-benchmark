@@ -21,10 +21,11 @@ import { Failure, PageHeader, Section, Spinner } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { secPerIt } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { ArenaNav } from "./nav"
+import { ArenaNav, useArenaFilterParam } from "./nav"
 
 export function StandingsPage() {
-  const query = useArenaStandings()
+  const minStars = useArenaFilterParam()
+  const query = useArenaStandings(minStars)
   const [chosen, setChosen] = useState<string | null>(null)
 
   const board = query.data

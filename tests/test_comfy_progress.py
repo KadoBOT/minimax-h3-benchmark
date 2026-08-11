@@ -6,7 +6,17 @@ import time
 
 import pytest
 
-from h3lab.comfy.progress import ProgressTracker, node_label
+from h3lab.comfy.progress import ProgressTracker, labels_for, node_label
+
+# The ids are deliberately not the ones the lab was written against: a subgraph renumbers
+# every node, so a tracker that knows names only by id knows nothing after one edit.
+PROMPT = {
+    "169:1": {"class_type": "UNETLoader", "inputs": {}},
+    "169:10": {"class_type": "SamplerCustomAdvanced", "inputs": {}},
+    "169:125": {"class_type": "VAEDecode", "inputs": {}},
+    "169:122": {"class_type": "SpectrumApplyMiniMaxH3", "inputs": {}},
+    "h3:ref_0": {"class_type": "LoadImage", "inputs": {}},
+}
 
 
 def feed(tracker: ProgressTracker, node: str, steps: int, *, gap_s: float = 0.0) -> None:
@@ -122,15 +132,15 @@ def test_reaching_the_final_step_does_not_end_the_measurement(monkeypatch):
 def test_a_snapshot_describes_the_live_state(monkeypatch):
     clock = {"t": 0.0}
     monkeypatch.setattr(time, "perf_counter", lambda: clock["t"])
-    tracker = ProgressTracker()
+    tracker = ProgressTracker.of(PROMPT)
 
-    tracker.on_executing({"node": "10"})
-    tracker.on_progress({"node": "10", "value": 1, "max": 20})
+    tracker.on_executing({"node": "169:10"})
+    tracker.on_progress({"node": "169:10", "value": 1, "max": 20})
     clock["t"] += 9.0
-    tracker.on_progress({"node": "10", "value": 2, "max": 20})
+    tracker.on_progress({"node": "169:10", "value": 2, "max": 20})
 
     snapshot = tracker.snapshot()
-    assert snapshot["node"] == "10"
+    assert snapshot["node"] == "169:10"
     assert snapshot["node_label"] == "Sampler"
     assert snapshot["step"] == 2
     assert snapshot["step_total"] == 20
@@ -156,11 +166,43 @@ def test_plausibility_rules_are_explicit():
     assert ProgressTracker.is_plausible(1.0, 0) is False
 
 
-def test_node_labels_are_human_readable():
-    assert node_label("10") == "Sampler"
-    assert node_label(122) == "Spectrum"
+def test_a_progress_label_says_what_the_node_is_not_where_it_sits():
+    labels = labels_for(PROMPT)
+    assert labels["169:10"] == "Sampler"
+    assert labels["169:125"] == "VAE decode"
+    assert labels["169:1"] == "Diffusion model"
+    # A class nobody wrote a word for still reads better than a number.
+    assert labels["169:122"] == "SpectrumApplyMiniMaxH3"
+    assert labels["h3:ref_0"] == "Load image"
+
+
+def test_a_node_the_prompt_never_mentioned_is_named_by_its_id():
+    tracker = ProgressTracker.of(PROMPT)
+    tracker.on_executing({"node": "4242"})
+    assert tracker.snapshot()["node_label"] == "node 4242"
     assert node_label("4242") == "node 4242"
     assert node_label(None) is None
+
+
+def test_the_sampler_is_preferred_by_what_it_is(monkeypatch):
+    """The rate to report is the sampler's, and the sampler is no longer node 10."""
+    clock = {"t": 0.0}
+    monkeypatch.setattr(time, "perf_counter", lambda: clock["t"])
+    tracker = ProgressTracker.of(PROMPT)
+
+    # A decode that also reports twenty steps, then the sampler with the same count.
+    tracker.on_executing({"node": "169:125"})
+    tracker.on_progress({"node": "169:125", "value": 1, "max": 20})
+    clock["t"] += 100.0
+    tracker.on_progress({"node": "169:125", "value": 20, "max": 20})
+
+    tracker.on_executing({"node": "169:10"})
+    tracker.on_progress({"node": "169:10", "value": 1, "max": 20})
+    clock["t"] += 160.0
+    tracker.on_progress({"node": "169:10", "value": 20, "max": 20})
+    tracker.on_executing({"node": None})
+
+    assert tracker.sec_per_it() == pytest.approx(8.0, rel=0.05)
 
 
 def test_progress_from_a_real_clock_is_measured_not_guessed():

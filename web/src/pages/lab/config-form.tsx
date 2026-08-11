@@ -21,8 +21,16 @@ import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { acceptedFields, inertFields, mediaDefaults, randomSeed, type Draft } from "@/lib/config"
-import { modelStem } from "@/lib/format"
+import {
+  acceptedFields,
+  inertFields,
+  mediaDefaults,
+  randomSeed,
+  turboLora,
+  turboSteps,
+  type Draft,
+} from "@/lib/config"
+import { loraStem, modelStem } from "@/lib/format"
 import { LIMITS } from "@/lib/limits"
 import { cn } from "@/lib/utils"
 
@@ -36,6 +44,7 @@ type FormProps = {
 export function ConfigForm({ draft, onChange, meta, catalog }: FormProps) {
   const inert = inertFields(draft)
   const accepted = acceptedFields(meta, draft.mode)
+  const steps = turboSteps(draft, catalog)
 
   return (
     <div className="space-y-4">
@@ -175,13 +184,23 @@ export function ConfigForm({ draft, onChange, meta, catalog }: FormProps) {
           </Row>
           <Row
             label="Steps"
-            hint={inert.has("steps") ? "turbo runs a fixed 4-step schedule" : undefined}
+            hint={
+              inert.has("steps")
+                ? steps
+                  ? `this LoRA samples at ${steps} steps`
+                  : "the turbo LoRA sets the schedule"
+                : undefined
+            }
           >
             <NumberField
-              value={draft.steps ?? 20}
+              // A turbo run samples at its LoRA's schedule, so that is the count to show while
+              // the field is inert. `draft.steps` is left alone underneath: turning turbo off
+              // has to give the number back, not the LoRA's.
+              value={(inert.has("steps") ? steps : undefined) ?? draft.steps ?? 20}
               min={LIMITS.steps.min}
               max={LIMITS.steps.max}
               disabled={inert.has("steps")}
+              label="Steps"
               onChange={(value) => onChange({ steps: value })}
             />
           </Row>
@@ -191,6 +210,7 @@ export function ConfigForm({ draft, onChange, meta, catalog }: FormProps) {
                 value={draft.seed ?? 0}
                 min={0}
                 max={Number.MAX_SAFE_INTEGER}
+                label="Seed"
                 onChange={(value) => onChange({ seed: value })}
               />
               <Button
@@ -234,11 +254,42 @@ export function ConfigForm({ draft, onChange, meta, catalog }: FormProps) {
       >
         <div className="space-y-3">
           <Toggle
-            label="Turbo LoRA"
-            hint="Four steps instead of twenty. Fast, and it changes the look."
+            label="Turbo"
+            hint="A distilled LoRA samples in a handful of steps instead of twenty. Fast, and it changes the look — which is the thing worth measuring."
             checked={draft.turbo ?? false}
             onChange={(checked) => onChange({ turbo: checked })}
           />
+          {draft.turbo ? (
+            <div className="border-rule ml-5 space-y-3 border-l pl-4">
+              <Row
+                label="LoRA"
+                hint={steps ? `${steps}-step schedule` : catalog?.turbo_loras_source}
+              >
+                <Choice
+                  value={turboLora(draft, catalog)}
+                  options={catalog?.turbo_loras ?? []}
+                  render={loraStem}
+                  onChange={(value) => onChange({ turbo_lora: value })}
+                  label="Turbo LoRA"
+                  placeholder="pick a LoRA"
+                />
+              </Row>
+              <Row label="Strength" hint={`${(draft.turbo_lora_strength ?? 1).toFixed(2)} ×`}>
+                <Slider
+                  value={[draft.turbo_lora_strength ?? 1]}
+                  min={LIMITS.turbo_lora_strength.min}
+                  max={LIMITS.turbo_lora_strength.max}
+                  step={LIMITS.turbo_lora_strength.step}
+                  aria-label="Turbo strength"
+                  onValueChange={(value) =>
+                    onChange({
+                      turbo_lora_strength: Array.isArray(value) ? value[0] : (value as number),
+                    })
+                  }
+                />
+              </Row>
+            </div>
+          ) : null}
           <Toggle
             label="Sol-Attn"
             hint="Sparse attention. Usually free speed; sometimes softens motion."
@@ -274,12 +325,14 @@ export function ConfigForm({ draft, onChange, meta, catalog }: FormProps) {
             </Row>
           ) : null}
 
-          <Toggle
-            label="RIFE interpolation"
-            hint="Doubles the frame rate after sampling. Post-processing, not generation."
-            checked={draft.rife ?? false}
-            onChange={(checked) => onChange({ rife: checked })}
-          />
+          <Row label="Frame interpolation" hint="Post-processing. 24 → 48 → 60 fps.">
+            <Levels
+              value={draft.interp ?? "off"}
+              levels={meta?.interpolations ?? []}
+              render={(value) => meta?.interpolation_labels?.[value] ?? value}
+              onChange={(value) => onChange({ interp: value as Draft["interp"] })}
+            />
+          </Row>
           <Toggle
             label="Upscaler"
             hint="Enlarges the result. Costs time at the end of every run."
@@ -374,10 +427,13 @@ function Levels({
   value,
   levels,
   onChange,
+  render,
 }: {
   value: string
   levels: string[]
   onChange: (value: string) => void
+  /** For sets whose display names are not their values — `film` reads as "FILM Net". */
+  render?: (value: string) => string
 }) {
   return (
     <ToggleGroup
@@ -389,8 +445,8 @@ function Levels({
       className="w-full"
     >
       {levels.map((level) => (
-        <ToggleGroupItem key={level} value={level} className="flex-1 capitalize">
-          {level}
+        <ToggleGroupItem key={level} value={level} className={cn("flex-1", !render && "capitalize")}>
+          {render ? render(level) : level}
         </ToggleGroupItem>
       ))}
     </ToggleGroup>
@@ -402,18 +458,22 @@ function NumberField({
   min,
   max,
   disabled,
+  label,
   onChange,
 }: {
   value: number
   min: number
   max: number
   disabled?: boolean
+  /** The visible `<Label>` beside the field is not associated with it, so name it here. */
+  label: string
   onChange: (value: number) => void
 }) {
   return (
     <Input
       type="number"
       inputMode="numeric"
+      aria-label={label}
       value={String(value)}
       min={min}
       max={max}

@@ -10,6 +10,7 @@ import { useState } from "react"
 import {
   ArrowLeft,
   Copy,
+  Download,
   Heart,
   Pin,
   RotateCw,
@@ -160,7 +161,10 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
             />
           </Section>
 
-          <Section title="The config that made it">
+          <Section
+            title="The config that made it"
+            hint="The workflow download is the same settings as a graph ComfyUI opens."
+          >
             <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
               {Object.entries(run.config)
                 .filter(([, value]) => value !== null && value !== "" && !isEmptyList(value))
@@ -200,6 +204,18 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
                 <Copy data-icon="inline-start" className="size-3.5" />
                 Copy JSON
               </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                render={
+                  // A plain anchor, not a router Link: the file is served by the API, and a
+                  // client-side navigation would try to route to it.
+                  <a href={routes.runWorkflow(run.id)} download>
+                    <Download data-icon="inline-start" className="size-3.5" />
+                    Download workflow
+                  </a>
+                }
+              />
             </div>
           </Section>
         </div>

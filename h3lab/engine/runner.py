@@ -14,9 +14,13 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
+from h3lab.comfy import roles as R
 from h3lab.comfy.client import ComfyClient, ComfyError, PromptRejected
-from h3lab.comfy.graph import WorkflowError, apply_config, load_workflow
+from h3lab.comfy.editor import run_provenance, to_editor_workflow
+from h3lab.comfy.graph import WorkflowError, build, load_workflow
 from h3lab.comfy.presets import cache_problems, cache_widgets, sol_widgets
+from h3lab.comfy.progress import ProgressTracker
+from h3lab.comfy.schema import SchemaCache
 from h3lab.domain.config import GenerationConfig
 from h3lab.domain.run import Artifact, Run, RunMetrics
 from h3lab.engine import artifacts
@@ -42,29 +46,67 @@ DIAGNOSED = (PreflightError, WorkflowError, ComfyError, RunNotFound, FileNotFoun
 
 
 class WorkflowCache:
-    """Templates are read once. Reloading per run made a mid-session edit change history."""
+    """Templates, read once per version of the file on disk.
 
-    def __init__(self, settings: Settings) -> None:
+    A template is parsed once and held, because re-reading a 130 kB export for every run of a
+    sweep is waste, and re-parsing it *during* one would let an edit change what a finished
+    benchmark claims to have run.
+
+    But the file being edited is the normal case here — the templates are worked on in ComfyUI
+    and re-exported — and a cache that never looks again means the lab keeps benchmarking a
+    graph that no longer exists on disk until somebody remembers to restart it. So the file's
+    mtime and size are checked on the way in: unchanged is a cache hit, changed is a reload and
+    an announcement, and either way a run holds one graph from start to finish.
+    """
+
+    def __init__(self, settings: Settings, *, events: EventBus | None = None) -> None:
         self._settings = settings
+        self._events = events
         self._lock = threading.Lock()
         self._loaded: dict[str, dict[str, Any]] = {}
+        self._stamps: dict[str, tuple[int, int]] = {}
+
+    @staticmethod
+    def _stamp(path: Path) -> tuple[int, int]:
+        info = path.stat()
+        return (info.st_mtime_ns, info.st_size)
 
     def get(self, mode: str) -> dict[str, Any]:
-        with self._lock:
-            cached = self._loaded.get(mode)
-            if cached is not None:
-                return cached
         path = self._settings.workflow_path(mode)
         if not path.is_file():
             raise WorkflowError(f"no workflow template for mode {mode!r} at {path}")
+        try:
+            stamp = self._stamp(path)
+        except OSError:
+            # A file we cannot stat may still read; treat it as changed rather than refuse.
+            stamp = None
+
+        with self._lock:
+            cached = self._loaded.get(mode)
+            if cached is not None and stamp is not None and self._stamps.get(mode) == stamp:
+                return cached
+            known = mode in self._loaded
+
         loaded = load_workflow(path)
         with self._lock:
             self._loaded[mode] = loaded
+            if stamp is None:
+                self._stamps.pop(mode, None)
+            else:
+                self._stamps[mode] = stamp
+        if known and self._events is not None:
+            self._events.publish(
+                "lab.message",
+                text=f"the {mode} workflow changed on disk and was reloaded",
+                mode=mode,
+                path=str(path),
+            )
         return loaded
 
     def invalidate(self) -> None:
         with self._lock:
             self._loaded.clear()
+            self._stamps.clear()
 
 
 def preflight(config: GenerationConfig, settings: Settings) -> list[str]:
@@ -75,6 +117,10 @@ def preflight(config: GenerationConfig, settings: Settings) -> list[str]:
         for name in config.media_files:
             if not (input_dir / name).is_file():
                 problems.append(f"{name} is not in ComfyUI's input folder")
+    lora_dir = settings.lora_models_dir
+    if config.turbo_lora_file and lora_dir.is_dir():
+        if not (lora_dir / config.turbo_lora_file).is_file():
+            problems.append(f"{config.turbo_lora_file} is not in ComfyUI's LoRA folder")
     if not settings.workflow_path(config.mode).is_file():
         problems.append(f"no workflow template for mode {config.mode!r}")
     if config.mp < MIN_MEGAPIXELS:
@@ -106,6 +152,7 @@ class Runner:
             settings.comfy_url, run_timeout_s=settings.comfy_timeout_s
         )
         self._workflows = workflows or WorkflowCache(settings)
+        self._schemas = SchemaCache(self._client)
         self._clear_cache = clear_cache_between_runs
 
         self._thread: threading.Thread | None = None
@@ -268,7 +315,10 @@ class Runner:
             raise PreflightError("; ".join(problems))
 
         workflow = self._workflows.get(run.config.mode)
-        prompt = apply_config(workflow, run.config, output_tag=run.id)
+        prompt, _graph, roles = build(
+            workflow, run.config, output_tag=run.id, schemas=self._schemas.get()
+        )
+        editor = to_editor_workflow(workflow, prompt, provenance=run_provenance(run))
 
         if self._clear_cache:
             # Without this, ComfyUI can replay the previous identical graph's outputs in
@@ -281,8 +331,16 @@ class Runner:
             return
 
         try:
-            outcome = self._client.execute(prompt, on_live=self._progress_for(run.id))
+            outcome = self._client.execute(
+                prompt,
+                on_live=self._progress_for(run.id),
+                workflow=editor,
+                tracker=ProgressTracker.of(prompt),
+            )
         except PromptRejected as exc:
+            # A rejection is what an install that changed under us looks like: a node pack
+            # updated, a widget renamed. Drop the cached schemas so the next run asks again.
+            self._schemas.invalidate()
             self._fail(run.id, f"ComfyUI rejected the graph — {exc}")
             return
         except ComfyError as exc:
@@ -300,7 +358,7 @@ class Runner:
                 wall_s=round(outcome.wall_s, 3),
                 sec_per_it=outcome.sec_per_it,
                 steps=outcome.steps or run.config.effective_steps,
-                sampler_cached=outcome.was_cached(10),
+                sampler_cached=outcome.was_cached(roles.id(R.SAMPLER)),
                 cache_cleared=self._clear_cache,
             ),
         )

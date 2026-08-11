@@ -3,7 +3,7 @@
  *
  * Everything on this page is arranged around one risk — that the voter answers a question
  * nobody asked. So the pair is drawn from runs that already agree on subject, resolution,
- * duration, RIFE and upscaling; the band across the top states what is held so the guarantee
+ * duration, interpolation and upscaling; the band across the top states what is held so the guarantee
  * is visible rather than merely true; and the clips carry no label, no rating and no run id,
  * because any of those would tell the eye which one to prefer. The settings that differ are
  * not in the document at all until the viewer asks for them.
@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { SkipForward } from "lucide-react"
-import { Link } from "react-router"
+import { Link, useSearchParams } from "react-router"
 
 import { ApiError } from "@/api/client"
 import { useArenaMatchup, useVote } from "@/api/hooks"
@@ -21,13 +21,15 @@ import { Failure, PageHeader, Section, Spinner, Stat } from "@/components/page"
 import { Filmstrip } from "@/components/filmstrip"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { ArenaNav } from "./nav"
+import { ArenaNav, useArenaFilterParam } from "./nav"
 
 export function ArenaPage() {
   const [skipped, setSkipped] = useState<string[]>([])
   const [judged, setJudged] = useState(0)
-  const query = useArenaMatchup(skipped)
+  const minStars = useArenaFilterParam()
+  const query = useArenaMatchup(skipped, minStars)
   const vote = useVote()
+  const [, setSearchParams] = useSearchParams()
 
   const offered = query.data ?? null
   const matchup = offered?.matchup
@@ -88,7 +90,12 @@ export function ArenaPage() {
       {query.isLoading ? (
         <Spinner label="Finding a fair pair" />
       ) : query.isError ? (
-        <EmptyArena error={query.error} onRetry={() => query.refetch()} />
+        <EmptyArena
+          error={query.error}
+          minStars={minStars}
+          onRetry={() => query.refetch()}
+          onShowAll={() => setSearchParams({ min_stars: "all" })}
+        />
       ) : matchup && a && b ? (
         <div className="space-y-3">
           <HeldBand
@@ -275,7 +282,17 @@ function Differences({ differences }: { differences: FieldDiff[] }) {
 }
 
 /** A 404 here is a state, not a fault: the lab has nothing comparable yet. */
-function EmptyArena({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+function EmptyArena({
+  error,
+  minStars,
+  onRetry,
+  onShowAll,
+}: {
+  error: unknown
+  minStars: number | null
+  onRetry: () => void
+  onShowAll: () => void
+}) {
   const problem = error instanceof ApiError ? error : null
   if (!problem || problem.kind !== "not_found") {
     return <Failure error={error} what="find a fair pair" onRetry={onRetry} />
@@ -284,8 +301,14 @@ function EmptyArena({ error, onRetry }: { error: unknown; onRetry: () => void })
   return (
     <Section title={problem.message}>
       <p className="text-muted-foreground max-w-prose text-sm">{problem.detail}</p>
-      <div className="mt-3 flex gap-2">
-        <Button size="sm" render={<Link to="/">Set up a sweep</Link>} />
+      <div className="mt-3 flex flex-wrap gap-2">
+        {minStars != null ? (
+          <Button size="sm" onClick={onShowAll}>
+            Show all runs
+          </Button>
+        ) : (
+          <Button size="sm" render={<Link to="/">Set up a sweep</Link>} />
+        )}
         <Button variant="ghost" size="sm" onClick={onRetry}>
           Look again
         </Button>

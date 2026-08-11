@@ -6,7 +6,7 @@
  * page errors, and failed requests — a page that renders while throwing is not a pass.
  */
 
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { chromium } from "playwright"
 
@@ -32,6 +32,23 @@ const TOUR = [
     path: "/",
     expect: ["Set up a run", "Queue", "Sweep", "This config"],
     async act(page) {
+      // Interpolation has three answers, named by the API rather than by the browser. A
+      // segmented control that renders but does not move the selection is the failure to catch.
+      const off = page.getByRole("button", { name: "Off", exact: true })
+      const film = page.getByRole("button", { name: "FILM Net", exact: true })
+      await page.getByRole("button", { name: "RIFE", exact: true }).waitFor({ timeout: 10_000 })
+      if ((await off.getAttribute("aria-pressed")) !== "true") {
+        throw new Error("interpolation did not start off")
+      }
+      await film.click()
+      if ((await film.getAttribute("aria-pressed")) !== "true") {
+        throw new Error("clicking FILM Net did not select it")
+      }
+      if ((await off.getAttribute("aria-pressed")) !== "false") {
+        throw new Error("two interpolators were selected at once")
+      }
+      await off.click()
+
       // A frame mode arrives with a frame already chosen, and shows it. The image has to load
       // from the API for real — a broken src is invisible in the DOM but obvious on screen.
       await page.getByRole("button", { name: "First / last frame" }).click()
@@ -219,6 +236,47 @@ await step("run", "/runs/:id (followed from the list)", async () => {
   await page.screenshot({ path: shot("run") })
 })
 
+/**
+ * The workflow download, taken the way a user takes it.
+ *
+ * jsdom can say the anchor has the right href. Only a browser can say the click produces a file,
+ * and the file is the entire feature: an editor graph, positioned, holding the interpolator this
+ * run actually used — not the API prompt, which opens as a heap of boxes.
+ */
+await step("workflow", "downloaded a run's graph and read it", async () => {
+  const listed = await page.request.get(base + "/api/runs?limit=50")
+  const body = await listed.json()
+  const runs = (body.items ?? body).map((item) => item.run ?? item)
+  const film = runs.find((run) => run.config.interp === "film")
+  if (!film) throw new Error("no interpolated run was seeded")
+
+  await page.goto(`${base}/runs/${film.id}`, { waitUntil: "networkidle" })
+  const link = page.getByRole("link", { name: /download workflow/i })
+  const [download] = await Promise.all([page.waitForEvent("download"), link.click()])
+
+  if (download.suggestedFilename() !== `h3lab-${film.id}.json`) {
+    throw new Error(`the file is named ${download.suggestedFilename()}`)
+  }
+  const saved = `${shots}workflow-${film.id}.json`
+  await download.saveAs(saved)
+  const workflow = JSON.parse(await readFile(saved, "utf8"))
+
+  if (!Array.isArray(workflow.nodes) || !Array.isArray(workflow.links)) {
+    throw new Error("the download is not an editor workflow")
+  }
+  const unplaced = workflow.nodes.filter((node) => !Array.isArray(node.pos))
+  if (unplaced.length) {
+    throw new Error(`${unplaced.length} node(s) have no position`)
+  }
+  const types = new Set(workflow.nodes.map((node) => node.type))
+  if (!types.has("FrameInterpolate")) throw new Error("the film run's graph has no interpolator")
+  if (types.has("RIFEInterpolation")) throw new Error("the graph kept an interpolator it did not use")
+  if (workflow.extra?.h3lab?.run_id !== film.id) {
+    throw new Error("the graph does not name the run it came from")
+  }
+  await page.screenshot({ path: shot("run-workflow") })
+})
+
 // Staging on one page and comparing on another is the flow the Bench tray exists for.
 await step("bench", "staged two runs, compared them", async () => {
   await page.goto(base + "/runs", { waitUntil: "networkidle" })
@@ -302,6 +360,78 @@ await step("hover", "a rested pointer played the clip", async () => {
   // Moving away has to give the decoder back, not leave a video playing off-screen.
   await page.getByRole("heading", { name: /Judge the results/i }).hover()
   await video.waitFor({ state: "detached", timeout: 10_000 })
+})
+
+/**
+ * The turbo LoRA, driven the way it is meant to be used: pick one, watch the schedule follow it,
+ * then sweep the axis.
+ *
+ * A distilled LoRA is trained for a fixed step count, so switching LoRAs silently changes the
+ * sampling. The count is computed on the server and shipped in the catalog, which means only a
+ * real page against a real API can show that the two agree — and the field is disabled, so the
+ * number on screen is the only place the run's true schedule is visible before it is queued.
+ */
+await step("turbo-lora", "picked a LoRA, swept the axis", async () => {
+  await page.goto(base, { waitUntil: "networkidle" })
+  const turbo = page.getByRole("switch", { name: /^Turbo/ })
+  await turbo.waitFor({ timeout: 15_000 })
+  await turbo.click()
+
+  const picker = page.getByRole("combobox", { name: "Turbo LoRA" })
+  await picker.waitFor({ timeout: 10_000 })
+  await page.getByText("4-step schedule").waitFor({ timeout: 10_000 })
+
+  await picker.click()
+  const options = page.getByRole("option")
+  await options.first().waitFor({ timeout: 10_000 })
+  const count = await options.count()
+  if (count < 2) throw new Error(`the picker offers ${count} LoRA(s), so there is no choice`)
+  const names = await options.allInnerTexts()
+  if (names.some((name) => /\.safetensors/.test(name))) {
+    throw new Error(`the options are raw filenames: ${names[0]}`)
+  }
+  // The 8-step file, chosen by what it reads as rather than by its position in the list.
+  const eight = names.findIndex((name) => /8step/i.test(name))
+  if (eight < 0) throw new Error(`no 8-step LoRA among ${names.join(", ")}`)
+  await options.nth(eight).click()
+
+  // The schedule moved with the pick, and the steps field shows it while refusing edits.
+  await page.getByText("8-step schedule").waitFor({ timeout: 10_000 })
+  const steps = page.getByRole("spinbutton", { name: "Steps" })
+  if (await steps.isEnabled()) throw new Error("a turbo run let its step count be edited")
+  if ((await steps.inputValue()) !== "8") {
+    throw new Error(`the steps field reads ${await steps.inputValue()}, not the LoRA's 8`)
+  }
+
+  // Strength is the second half of the axis, and it is a slider with no text input.
+  const strength = page.getByRole("slider", { name: "Turbo strength" })
+  await strength.focus()
+  await page.keyboard.press("ArrowLeft")
+  await page.getByText(/0\.9\d ×/).waitFor({ timeout: 10_000 })
+
+  await picker.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: shot("turbo-lora") })
+
+  // Sweeping it is the point: a matrix of LoRAs, priced by the server.
+  await page.getByRole("combobox", { name: "Add a sweep axis" }).click()
+  await page.getByRole("option", { name: /Turbo LoRA/ }).click()
+  const queue = page.getByRole("button", { name: /^Queue \d+ runs?$/ })
+  await queue.waitFor({ timeout: 10_000 })
+  const [priced] = await Promise.all([
+    page.waitForResponse(
+      (item) => item.url().includes("/api/sweeps/preview") && item.request().method() === "POST",
+      { timeout: 20_000 }
+    ),
+    page.getByRole("button", { name: "Preview" }).click(),
+  ])
+  if (priced.status() !== 200) throw new Error(`the preview answered ${priced.status()}`)
+  const body = await priced.json()
+  const loras = new Set(body.items.map((item) => item.config.turbo_lora))
+  if (loras.size < 2) throw new Error("the swept matrix names one LoRA")
+  if (!body.items.every((item) => item.config.turbo_lora_strength < 1)) {
+    throw new Error("the matrix dropped the strength the form was set to")
+  }
+  await page.screenshot({ path: shot("turbo-lora-sweep") })
 })
 
 // Rating from the list is the single most repeated action in the product.

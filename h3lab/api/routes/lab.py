@@ -12,6 +12,8 @@ from h3lab.comfy.catalog import Catalog
 from h3lab.domain.config import (
     CACHE_NAMES,
     FIELD_LABELS,
+    INTERP_LABELS,
+    INTERP_MODES,
     MODE_NEEDS,
     PRESET_LEVELS,
     GenerationConfig,
@@ -58,6 +60,8 @@ class Meta(BaseModel):
     field_labels: dict[str, str]
     modes: list[ModeNeeds]
     caches: list[str]
+    interpolations: list[str]
+    interpolation_labels: dict[str, str]
     preset_levels: list[str]
     config_fields: list[str]
     defaults: dict[str, Any] = Field(default_factory=dict)
@@ -91,6 +95,8 @@ def meta(settings: SettingsDep) -> Meta:
         field_labels=dict(FIELD_LABELS),
         modes=list(MODE_NEEDS),
         caches=list(CACHE_NAMES),
+        interpolations=list(INTERP_MODES),
+        interpolation_labels=dict(INTERP_LABELS),
         preset_levels=list(PRESET_LEVELS),
         config_fields=sorted(GenerationConfig.model_fields),
         defaults=field_defaults(),

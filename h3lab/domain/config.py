@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Annotated, Any, Iterable, Literal, Sequence
 
@@ -14,9 +15,15 @@ CacheName = Literal["none", "spectrum", "easy", "h3"]
 PresetLevel = Literal["conservative", "moderate", "aggressive", "custom"]
 CachePreset = PresetLevel
 RefImageSize = Literal["match", "max"]
+Interp = Literal["off", "film", "rife"]
 
 GEN_MODES: tuple[GenMode, ...] = ("flf2v", "t2v", "r2v")
 CACHE_NAMES: tuple[CacheName, ...] = ("none", "spectrum", "easy", "h3")
+INTERP_MODES: tuple[Interp, ...] = ("off", "film", "rife")
+INTERP_LABELS: dict[str, str] = {"off": "Off", "film": "FILM Net", "rife": "RIFE"}
+
+# Field names a stored config may still use. They are read and translated, never written.
+LEGACY_FIELD_ALIASES: frozenset[str] = frozenset({"rife"})
 PRESET_LEVELS: tuple[PresetLevel, ...] = (
     "conservative",
     "moderate",
@@ -33,17 +40,47 @@ DEFAULT_SAMPLER = "euler"
 DEFAULT_ASPECT = "16:9 (Widescreen)"
 DEFAULT_SEED = 42
 TURBO_STEPS = 4
+DEFAULT_TURBO_STRENGTH = 1.0
 
 # Fallback weights when a run does not name a file. The bare UNET loader handles every
 # non-GGUF diffusion model; only the .gguf extension needs the other loader.
 DEFAULT_UNET = "minimax_h3_fl2va_pruned_nvfp4.safetensors"
 DEFAULT_GGUF_UNET = "MiniMax-H3-FL2VA-Q4_K_M.gguf"
 
+# The distilled LoRA a turbo run uses when the config does not name one. The templates ship
+# with this file selected, so an existing run that only said `turbo: true` keeps its meaning.
+DEFAULT_TURBO_LORA = "minimax_h3_turbo_4step_comfyui_pruned.safetensors"
+
+# Distilled LoRAs are trained for a fixed schedule and say so in their filename. Reading it
+# is what lets two turbo LoRAs with different step counts be compared honestly: a 4-step LoRA
+# sampled at 8 steps, or an 8-step one at 4, measures the mismatch rather than the LoRA.
+#
+# The count has to be its own word. `minimax_h3_turbo_4step_...` is a 4-step LoRA, while
+# `..._turbo_v4_step600_ema_...` is version 4 at training step 600 and says nothing about a
+# schedule, so it falls back to the default rather than sampling at whatever it happens to
+# have been numbered.
+_STEP_IN_NAME = re.compile(r"(?:^|[^0-9a-z])(\d{1,3})[\s\-_]?step", re.IGNORECASE)
+
 
 def resolve_model_filename(diffusion_model: str) -> str:
     """The filename to hand the loader node."""
     name = (diffusion_model or "").strip()
     return name or DEFAULT_UNET
+
+
+def resolve_turbo_lora(turbo_lora: str) -> str:
+    """The filename to hand the turbo LoRA node."""
+    name = (turbo_lora or "").strip()
+    return name or DEFAULT_TURBO_LORA
+
+
+def turbo_steps_for(turbo_lora: str) -> int:
+    """The step count a distilled LoRA was trained for, from its filename."""
+    match = _STEP_IN_NAME.search(resolve_turbo_lora(turbo_lora))
+    if not match:
+        return TURBO_STEPS
+    steps = int(match.group(1))
+    return steps if 1 <= steps <= 200 else TURBO_STEPS
 
 
 def is_gguf(diffusion_model: str) -> bool:
@@ -125,7 +162,9 @@ class GenerationConfig(BaseModel):
     duration_s: Annotated[float, Field(ge=0.5, le=60.0)] = 5.0
 
     turbo: bool = False
-    rife: bool = False
+    turbo_lora: str = ""
+    turbo_lora_strength: Annotated[float, Field(ge=0.0, le=3.0)] = DEFAULT_TURBO_STRENGTH
+    interp: Interp = "off"
     upscaler: bool = False
     clean_vram: bool = False
 
@@ -136,6 +175,22 @@ class GenerationConfig(BaseModel):
     sol_preset: PresetLevel = "moderate"
     widgets: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_names(cls, data: Any) -> Any:
+        """Read `rife: bool`, the shape a config had before interpolation had three answers.
+
+        Stored runs, saved presets, and the old benchmark's export all still speak it. An
+        explicit `interp` wins, so a translated row can never overwrite a current one.
+        """
+        if not isinstance(data, dict) or "rife" not in data:
+            return data
+        moved = dict(data)
+        legacy = moved.pop("rife")
+        if moved.get("interp") is None:
+            moved["interp"] = "rife" if legacy else "off"
+        return moved
+
     @field_validator("prompt")
     @classmethod
     def _prompt_not_blank(cls, value: str) -> str:
@@ -144,7 +199,7 @@ class GenerationConfig(BaseModel):
             raise ValueError("prompt must not be empty")
         return text
 
-    @field_validator("diffusion_model", "first_frame", "last_frame")
+    @field_validator("diffusion_model", "turbo_lora", "first_frame", "last_frame")
     @classmethod
     def _to_basename(cls, value: str) -> str:
         text = str(value or "").strip()
@@ -181,6 +236,16 @@ class GenerationConfig(BaseModel):
         if not self.cache_enabled and self.cache != "none":
             object.__setattr__(self, "cache", "none")
 
+        # With turbo off there is no LoRA in the graph, so naming one would split the
+        # identity of two runs that produce the same pixels. With turbo on the opposite is
+        # true: "" means the default file, and a run that says so has to say which, or it
+        # would read as a different experiment from the one that spelled the name out.
+        if self.turbo:
+            object.__setattr__(self, "turbo_lora", resolve_turbo_lora(self.turbo_lora))
+        else:
+            object.__setattr__(self, "turbo_lora", "")
+            object.__setattr__(self, "turbo_lora_strength", DEFAULT_TURBO_STRENGTH)
+
         if self.mode == "flf2v" and not self.first_frame:
             raise ValueError("first_frame is required for mode 'flf2v'")
         if self.mode != "flf2v" and (self.first_frame or self.last_frame):
@@ -195,8 +260,13 @@ class GenerationConfig(BaseModel):
 
     @property
     def effective_steps(self) -> int:
-        """Turbo LoRA is trained for a fixed 4-step schedule."""
-        return TURBO_STEPS if self.turbo else self.steps
+        """A turbo run samples at the step count its LoRA was distilled for."""
+        return turbo_steps_for(self.turbo_lora) if self.turbo else self.steps
+
+    @property
+    def turbo_lora_file(self) -> str:
+        """The LoRA filename a turbo run loads, or empty when turbo is off."""
+        return self.turbo_lora if self.turbo else ""
 
     @property
     def cache_active(self) -> bool:
@@ -217,9 +287,14 @@ class GenerationConfig(BaseModel):
         return tuple(name for name in names if name)
 
     def merged(self, **overrides: Any) -> GenerationConfig:
-        """A new config with ``overrides`` applied and revalidated."""
+        """A new config with ``overrides`` applied and revalidated.
+
+        Legacy names are passed through for the model to translate, so an override written
+        against the old vocabulary changes the config instead of being quietly ignored.
+        """
+        known = set(type(self).model_fields) | LEGACY_FIELD_ALIASES
         data = self.model_dump()
-        data.update({k: v for k, v in overrides.items() if k in type(self).model_fields})
+        data.update({k: v for k, v in overrides.items() if k in known})
         return type(self)(**data)
 
 
@@ -244,7 +319,9 @@ HASHED_FIELDS: tuple[str, ...] = (
     "mp",
     "duration_s",
     "turbo",
-    "rife",
+    "turbo_lora",
+    "turbo_lora_strength",
+    "interp",
     "upscaler",
     "clean_vram",
     "cache_enabled",
@@ -322,7 +399,9 @@ FIELD_LABELS: dict[str, str] = {
     "mp": "Megapixels",
     "duration_s": "Duration",
     "turbo": "Turbo",
-    "rife": "RIFE",
+    "turbo_lora": "Turbo LoRA",
+    "turbo_lora_strength": "Turbo strength",
+    "interp": "Interpolation",
     "upscaler": "Upscaler",
     "clean_vram": "Clean VRAM",
     "cache_enabled": "Cache on",
@@ -403,7 +482,11 @@ def field_display(field: str, value: Any) -> str:
 # Fields the validator derives from another field. When the determinant already differs,
 # reporting the derived field too states the same fact twice: "Cache: none vs spectrum"
 # followed by "Cache on: off vs on" is one difference, not two.
-DERIVED_FROM: dict[str, str] = {"cache_enabled": "cache"}
+DERIVED_FROM: dict[str, str] = {
+    "cache_enabled": "cache",
+    "turbo_lora": "turbo",
+    "turbo_lora_strength": "turbo",
+}
 
 
 def config_diff(configs: Sequence[GenerationConfig]) -> list[FieldDiff]:
@@ -435,6 +518,16 @@ def model_stem(diffusion_model: str) -> str:
     return stem.strip("_-") or "default"
 
 
+def lora_stem(turbo_lora: str) -> str:
+    """A turbo LoRA in the few characters that distinguish it from the others."""
+    stem = model_stem(turbo_lora)
+    for noise in ("turbo_", "turbo-"):
+        if stem.lower().startswith(noise):
+            stem = stem[len(noise) :]
+            break
+    return stem.strip("_-") or "default"
+
+
 def derive_label(seq: int, cfg: GenerationConfig) -> str:
     """Human-facing display string. Never used as identity."""
     parts = [model_stem(cfg.diffusion_model)]
@@ -444,9 +537,11 @@ def derive_label(seq: int, cfg: GenerationConfig) -> str:
     parts.append(f"sol/{cfg.sol_preset[:3]}" if cfg.sol_attn else "nosol")
     parts.append(f"{cfg.effective_steps}st")
     if cfg.turbo:
-        parts.append("turbo")
-    if cfg.rife:
-        parts.append("rife")
+        parts.append(f"turbo/{lora_stem(cfg.turbo_lora_file)}")
+        if cfg.turbo_lora_strength != DEFAULT_TURBO_STRENGTH:
+            parts[-1] += f"@{cfg.turbo_lora_strength:g}"
+    if cfg.interp != "off":
+        parts.append(cfg.interp)
     if cfg.upscaler:
         parts.append("up")
     if cfg.mode != "flf2v":

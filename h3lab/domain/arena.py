@@ -8,13 +8,15 @@ So the comparison is fixed before the question is asked. Every field of a genera
 one of three things:
 
 *Held* — the subject and the presentation. Mode, prompt, media, aspect, megapixels, duration,
-RIFE, the upscaler. Two runs may only meet if all of these are identical. RIFE and the
-upscaler are here rather than in the ranking for the reason they exist: they make a clip look
-better without making the generation better, so a voter who can see one is answering a
-different question. Megapixels and duration flatter a clip the same way.
+frame interpolation, the upscaler. Two runs may only meet if all of these are identical.
+Interpolation and the upscaler are here rather than in the ranking for the reason they exist:
+they make a clip look better without making the generation better, so a voter who can see one
+is answering a different question. Megapixels and duration flatter a clip the same way.
 
-*Contested* — how the pixels were sampled. Weights, sampler, scheduler, steps, turbo, cache,
-attention. These are allowed to differ, and these are what the standings rank.
+*Contested* — how the pixels were sampled. Weights, sampler, scheduler, steps, turbo and which
+distilled LoRA it uses, cache, attention. These are allowed to differ, and these are what the
+standings rank. A turbo LoRA belongs here for the reason the whole feature exists: swapping one
+distilled LoRA for another changes the sampling and nothing about the subject.
 
 *Ignored* — the seed and the VRAM cleanup. Clearing VRAM cannot change a pixel. The seed can
 change everything, but it is noise rather than a setting: holding it would be the strongest
@@ -44,6 +46,7 @@ from typing import Iterable, Literal, Sequence
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from h3lab.domain.config import (
+    DEFAULT_TURBO_STRENGTH,
     DERIVED_FROM,
     FIELD_LABELS,
     HASHED_FIELDS,
@@ -53,6 +56,7 @@ from h3lab.domain.config import (
     canonical_form,
     digest,
     field_display,
+    lora_stem,
     model_stem,
 )
 from h3lab.domain.rating import Vote, replay_pairwise
@@ -72,7 +76,7 @@ HELD_FIELDS: frozenset[str] = frozenset(
         "aspect_ratio",
         "mp",
         "duration_s",
-        "rife",
+        "interp",
         "upscaler",
         "widgets",
     }
@@ -87,6 +91,8 @@ CONTESTED_FIELDS: frozenset[str] = frozenset(
         "scheduler",
         "steps",
         "turbo",
+        "turbo_lora",
+        "turbo_lora_strength",
         "cache",
         "cache_enabled",
         "cache_preset",
@@ -221,7 +227,7 @@ def pool_label(cfg: GenerationConfig) -> str:
         f"{cfg.mp:g} MP",
         f"{cfg.duration_s:g}s",
         cfg.aspect_ratio,
-        "rife" if cfg.rife else "no rife",
+        cfg.interp if cfg.interp != "off" else "no interp",
         "upscaled" if cfg.upscaler else "no upscale",
     ]
     return " · ".join(parts)
@@ -263,13 +269,20 @@ def loadout_label(cfg: GenerationConfig) -> str:
         f"sol/{cfg.sol_preset[:3]}" if cfg.sol_attn else "nosol",
     ]
     if cfg.turbo:
-        parts.append("turbo")
+        turbo = f"turbo/{lora_stem(cfg.turbo_lora_file)}"
+        if cfg.turbo_lora_strength != DEFAULT_TURBO_STRENGTH:
+            turbo += f"@{cfg.turbo_lora_strength:g}"
+        parts.append(turbo)
     return " · ".join(parts)
 
 
 def value_label(field: str, value: str) -> str:
     """A weights filename is 60 characters of shared prefix; rank it by the rest."""
-    return model_stem(value) if field == "diffusion_model" else value
+    if field == "diffusion_model":
+        return model_stem(value)
+    if field == "turbo_lora":
+        return lora_stem(value)
+    return value
 
 
 def contested_differences(a: GenerationConfig, b: GenerationConfig) -> list[FieldDiff]:

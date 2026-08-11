@@ -173,11 +173,14 @@ export function useTags() {
  * different question rather than a refetch of the same one — the skipped clip cannot come back
  * from the cache.
  */
-export function useArenaMatchup(exclude: string[] = []) {
+export function useArenaMatchup(exclude: string[] = [], minStars: number | null = 7) {
   return useQuery({
-    queryKey: keys.arenaMatchup(exclude),
+    queryKey: keys.arenaMatchup(exclude, minStars),
     queryFn: () =>
-      api.get<ArenaMatchup>(routes.arenaNext(), exclude.length ? { exclude } : undefined),
+      api.get<ArenaMatchup>(routes.arenaNext(), {
+        ...(exclude.length ? { exclude } : {}),
+        min_stars: minStars ?? 0,
+      }),
     // An empty arena is a 404 that says what to run; retrying will not change the answer.
     retry: false,
     staleTime: 0,
@@ -185,10 +188,11 @@ export function useArenaMatchup(exclude: string[] = []) {
   })
 }
 
-export function useArenaStandings() {
+export function useArenaStandings(minStars: number | null = 7) {
   return useQuery({
-    queryKey: keys.arenaStandings,
-    queryFn: () => api.get<ArenaStandings>(routes.arenaStandings()),
+    queryKey: keys.arenaStandings(minStars),
+    queryFn: () =>
+      api.get<ArenaStandings>(routes.arenaStandings(), { min_stars: minStars ?? 0 }),
   })
 }
 

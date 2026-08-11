@@ -24,6 +24,7 @@ _ENV_FIELDS: dict[str, tuple[str, str]] = {
     "PORT": ("port", "int"),
     "DATA_DIR": ("data_dir", "path"),
     "MODELS_DIR": ("models_dir", "path"),
+    "LORAS_DIR": ("loras_dir", "path"),
     "COMFY_INPUT_DIR": ("comfy_input_dir", "path"),
     "WORKFLOW_DIR": ("workflow_dir", "path"),
     "WEB_DIST": ("web_dist", "path"),
@@ -50,6 +51,8 @@ class Settings:
     port: int = DEFAULT_PORT
     data_dir: Path = REPO_ROOT / "results"
     models_dir: Path = DEFAULT_MODELS_DIR
+    # None means the sibling of the diffusion models, which is where ComfyUI keeps LoRAs.
+    loras_dir: Path | None = None
     comfy_input_dir: Path = DEFAULT_COMFY_INPUT_DIR
     workflow_dir: Path = REPO_ROOT
     web_dist: Path = REPO_ROOT / "web" / "dist"
@@ -64,6 +67,10 @@ class Settings:
     @property
     def diffusion_models_dir(self) -> Path:
         return self.models_dir
+
+    @property
+    def lora_models_dir(self) -> Path:
+        return self.loras_dir or self.models_dir.parent / "loras"
 
     def workflow_path(self, mode: str) -> Path:
         """The editor workflow template for a generation mode."""

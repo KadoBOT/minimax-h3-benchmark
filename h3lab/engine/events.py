@@ -80,6 +80,8 @@ class Subscription:
         self.closed = False
 
     def offer(self, event: Event) -> None:
+        if self.closed:
+            return
         try:
             self._queue.put_nowait(event)
         except queue.Full:
@@ -92,31 +94,45 @@ class Subscription:
             self.dropped += 1
 
     def get(self, timeout: float | None = None) -> Event | None:
+        if self.closed:
+            return None
         try:
-            return self._queue.get(timeout=timeout)
+            item = self._queue.get(timeout=timeout)
+            return item if not self.closed else None
         except queue.Empty:
             return None
 
     def drain(self) -> list[Event]:
         found: list[Event] = []
-        while True:
+        while not self.closed:
             try:
-                found.append(self._queue.get_nowait())
+                item = self._queue.get_nowait()
+                if item is not None:
+                    found.append(item)
             except queue.Empty:
                 return found
+        return found
 
     def stream(self, *, heartbeat_s: float = 15.0) -> Iterator[Event]:
         """Yield events forever, with a heartbeat so idle proxies keep the socket open."""
         while not self.closed:
             event = self.get(timeout=heartbeat_s)
+            if self.closed:
+                break
             if event is None:
                 yield Event(kind="heartbeat", seq=self._bus.last_seq)
                 continue
             yield event
 
     def close(self) -> None:
-        self.closed = True
-        self._bus.unsubscribe(self)
+        if not self.closed:
+            self.closed = True
+            self._bus.unsubscribe(self)
+            # Wake up any thread blocked in get() by offering a None sentinel.
+            try:
+                self._queue.put_nowait(None)  # type: ignore[arg-type]
+            except queue.Full:
+                pass
 
     def __enter__(self) -> Subscription:
         return self
@@ -132,6 +148,7 @@ class EventBus:
         self._buffer: list[Event] = []
         self._buffer_size = buffer
         self._seq = 0
+        self.closed = False
 
     @property
     def last_seq(self) -> int:
@@ -151,6 +168,8 @@ class EventBus:
         **data: Any,
     ) -> Event:
         with self._lock:
+            if self.closed:
+                return Event(seq=self._seq, kind=kind, run_id=run_id, data=data)
             self._seq += 1
             event = Event(seq=self._seq, kind=kind, run_id=run_id, data=data)
             self._buffer.append(event)
@@ -164,6 +183,9 @@ class EventBus:
     def subscribe(self, *, replay_after: int | None = None) -> Subscription:
         subscription = Subscription(self)
         with self._lock:
+            if self.closed:
+                subscription.close()
+                return subscription
             self._subscribers.append(subscription)
             missed = (
                 [event for event in self._buffer if event.seq > replay_after]
@@ -186,3 +208,12 @@ class EventBus:
     def clear(self) -> None:
         with self._lock:
             self._buffer.clear()
+
+    def close(self) -> None:
+        with self._lock:
+            self.closed = True
+            targets = list(self._subscribers)
+            self._subscribers.clear()
+        for subscription in targets:
+            subscription.close()
+

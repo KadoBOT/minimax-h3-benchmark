@@ -166,6 +166,72 @@ async def test_the_catalog_answers_even_with_comfy_offline(client: httpx.AsyncCl
     assert payload["samplers"], "a fallback sampler list is required"
 
 
+async def test_the_catalog_offers_a_turbo_lora_to_pick_from(client: httpx.AsyncClient):
+    payload = (await client.get(f"{API}/catalog")).json()
+    assert payload["turbo_loras"], "the picker needs at least the shipped LoRA"
+    assert payload["default_turbo_lora"] in payload["turbo_loras"]
+    assert payload["turbo_loras_source"] in {"comfy", "disk", "fallback"}
+    assert payload["defaults"]["turbo_lora"] == payload["default_turbo_lora"]
+
+
+async def test_meta_offers_the_turbo_lora_as_a_sweepable_axis(client: httpx.AsyncClient):
+    payload = (await client.get(f"{API}/meta")).json()
+    axes = {axis["field"]: axis for axis in payload["axes"]}
+    assert axes["turbo_lora"]["label"] == "Turbo LoRA"
+    assert axes["turbo_lora_strength"]["kind"] == "numeric"
+    assert "turbo_lora" in payload["config_fields"]
+
+
+async def test_a_run_queued_with_a_named_lora_reports_it_back(client: httpx.AsyncClient, config):
+    turbo = config.merged(
+        turbo=True, turbo_lora="minimax_h3_turbo_8step.safetensors", turbo_lora_strength=0.75
+    )
+    response = await client.post(f"{API}/runs", json=body(turbo))
+    assert response.status_code == 201
+    [view] = response.json()
+    assert view["run"]["config"]["turbo_lora"] == "minimax_h3_turbo_8step.safetensors"
+    assert view["run"]["config"]["turbo_lora_strength"] == 0.75
+    # The LoRA says how many steps it was distilled for, so the label says 8st, not 20st.
+    assert "8st" in view["run"]["label"]
+
+
+async def test_a_sweep_over_two_loras_queues_one_run_each(client: httpx.AsyncClient, config):
+    """The point of the whole axis: two runs that differ only in which LoRA was loaded."""
+    response = await client.post(
+        f"{API}/sweeps",
+        json={
+            "base": config.merged(turbo=True).model_dump(mode="json"),
+            "axes": [
+                {"field": "turbo_lora", "values": ["a_4step.safetensors", "b_4step.safetensors"]}
+            ],
+        },
+    )
+    assert response.status_code == 201, response.text
+    views = response.json()
+    assert [view["run"]["config"]["turbo_lora"] for view in views] == [
+        "a_4step.safetensors",
+        "b_4step.safetensors",
+    ]
+    assert len({view["run"]["config_hash"] for view in views}) == 2
+
+
+async def test_a_sweep_over_lora_strength_previews_before_it_queues(
+    client: httpx.AsyncClient, config
+):
+    response = await client.post(
+        f"{API}/sweeps/preview",
+        json={
+            "base": config.merged(turbo=True).model_dump(mode="json"),
+            "axes": [{"field": "turbo_lora_strength", "values": [0.6, 0.8, 1.0]}],
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["count"] == 3
+    assert [item["config"]["turbo_lora_strength"] for item in payload["items"]] == [0.6, 0.8, 1.0]
+    assert len({item["config_hash"] for item in payload["items"]}) == 3
+
+
 # --- queueing --------------------------------------------------------------
 
 
@@ -235,6 +301,54 @@ async def test_rerunning_keeps_the_origin_in_the_notes(client: httpx.AsyncClient
     view = response.json()
     assert view["run"]["config"]["steps"] == 30
     assert "variant of" in view["run"]["notes"]
+
+
+async def test_a_run_can_be_downloaded_as_a_loadable_workflow(
+    client: httpx.AsyncClient, config
+):
+    """Not the API prompt. A file ComfyUI opens as the graph a person laid out."""
+    run_id = await queue_run(client, config)
+    response = await client.get(f"{API}/runs/{run_id}/workflow")
+
+    assert response.status_code == 200
+    assert f"{run_id}" in response.headers["content-disposition"]
+    assert response.headers["content-disposition"].startswith("attachment")
+
+    payload = response.json()
+    assert payload["nodes"] and payload["links"] is not None
+    assert payload["extra"]["h3lab"]["run_id"] == run_id
+    assert "class_type" not in json.dumps(payload), "an API prompt is what this replaces"
+
+
+async def test_the_exported_workflow_reflects_the_run_not_the_template(
+    client: httpx.AsyncClient, config
+):
+    run_id = await queue_run(client, config, interp="film", steps=33)
+    payload = (await client.get(f"{API}/runs/{run_id}/workflow")).json()
+    types = {node["type"] for node in payload["nodes"]}
+
+    assert "FrameInterpolate" in types, "the FILM interpolator ran, so it is in the file"
+    assert "RIFEInterpolation" not in types, "RIFE did not"
+    assert widget_of(payload, "VHS_VideoCombine", "frame_rate") == 48
+    assert widget_of(payload, "BasicScheduler", "steps") == 33
+
+
+def widget_of(workflow: dict[str, Any], class_type: str, name: str) -> Any:
+    """One widget value out of an exported workflow, read the way ComfyUI reads it."""
+    from h3lab.comfy.workflow import static_widget_names
+
+    node = next(item for item in workflow["nodes"] if item["type"] == class_type)
+    values = node["widgets_values"]
+    if isinstance(values, dict):
+        return values[name]
+    order = list(static_widget_names(class_type, node) or ())
+    return values[order.index(name)]
+
+
+async def test_exporting_a_run_that_is_not_there(client: httpx.AsyncClient):
+    response = await client.get(f"{API}/runs/NOPE/workflow")
+    assert response.status_code == 404
+    assert response.json()["kind"] == "not_found"
 
 
 async def test_asking_for_a_run_that_is_not_there(client: httpx.AsyncClient):
@@ -1011,6 +1125,29 @@ async def test_the_api_answers_over_a_real_socket(live_server: str, config, lab:
 
         listed = await real.get(f"{API}/runs", params={"min_stars": 7})
         assert [item["run"]["id"] for item in listed.json()["items"]] == [run_id]
+
+
+async def test_arena_endpoints_support_min_stars_filtering(client: httpx.AsyncClient, config, lab: Lab):
+    r1 = await queue_run(client, config, cache="easy")
+    r2 = await queue_run(client, config, cache="h3")
+    finish(lab, r1, sec_per_it=8.0, video=True)
+    finish(lab, r2, sec_per_it=6.0, video=True)
+
+    # Initially, neither is rated, so min_stars=7 returns 404 not found
+    res = await client.get(f"{API}/arena/next", params={"min_stars": 7})
+    assert res.status_code == 404
+
+    # With min_stars=0 (all runs), it finds the pair
+    res_all = await client.get(f"{API}/arena/next", params={"min_stars": 0})
+    assert res_all.status_code == 200
+
+    # Rate both above 7
+    await client.put(f"{API}/runs/{r1}/rating", json={"stars": 8})
+    await client.put(f"{API}/runs/{r2}/rating", json={"stars": 9})
+
+    # Now min_stars=7 finds the pair
+    res_filtered = await client.get(f"{API}/arena/next", params={"min_stars": 7})
+    assert res_filtered.status_code == 200
 
 
 # --- the built front end ---------------------------------------------------

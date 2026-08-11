@@ -109,6 +109,10 @@ export interface Catalog {
   diffusion_models: string[];
   diffusion_models_source: string;
   default_diffusion_model: string;
+  turbo_loras?: string[];
+  turbo_loras_source?: string;
+  default_turbo_lora?: string;
+  turbo_lora_steps?: Record<string, number>;
   images: string[];
   videos: string[];
   audios: string[];
@@ -191,7 +195,9 @@ export interface GenerationConfig {
   mp?: number;
   duration_s?: number;
   turbo?: boolean;
-  rife?: boolean;
+  turbo_lora?: string;
+  turbo_lora_strength?: number;
+  interp?: "off" | "film" | "rife";
   upscaler?: boolean;
   clean_vram?: boolean;
   cache_enabled?: boolean;
@@ -294,6 +300,8 @@ export interface Meta {
   field_labels: Record<string, string>;
   modes: ModeNeeds[];
   caches: string[];
+  interpolations: string[];
+  interpolation_labels: Record<string, string>;
   preset_levels: string[];
   config_fields: string[];
   defaults?: Record<string, unknown>;
@@ -546,6 +554,7 @@ export const API_PATHS = [
   "/api/runs/{run_id}/cancel",
   "/api/runs/{run_id}/rating",
   "/api/runs/{run_id}/rerun",
+  "/api/runs/{run_id}/workflow",
   "/api/status",
   "/api/sweeps",
   "/api/sweeps/preview",

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse
 
 from h3lab.api.deps import LabDep
 from h3lab.api.schemas import (
@@ -44,6 +45,24 @@ def dry_run(lab: LabDep, body: DryRunRequest) -> DryRun:
 @router.get("/runs/{run_id}")
 def get_run(lab: LabDep, run_id: str) -> RunView:
     return lab.get_run(run_id)
+
+
+@router.get("/runs/{run_id}/workflow")
+def run_workflow(lab: LabDep, run_id: str) -> JSONResponse:
+    """The run's graph as a file ComfyUI opens.
+
+    Not the API prompt the run was submitted as — that loads as a heap of unpositioned boxes.
+    This is the template's own layout with the run's settings applied, which is the thing
+    somebody asking for "the workflow for this run" means.
+
+    Declared as a `JSONResponse` rather than a model because a ComfyUI workflow has no schema
+    the lab owns; pinning one here would mean editing this file whenever ComfyUI adds a key.
+    """
+    workflow = lab.workflow_for_run(run_id)
+    return JSONResponse(
+        workflow,
+        headers={"Content-Disposition": f'attachment; filename="h3lab-{run_id}.json"'},
+    )
 
 
 @router.post("/runs/{run_id}/rerun", status_code=201)

@@ -15,63 +15,110 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any
-
-# The advanced sampler node in the MiniMax H3 graphs. Its readings are the ones worth
-# preferring when several nodes report the same step count.
-PREFERRED_SAMPLER_NODES = frozenset({"10"})
+from typing import Any, Iterable, Mapping
 
 # A multi-step node cannot finish this fast; below the floor it is burst delivery.
 MIN_SECONDS_PER_STEP = 0.05
 BURST_STEP_THRESHOLD = 8
 MIN_WALL_PER_STEP = 0.15
 
-NODE_LABELS: dict[str, str] = {
-    "1": "UNET",
-    "2": "CLIP",
-    "3": "Video VAE",
-    "4": "Audio VAE",
-    "5": "Conditioning",
-    "6": "Scheduler",
-    "7": "Sampler select",
-    "8": "Guider",
-    "10": "Sampler",
-    "12": "Audio decode",
-    "15": "EasyCache",
-    "20": "Load image",
-    "91": "Sage attention",
-    "92": "Sol attention",
-    "95": "Interp FPS",
-    "96": "RIFE",
-    "97": "Clean VRAM",
-    "98": "Resolution",
-    "102": "Duration",
-    "103": "Frame math",
-    "107": "Prompt",
-    "110": "Video combine",
-    "111": "Upscaler",
-    "118": "Seed",
-    "119": "Noise",
-    "122": "Spectrum",
-    "123": "Sigma shift",
-    "125": "VAE decode",
-    "128": "H3 cache",
-    "130": "GGUF UNET",
-    "131": "GGUF CLIP",
+# Sampler classes: the nodes whose reading is worth preferring when several report the same
+# step count. Kept beside the role rules that name the same classes.
+SAMPLER_CLASSES = ("SamplerCustomAdvanced", "KSampler", "KSamplerAdvanced")
+
+# Short words for the classes whose own names are the least readable. Everything else is
+# labelled with its class name, which is already the truest thing we can say about a node.
+CLASS_LABELS: dict[str, str] = {
+    "UNETLoader": "Diffusion model",
+    "OTUNetLoaderW8A8": "Diffusion model",
+    "CheckpointLoaderSimple": "Checkpoint",
+    "GGUFLoaderKJ": "GGUF model",
+    "UnetLoaderGGUF": "GGUF model",
+    "CLIPLoader": "Text encoder",
+    "CLIPLoaderKJ": "Text encoder",
+    "CLIPLoaderGGUF": "GGUF text encoder",
+    "VAELoader": "VAE",
+    "MiniMaxH3ImageToVideo": "Conditioning",
+    "MiniMaxH3TextToVideo": "Conditioning",
+    "MiniMaxH3ReferenceToVideo": "Conditioning",
+    "MiniMaxH3TurboLoRA": "Turbo LoRA",
+    "LoraLoaderModelOnly": "LoRA",
+    "LoraLoader": "LoRA",
+    "BasicScheduler": "Scheduler",
+    "KSamplerSelect": "Sampler select",
+    "BasicGuider": "Guider",
+    "CFGGuider": "Guider",
+    "SamplerCustomAdvanced": "Sampler",
+    "KSampler": "Sampler",
+    "KSamplerAdvanced": "Sampler",
+    "RandomNoise": "Noise",
+    "DisableNoise": "Noise",
+    "VAEDecode": "VAE decode",
+    "VAEDecodeTiled": "VAE decode",
+    "VAEDecodeAudio": "Audio decode",
+    "RIFEInterpolation": "RIFE",
+    "FrameInterpolate": "FILM",
+    "FrameInterpolationModelLoader": "FILM model",
+    "RTXVideoSuperResolution": "Upscaler",
+    "ImageUpscaleWithModel": "Upscaler",
+    "VHS_VideoCombine": "Video out",
+    "SaveVideo": "Video out",
+    "LoadImage": "Load image",
+    "LoadImageOutput": "Load image",
+    "easy cleanGpuUsed": "Free VRAM",
+    "PathchSageAttentionKJ": "Sage attention",
+    "PatchSageAttentionKJ": "Sage attention",
+    "SolAttnPatch": "Sol attention",
 }
 
 
-def node_label(node_id: str | int | None) -> str | None:
+def class_label(class_type: str | None) -> str | None:
+    if not class_type:
+        return None
+    return CLASS_LABELS.get(class_type, class_type)
+
+
+def labels_for(prompt: Mapping[str, Any]) -> dict[str, str]:
+    """A readable name per node id, taken from what each node is.
+
+    ComfyUI reports progress by id, and an id is the least stable thing in a workflow: folding
+    the pipeline into a subgraph turned node 10 into `169:10`, and a table keyed by id started
+    calling every node "node 169:10". The class travels with the node through any edit.
+    """
+    labels: dict[str, str] = {}
+    for node_id, node in prompt.items():
+        label = class_label(str((node or {}).get("class_type") or ""))
+        if label:
+            labels[str(node_id)] = label
+    return labels
+
+
+def sampler_nodes(prompt: Mapping[str, Any]) -> frozenset[str]:
+    return frozenset(
+        str(node_id)
+        for node_id, node in prompt.items()
+        if str((node or {}).get("class_type") or "") in SAMPLER_CLASSES
+    )
+
+
+def node_label(node_id: str | int | None, labels: Mapping[str, str] | None = None) -> str | None:
     if node_id is None:
         return None
     key = str(node_id)
-    return NODE_LABELS.get(key, f"node {key}")
+    return (labels or {}).get(key, f"node {key}")
 
 
 class ProgressTracker:
     """Accumulates progress events and reports the best trustworthy rate."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        labels: Mapping[str, str] | None = None,
+        *,
+        preferred: Iterable[str] = (),
+    ) -> None:
+        self.labels: dict[str, str] = dict(labels or {})
+        self.preferred: frozenset[str] = frozenset(preferred)
         self._lock = threading.Lock()
         self.current_node: str | None = None
         self.step: int | None = None
@@ -82,6 +129,13 @@ class ProgressTracker:
         self._best_rate: float | None = None
         self._best_steps: int = 0
         self._live_rate: float | None = None
+
+    @classmethod
+    def of(cls, prompt: Mapping[str, Any] | None) -> ProgressTracker:
+        """A tracker that can name the nodes of the graph about to run."""
+        if not prompt:
+            return cls()
+        return cls(labels_for(prompt), preferred=sampler_nodes(prompt))
 
     # --- plausibility ------------------------------------------------------
 
@@ -116,7 +170,7 @@ class ProgressTracker:
         if self._best_rate is None or more_steps or same_steps_slower:
             self._best_rate = candidate
             self._best_steps = steps
-        elif node in PREFERRED_SAMPLER_NODES and steps >= self._best_steps:
+        elif node in self.preferred and steps >= self._best_steps:
             self._best_rate = candidate
             self._best_steps = steps
 
@@ -190,7 +244,7 @@ class ProgressTracker:
             step = self.step
             total = self.step_total
             rate = self._best_rate if self._best_rate is not None else self._live_rate
-        out: dict[str, Any] = {"node": node, "node_label": node_label(node)}
+        out: dict[str, Any] = {"node": node, "node_label": node_label(node, self.labels)}
         if step is not None and total is not None:
             out["step"] = step
             out["step_total"] = total

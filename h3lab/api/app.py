@@ -41,8 +41,10 @@ def create_app(lab: Lab | None = None, settings: Settings | None = None) -> Fast
         try:
             yield
         finally:
+            lab_to_close = getattr(app.state, "lab", None) or started
+            if lab_to_close is not None:
+                await asyncio.to_thread(lab_to_close.close)
             if getattr(app.state, "owns_lab", False):
-                await asyncio.to_thread(started.close)
                 app.state.lab = None
 
     app = FastAPI(

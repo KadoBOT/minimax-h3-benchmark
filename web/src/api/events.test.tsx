@@ -8,6 +8,7 @@
 
 import { act, render, screen, waitFor } from "@testing-library/react"
 import { QueryClientProvider } from "@tanstack/react-query"
+import { Toaster } from "@/components/ui/sonner"
 import { describe, expect, it } from "vitest"
 
 import { EventStreamProvider, useStream } from "@/api/events"
@@ -32,6 +33,7 @@ function mount() {
     <QueryClientProvider client={client}>
       <EventStreamProvider>
         <Readout />
+        <Toaster />
       </EventStreamProvider>
     </QueryClientProvider>
   )
@@ -110,6 +112,18 @@ describe("the event stream", () => {
     act(() => source().onmessage?.({ data: "{not json" } as MessageEvent))
     act(() => source().emit({ seq: 4, kind: "heartbeat", data: {} }))
     await waitFor(() => expect(screen.getByTestId("seq")).toHaveTextContent("4"))
+  })
+
+  it("says so when the lab notices a workflow file changed", async () => {
+    const { source } = mount()
+    act(() =>
+      source().emit({
+        seq: 1,
+        kind: "lab.message",
+        data: { text: "the flf2v workflow changed on disk and was reloaded", mode: "flf2v" },
+      })
+    )
+    expect(await screen.findByText(/flf2v workflow changed on disk/i)).toBeInTheDocument()
   })
 
   it("refreshes the derived views when a run finishes", async () => {

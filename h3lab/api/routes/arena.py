@@ -18,26 +18,33 @@ router = APIRouter(prefix="/arena", tags=["arena"])
 def next_matchup(
     lab: LabDep,
     exclude: Annotated[list[str] | None, Query()] = None,
+    min_stars: Annotated[int | None, Query(ge=0, le=10)] = None,
 ) -> Any:
     """Two runs that differ only in how they were sampled.
 
     `exclude` carries the runs this voter has skipped, so a clip they could not judge does
     not come back on the next request.
+    `min_stars` filters participants by minimum score.
     """
-    offered = lab.arena_matchup(exclude=exclude or [])
+    offered = lab.arena_matchup(exclude=exclude or [], min_stars=min_stars)
     if offered is None:
+        filter_detail = f" with score ≥ {min_stars}" if min_stars and min_stars > 0 else ""
         return problem(
             404,
             "not_found",
             "nothing fair to compare yet",
-            "The arena only pairs finished runs that share the same mode, prompt, "
-            "megapixels, duration, RIFE and upscaler, and differ in how they were sampled. "
+            f"The arena only pairs finished runs{filter_detail} that share the same mode, prompt, "
+            "megapixels, duration, interpolation and upscaler, and differ in how they were "
+            "sampled. "
             "Sweep a sampler, scheduler, or set of weights over one recipe to fill it.",
         )
     return offered
 
 
 @router.get("/standings")
-def standings(lab: LabDep) -> ArenaStandings:
+def standings(
+    lab: LabDep,
+    min_stars: Annotated[int | None, Query(ge=0, le=10)] = None,
+) -> ArenaStandings:
     """Every setting the votes rank, plus the votes that could not be counted and why."""
-    return lab.arena_standings()
+    return lab.arena_standings(min_stars=min_stars)

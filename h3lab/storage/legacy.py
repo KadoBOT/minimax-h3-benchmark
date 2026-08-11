@@ -13,7 +13,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from h3lab.domain.config import GenerationConfig
+from h3lab.domain.config import LEGACY_FIELD_ALIASES, GenerationConfig
 from h3lab.domain.run import Artifact, RunMetrics, RunStatus
 from h3lab.settings import Settings
 from h3lab.storage.judgement import RatingRepository
@@ -51,11 +51,10 @@ class ImportReport(BaseModel):
 
 def _config_from_legacy(raw: dict) -> GenerationConfig:
     data = {key: value for key, value in raw.items() if key not in DROPPED_FIELDS}
-    data = {
-        key: value
-        for key, value in data.items()
-        if key in GenerationConfig.model_fields and value is not None
-    }
+    # Legacy aliases are kept and translated by the model. Dropping them here would lose the
+    # setting silently, which is worse than the rename it survived.
+    known = set(GenerationConfig.model_fields) | LEGACY_FIELD_ALIASES
+    data = {key: value for key, value in data.items() if key in known and value is not None}
     try:
         return GenerationConfig(**data)
     except ValidationError:

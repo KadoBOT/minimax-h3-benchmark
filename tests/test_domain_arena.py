@@ -56,12 +56,16 @@ def test_every_config_field_is_classified_exactly_once():
 
 def test_presentation_is_held_and_sampling_is_contested():
     # The four the request names: they flatter a clip without improving the generation.
-    for field in ("mp", "duration_s", "rife", "upscaler"):
+    for field in ("mp", "duration_s", "interp", "upscaler"):
         assert field in HELD_FIELDS
     # The subject has to be the same clip, or the vote is about the scene.
     for field in ("mode", "prompt", "first_frame", "ref_images", "aspect_ratio"):
         assert field in HELD_FIELDS
     for field in ("diffusion_model", "sampler", "scheduler", "steps"):
+        assert field in CONTESTED_FIELDS
+    # Swapping one distilled LoRA for another changes the sampling and nothing else, which is
+    # exactly what the arena exists to rank.
+    for field in ("turbo", "turbo_lora", "turbo_lora_strength"):
         assert field in CONTESTED_FIELDS
     # Noise is not a setting, and clearing VRAM cannot change a pixel.
     assert IGNORED_FIELDS == {"seed", "clean_vram"}
@@ -79,7 +83,10 @@ def test_a_pool_is_everything_the_voter_must_not_be_able_to_see(base_config):
 
     assert pool_key(base_config.merged(mp=1.0)) != same
     assert pool_key(base_config.merged(duration_s=8.0)) != same
-    assert pool_key(base_config.merged(rife=True)) != same
+    assert pool_key(base_config.merged(interp="rife")) != same
+    assert pool_key(base_config.merged(interp="film")) != pool_key(
+        base_config.merged(interp="rife")
+    )
     assert pool_key(base_config.merged(upscaler=True)) != same
     assert pool_key(base_config.merged(prompt="something else entirely")) != same
 
@@ -88,12 +95,13 @@ def test_the_pool_states_what_is_held(base_config):
     held = held_summary(base_config)
     assert held["Megapixels"] == "0.5 MP"
     assert held["Duration"] == "5s"
-    assert held["RIFE"] == "off"
+    assert held["Interpolation"] == "off"
     assert held["Upscaler"] == "off"
     # A contested setting must never appear in the list of what is held.
     assert "Sampler" not in held
     assert "0.5 MP" in pool_label(base_config)
-    assert "no rife" in pool_label(base_config)
+    assert "no interp" in pool_label(base_config)
+    assert "film" in pool_label(base_config.merged(interp="film"))
 
 
 def test_a_setting_this_mode_never_uses_is_left_out_of_the_guarantee(base_config, t2v_config):
@@ -425,3 +433,36 @@ def test_a_loadout_reads_as_the_settings_it_is(base_config):
     assert "20st" in label
     assert loadout_key(base_config) != loadout_key(base_config.merged(sampler="dpmpp_2m"))
     assert loadout_key(base_config) == loadout_key(base_config.merged(seed=99))
+
+
+def test_two_turbo_loras_are_two_loadouts_and_read_as_different_ones(base_config):
+    first = base_config.merged(turbo=True, turbo_lora="minimax_h3_turbo_a_4step.safetensors")
+    second = base_config.merged(turbo=True, turbo_lora="minimax_h3_turbo_b_4step.safetensors")
+
+    assert loadout_key(first) != loadout_key(second)
+    assert loadout_label(first) != loadout_label(second)
+    assert "turbo/a_4step" in loadout_label(first)
+    assert "@0.6" in loadout_label(first.merged(turbo_lora_strength=0.6))
+
+
+def test_a_vote_between_two_turbo_loras_ranks_the_lora(base_config):
+    """The point of the axis: two runs that differ only in which LoRA was loaded."""
+    runs = [
+        run("a", base_config.merged(turbo=True, turbo_lora="minimax_h3_turbo_a_4step.safetensors")),
+        run("b", base_config.merged(turbo=True, turbo_lora="minimax_h3_turbo_b_4step.safetensors")),
+    ]
+    differences = contested_differences(runs[0].config, runs[1].config)
+    assert [item.field for item in differences] == ["turbo_lora"]
+
+    board = standings(runs, [vote("v1", "a", "b", "a")])
+    axis = next(item for item in board.axes if item.axis == "turbo_lora")
+    assert axis.label == "Turbo LoRA"
+    assert [row.label for row in axis.standings] == ["a_4step", "b_4step"]
+
+
+def test_a_lora_only_names_itself_once_turbo_is_already_the_difference(base_config):
+    """Turbo off has no LoRA, so "which LoRA" is not a second thing that changed."""
+    differences = contested_differences(
+        base_config.merged(turbo=False), base_config.merged(turbo=True)
+    )
+    assert [item.field for item in differences] == ["turbo"]

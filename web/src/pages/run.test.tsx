@@ -118,6 +118,15 @@ describe("a single run", () => {
     })
   })
 
+  it("offers the run's workflow as a file ComfyUI can open", async () => {
+    open()
+    await screen.findByText("h3/mod · 20st")
+
+    const link = screen.getByRole("link", { name: /download workflow/i })
+    expect(link).toHaveAttribute("href", "/api/runs/r1/workflow")
+    expect(link).toHaveAttribute("download")
+  })
+
   it("shows the failure text when a run produced nothing", async () => {
     open(
       makeView({

@@ -2,12 +2,18 @@
 
 Append a `Migration` to `MIGRATIONS`; never edit an existing one. The applied version
 lives in `app_state` so a database always knows how far it has come.
+
+A migration carries SQL, a Python step, or both. The Python step exists for the changes
+SQLite cannot express — rewriting a stored config and the digests derived from it needs
+the domain model, not an UPDATE.
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
+from typing import Callable
 
 from h3lab.storage.db import scalar, transaction
 
@@ -18,7 +24,8 @@ SCHEMA_VERSION_KEY = "schema_version"
 class Migration:
     version: int
     name: str
-    sql: str
+    sql: str = ""
+    fn: Callable[[sqlite3.Connection], None] | None = None
 
 
 _V1 = """
@@ -115,7 +122,47 @@ CREATE TABLE IF NOT EXISTS legacy_imports (
 """
 
 
-MIGRATIONS: tuple[Migration, ...] = (Migration(version=1, name="initial", sql=_V1),)
+def _rehash_configs(conn: sqlite3.Connection) -> None:
+    """Move every stored config off `rife` and onto `interp`, digests included.
+
+    `interp` is a hashed field, so the rename moved every `config_hash` and `recipe_hash`
+    ever written. Left alone, a re-queued run would look new, duplicate detection would
+    stop matching, and the arena would pool a run against itself under two identities.
+
+    A row whose config will not parse is left exactly as it is. A benchmark result nobody
+    can read is still worth more than a tidy schema, and it will be skipped again next time
+    rather than lost now.
+    """
+    from h3lab.domain.config import GenerationConfig, config_hash, recipe_hash
+
+    for table, rehash in (("runs", True), ("presets", False)):
+        for row in conn.execute(f"SELECT id, config_json FROM {table}").fetchall():
+            try:
+                config = GenerationConfig(**json.loads(row["config_json"]))
+            except Exception:
+                continue
+            payload = config.model_dump_json()
+            if rehash:
+                conn.execute(
+                    "UPDATE runs SET config_json = ?, config_hash = ?, recipe_hash = ? "
+                    "WHERE id = ?",
+                    (payload, config_hash(config), recipe_hash(config), row["id"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE presets SET config_json = ? WHERE id = ?", (payload, row["id"])
+                )
+
+
+MIGRATIONS: tuple[Migration, ...] = (
+    Migration(version=1, name="initial", sql=_V1),
+    Migration(version=2, name="rename-rife-to-interp", fn=_rehash_configs),
+    # The turbo LoRA and its strength became hashed fields, which moved every digest ever
+    # written and left a stored `turbo: true` row silent about which LoRA it used. Re-parsing
+    # each config through the current model fills in the file the templates shipped with —
+    # the one those runs actually loaded — and recomputes both digests from it.
+    Migration(version=3, name="turbo-lora-as-a-setting", fn=_rehash_configs),
+)
 
 LATEST_VERSION = max(migration.version for migration in MIGRATIONS)
 
@@ -142,8 +189,11 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
         # executescript commits any open transaction, so it cannot sit inside one.
         # Every statement is CREATE ... IF NOT EXISTS, which makes a half-applied
         # migration safe to re-run.
-        conn.executescript(migration.sql)
+        if migration.sql:
+            conn.executescript(migration.sql)
         with transaction(conn):
+            if migration.fn is not None:
+                migration.fn(conn)
             conn.execute(
                 "INSERT INTO app_state (key, value) VALUES (?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",

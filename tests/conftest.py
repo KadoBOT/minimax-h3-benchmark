@@ -12,6 +12,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from h3lab.comfy.client import Outcome  # noqa: E402
+from h3lab.comfy.progress import SAMPLER_CLASSES  # noqa: E402
 from h3lab.domain.config import GenerationConfig  # noqa: E402
 from h3lab.settings import Settings  # noqa: E402
 
@@ -56,8 +57,11 @@ class StubComfy:
 
     def __init__(self) -> None:
         self.submitted: list[dict[str, Any]] = []
+        self.workflows: list[dict[str, Any] | None] = []
+        self.progress: list[dict[str, Any]] = []
         self.cache_clears = 0
         self.cancels = 0
+        self.object_info_reads = 0
         self.raise_on_execute: Exception | None = None
         self.sec_per_it: float | None = 8.5
         self.video_bytes = b"stub video payload"
@@ -73,10 +77,36 @@ class StubComfy:
         self.cancels += 1
         self.block.set()
 
-    def execute(self, prompt, *, track: bool = True, on_live=None) -> Outcome:
+    def object_info_all(self) -> dict[str, Any]:
+        """No schemas: this stub is the offline case, and the lab must build anyway."""
+        self.object_info_reads += 1
+        return {}
+
+    def execute(
+        self, prompt, *, track: bool = True, on_live=None, workflow=None, tracker=None
+    ) -> Outcome:
         self.submitted.append(prompt)
+        self.workflows.append(workflow)
         if on_live is not None:
-            on_live({"node": "10", "step": 1, "step_total": 20, "sec_per_it": self.sec_per_it})
+            # Report progress the way ComfyUI does — by node id, through the tracker — so the
+            # labels a browser receives are the ones the real path would produce.
+            node = next(
+                (
+                    node_id
+                    for node_id, node in prompt.items()
+                    if node["class_type"] in SAMPLER_CLASSES
+                ),
+                next(iter(prompt), "1"),
+            )
+            if tracker is None:
+                snapshot = {"node": node, "step": 1, "step_total": 20}
+            else:
+                tracker.on_executing({"node": node})
+                tracker.on_progress({"node": node, "value": 1, "max": 20})
+                snapshot = tracker.snapshot()
+            snapshot.setdefault("sec_per_it", self.sec_per_it)
+            self.progress.append(dict(snapshot))
+            on_live(snapshot)
         self.block.wait(timeout=10.0)
         if self.raise_on_execute is not None:
             raise self.raise_on_execute

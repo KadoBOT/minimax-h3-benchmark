@@ -71,8 +71,9 @@ class Outcome:
                 found.update(str(node) for node in (message[1] or {}).get("nodes") or [])
         return found
 
-    def was_cached(self, node_id: str | int) -> bool:
-        return str(node_id) in self.cached_nodes()
+    def was_cached(self, node_id: str | int | None) -> bool:
+        """Whether ComfyUI reused one node. A node nobody could name was not cached."""
+        return node_id is not None and str(node_id) in self.cached_nodes()
 
 
 def parse_combo(spec: Any) -> list[str]:
@@ -188,6 +189,10 @@ class ComfyClient:
     def object_info(self, class_type: str) -> dict[str, Any]:
         return self._call("GET", f"/object_info/{class_type}") or {}
 
+    def object_info_all(self) -> dict[str, Any]:
+        """Every installed node class. Large — read it once and cache it."""
+        return self._call("GET", "/object_info", timeout=120.0) or {}
+
     def combo_options(self, class_type: str, input_name: str) -> list[str]:
         """The dropdown values ComfyUI itself offers for one widget."""
         info = self.object_info(class_type).get(class_type) or {}
@@ -251,8 +256,17 @@ class ComfyClient:
 
     # --- queueing ----------------------------------------------------------
 
-    def queue(self, prompt: Prompt) -> str:
-        payload = {"prompt": prompt, "client_id": self.client_id}
+    def queue(self, prompt: Prompt, *, workflow: dict[str, Any] | None = None) -> str:
+        """Submit *prompt*, optionally saying which editor graph it came from.
+
+        ComfyUI hands `extra_data.extra_pnginfo` to any node that asks for it, and VHS writes
+        every key of it into the PNG it saves beside the video. The `workflow` key is the one
+        the frontend prefers when an image is dropped on the canvas, so sending it is the
+        difference between reopening a run as its own graph and reopening it as API boxes.
+        """
+        payload: dict[str, Any] = {"prompt": prompt, "client_id": self.client_id}
+        if workflow is not None:
+            payload["extra_data"] = {"extra_pnginfo": {"workflow": workflow}}
         try:
             response = self._http.post("/prompt", json=payload, timeout=self._timeout())
         except httpx.HTTPError as exc:
@@ -305,9 +319,11 @@ class ComfyClient:
         *,
         track: bool = True,
         on_live: LiveCallback | None = None,
+        workflow: dict[str, Any] | None = None,
+        tracker: ProgressTracker | None = None,
     ) -> Outcome:
         """Queue one graph and wait for it, deriving the sampling rate while it runs."""
-        tracker = ProgressTracker()
+        tracker = tracker if tracker is not None else ProgressTracker.of(prompt)
         listener: _ProgressListener | None = None
         if track:
             listener = _ProgressListener(self._ws_url(), tracker, on_live)
@@ -315,7 +331,7 @@ class ComfyClient:
 
         started = time.perf_counter()
         try:
-            prompt_id = self.queue(prompt)
+            prompt_id = self.queue(prompt, workflow=workflow)
         except ComfyError:
             if listener is not None:
                 listener.stop()

@@ -1,23 +1,32 @@
-"""Turning an editor workflow into an executable ComfyUI prompt.
+"""Turning an editor workflow into an executable ComfyUI prompt for one config.
 
-Two jobs live here. `to_api_prompt` translates the editor's node/link format into the flat
-`{id: {class_type, inputs}}` shape the API wants. `apply_config` then rewires that graph to
-match one `GenerationConfig`: it drops the nodes this run does not use and relinks the
-survivors so no link points at a hole.
+`apply_config` reads the workflow (see `workflow.py`), works out which node plays which part
+(see `roles.py`), and then *thins* the graph instead of rewiring it: every node this run does
+not want is switched off, and switching a node off means its consumers are reconnected to
+whatever fed it — exactly what ComfyUI's own bypass does. Nothing here knows the order of the
+model chain, which is why re-ordering that chain in the editor cannot break it.
 
-The rewiring is explicit rather than switch-driven because ComfyUI validates the whole
-prompt before running anything. One dangling link fails the submission, and one orphan
-output node fails it too — so both are removed here rather than hoped away.
+What the lab does not own, it does not touch. A grade node the template left bypassed stays
+bypassed; an attention patch the template added stays in the chain. The lab only asserts the
+axes a benchmark varies.
+
+Two rules keep a prompt submittable, and both are enforced at the end rather than hoped for:
+no input may point at a node that is gone, and nothing may be in the prompt that the chosen
+output does not need.
 """
 
 from __future__ import annotations
 
-import json
+from collections import deque
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from h3lab.comfy import nodes as N
+from h3lab.comfy import roles as R
 from h3lab.comfy.presets import cache_widgets, sol_widgets
+from h3lab.comfy.schema import Schemas, static_schemas
+from h3lab.comfy.workflow import Graph, Node, Prompt, is_link, load_workflow, read
+from h3lab.comfy.workflow import to_api_prompt as read_api_prompt
 from h3lab.domain.config import (
     DEFAULT_ASPECT,
     MAX_REF_AUDIOS,
@@ -25,428 +34,72 @@ from h3lab.domain.config import (
     MAX_REF_VIDEOS,
     GenerationConfig,
     resolve_model_filename,
+    resolve_turbo_lora,
 )
 
-Prompt = dict[str, dict[str, Any]]
+__all__ = [
+    "Prompt",
+    "WorkflowError",
+    "apply_config",
+    "build",
+    "describe",
+    "load_workflow",
+    "missing_links",
+    "output_filename_prefix",
+    "referenced_files",
+    "to_api_prompt",
+]
 
 DEFAULT_BASE_FPS = 24
 DEFAULT_INTERP_FPS = 60
+
+# FILM Net takes a frame count multiplier rather than a target rate. Two is the node's own
+# minimum and its default, and the only value the lab offers: the setting exists so a run can
+# be compared with and without interpolation, not so the factor can be swept.
+FILM_MULTIPLIER = 2
+
+# Modes ComfyUI gives a node. The lab sets them to say what this run wants.
+ALWAYS = 0
+MUTED = 2
+BYPASSED = 4
+
+REF_FAMILIES: tuple[tuple[str, str, str, int], ...] = (
+    ("ref_images", "ref_images", "ref_image", MAX_REF_IMAGES),
+    ("ref_videos", "ref_videos", "ref_video", MAX_REF_VIDEOS),
+    ("ref_video_audios", "ref_video_audios", "ref_video_audio", MAX_REF_VIDEOS),
+    ("ref_audios", "ref_audios", "ref_audio", MAX_REF_AUDIOS),
+)
+
+_MEDIA_WIDGETS: tuple[str, ...] = ("image", "file", "audio", "video")
+
+# Where pictures arrive. The lab owns these links, so they are never followed upstream when a
+# node is switched on.
+_IMAGE_INPUTS: tuple[str, ...] = ("images", "image", "frames")
+
+_LOADER_CLASSES: dict[str, tuple[str, ...]] = {
+    "ref_images": ("LoadImage", "LoadImageOutput"),
+    "ref_videos": ("LoadVideo", "VHS_LoadVideo"),
+    "ref_video_audios": ("LoadAudio",),
+    "ref_audios": ("LoadAudio",),
+}
+
+_MINTED: dict[str, tuple[str, tuple[str, ...]]] = {
+    "ref_images": ("LoadImage", ("IMAGE", "MASK")),
+    "ref_videos": ("LoadVideo", ("VIDEO",)),
+    "ref_video_audios": ("LoadAudio", ("AUDIO",)),
+    "ref_audios": ("LoadAudio", ("AUDIO",)),
+}
 
 
 class WorkflowError(RuntimeError):
     """The workflow template cannot express the requested configuration."""
 
 
-def load_workflow(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
-
-
-# --- editor format → api format -------------------------------------------
-
-
-def _widget_inputs(class_type: str, widgets_values: Any, inputs: dict[str, Any]) -> None:
-    """Fold positional editor widget values into named inputs. Links always win."""
-    if widgets_values is None:
-        return
-
-    if class_type == "VHS_VideoCombine" and isinstance(widgets_values, dict):
-        for key, value in widgets_values.items():
-            if key != "videopreview" and key not in inputs:
-                inputs[key] = value
-        return
-
-    names = N.WIDGET_ORDER.get(class_type)
-    if not names:
-        return
-
-    if not isinstance(widgets_values, (list, tuple)):
-        if len(names) == 1 and names[0] not in inputs:
-            inputs[names[0]] = widgets_values
-        return
-
-    for index, name in enumerate(names):
-        if index >= len(widgets_values):
-            break
-        if name in inputs:
-            continue
-        value = widgets_values[index]
-        # A null widget means "leave the node's own default alone", except for lora_mode
-        # where null is the meaningful "no LoRA" value.
-        if value is None and name != "lora_mode":
-            continue
-        inputs[name] = value
-
-
-def to_api_prompt(workflow: dict[str, Any]) -> Prompt:
-    """Flatten an editor workflow into the API prompt shape.
-
-    Autogrow inputs keep their dotted names (``ref_images.ref_image_0``); nesting them
-    under a dict fails validation as soon as another node depends on the result.
-    """
-    links = {link[0]: link for link in workflow.get("links") or []}
-
-    prompt: Prompt = {}
-    for node in workflow.get("nodes") or []:
-        class_type = node.get("type") or node.get("class_type")
-        if not class_type or class_type in N.UI_ONLY_TYPES:
-            continue
-        inputs: dict[str, Any] = {}
-        for slot in node.get("inputs") or []:
-            name = slot.get("name")
-            link_id = slot.get("link")
-            if name is None or link_id is None:
-                continue
-            link = links.get(link_id)
-            if not link:
-                continue
-            inputs[name] = [str(link[1]), int(link[2])]
-        _widget_inputs(class_type, node.get("widgets_values"), inputs)
-        prompt[str(node["id"])] = {"class_type": class_type, "inputs": inputs}
-
-    return prompt
-
-
 # --- small helpers ---------------------------------------------------------
-
-
-def link(prompt: Prompt, node: int | str, name: str, source: int | str, slot: int = 0) -> None:
-    prompt[str(node)]["inputs"][name] = [str(source), slot]
-
-
-def widget(prompt: Prompt, node: int | str, name: str, value: Any) -> None:
-    prompt[str(node)]["inputs"][name] = value
-
-
-def drop(prompt: Prompt, *ids: int | str) -> None:
-    for node_id in ids:
-        prompt.pop(str(node_id), None)
-
-
-def has(prompt: Prompt, node_id: int | str) -> bool:
-    return str(node_id) in prompt
-
-
-def _require(prompt: Prompt, node_id: int, what: str) -> None:
-    if not has(prompt, node_id):
-        raise WorkflowError(f"the workflow has no {what} (node {node_id})")
 
 
 def _basename(value: str) -> str:
     return Path(str(value).replace("\\", "/")).name
-
-
-def _primitive(prompt: Prompt, node_id: int, default: Any) -> Any:
-    if not has(prompt, node_id):
-        return default
-    return prompt[str(node_id)]["inputs"].get("value", default)
-
-
-def _set_known_widgets(prompt: Prompt, node_id: int | str, values: dict[str, Any]) -> None:
-    """Write widget values, but only names this node actually understands."""
-    key = str(node_id)
-    if key not in prompt:
-        return
-    inputs = prompt[key]["inputs"]
-    known = set(N.WIDGET_ORDER.get(prompt[key]["class_type"]) or ())
-    known.add("model")
-    for name, value in values.items():
-        if name in inputs or name in known:
-            inputs[name] = value
-
-
-# --- media wiring ----------------------------------------------------------
-
-
-def _ensure(prompt: Prompt, node_id: int, class_type: str, inputs: dict[str, Any]) -> None:
-    """Create a node the editor graph left out (a bypassed loader has no export)."""
-    key = str(node_id)
-    if key not in prompt:
-        prompt[key] = {"class_type": class_type, "inputs": dict(inputs)}
-    else:
-        prompt[key]["inputs"].update(inputs)
-
-
-def _ref_node_ids() -> tuple[int, ...]:
-    ids: list[int] = [N.REF_IMAGE_BASE + i for i in range(MAX_REF_IMAGES)]
-    for index in range(MAX_REF_VIDEOS):
-        ids.append(N.REF_VIDEO_BASE + index)
-        ids.append(N.REF_VIDEO_COMPONENTS_BASE + index)
-        ids.append(N.REF_VIDEO_AUDIO_BASE + index)
-    ids.extend(N.REF_AUDIO_BASE + i for i in range(MAX_REF_AUDIOS))
-    return tuple(ids)
-
-
-def _clear_autogrow(inputs: dict[str, Any]) -> None:
-    prefixes = ("ref_images.", "ref_videos.", "ref_video_audios.", "ref_audios.")
-    for key in [key for key in inputs if key.startswith(prefixes)]:
-        del inputs[key]
-
-
-def _wire_keyframes(prompt: Prompt, config: GenerationConfig) -> None:
-    drop(prompt, *_ref_node_ids())
-    if not has(prompt, N.CONDITIONING):
-        return
-
-    first = _basename(config.first_frame)
-    if has(prompt, N.LOAD_FIRST_FRAME):
-        widget(prompt, N.LOAD_FIRST_FRAME, "image", first)
-        source = N.FIT_FIRST if has(prompt, N.FIT_FIRST) else N.LOAD_FIRST_FRAME
-        link(prompt, N.CONDITIONING, "first_frame", source, 0)
-
-    if config.last_frame and has(prompt, N.LOAD_LAST_FRAME):
-        widget(prompt, N.LOAD_LAST_FRAME, "image", _basename(config.last_frame))
-        source = N.FIT_LAST if has(prompt, N.FIT_LAST) else N.LOAD_LAST_FRAME
-        link(prompt, N.CONDITIONING, "last_frame", source, 0)
-    else:
-        drop(prompt, N.LOAD_LAST_FRAME, N.FIT_LAST)
-        prompt[str(N.CONDITIONING)]["inputs"].pop("last_frame", None)
-
-
-def _wire_references(prompt: Prompt, config: GenerationConfig) -> None:
-    drop(prompt, N.LOAD_FIRST_FRAME, N.LOAD_LAST_FRAME, N.FIT_FIRST, N.FIT_LAST)
-    if not has(prompt, N.CONDITIONING):
-        return
-
-    conditioning = prompt[str(N.CONDITIONING)]
-    # Guard against the wrong template being paired with the mode.
-    if conditioning["class_type"] == "MiniMaxH3ImageToVideo":
-        conditioning["class_type"] = "MiniMaxH3ReferenceToVideo"
-    conditioning["inputs"].pop("first_frame", None)
-    conditioning["inputs"].pop("last_frame", None)
-    _clear_autogrow(conditioning["inputs"])
-
-    # Reference conditioning declares audio_vae as required even when we never decode it.
-    if has(prompt, N.VAE_AUDIO):
-        link(prompt, N.CONDITIONING, "audio_vae", N.VAE_AUDIO, 0)
-    widget(prompt, N.CONDITIONING, "ref_image_size", config.ref_image_size)
-
-    alive: set[int] = set()
-
-    for index, name in enumerate(config.ref_images[:MAX_REF_IMAGES]):
-        node_id = N.REF_IMAGE_BASE + index
-        _ensure(prompt, node_id, "LoadImage", {"image": _basename(name)})
-        widget(prompt, node_id, "image", _basename(name))
-        link(prompt, N.CONDITIONING, f"ref_images.ref_image_{index}", node_id, 0)
-        alive.add(node_id)
-
-    overrides = list(config.ref_video_audios[:MAX_REF_VIDEOS])
-    for index, name in enumerate(config.ref_videos[:MAX_REF_VIDEOS]):
-        video_id = N.REF_VIDEO_BASE + index
-        components_id = N.REF_VIDEO_COMPONENTS_BASE + index
-        _ensure(prompt, video_id, "LoadVideo", {"file": _basename(name)})
-        widget(prompt, video_id, "file", _basename(name))
-        _ensure(prompt, components_id, "GetVideoComponents", {})
-        link(prompt, components_id, "video", video_id, 0)
-        link(prompt, N.CONDITIONING, f"ref_videos.ref_video_{index}", components_id, 0)
-        alive.update({video_id, components_id})
-        # Slot 1 of GetVideoComponents is the video's own soundtrack; use it unless the
-        # run supplies a separate audio file for this slot.
-        if not (index < len(overrides) and overrides[index]):
-            link(
-                prompt,
-                N.CONDITIONING,
-                f"ref_video_audios.ref_video_audio_{index}",
-                components_id,
-                1,
-            )
-
-    for index, name in enumerate(overrides):
-        if not name:
-            continue
-        audio_id = N.REF_VIDEO_AUDIO_BASE + index
-        _ensure(prompt, audio_id, "LoadAudio", {"audio": _basename(name)})
-        widget(prompt, audio_id, "audio", _basename(name))
-        link(prompt, N.CONDITIONING, f"ref_video_audios.ref_video_audio_{index}", audio_id, 0)
-        alive.add(audio_id)
-
-    for index, name in enumerate(config.ref_audios[:MAX_REF_AUDIOS]):
-        audio_id = N.REF_AUDIO_BASE + index
-        _ensure(prompt, audio_id, "LoadAudio", {"audio": _basename(name)})
-        widget(prompt, audio_id, "audio", _basename(name))
-        link(prompt, N.CONDITIONING, f"ref_audios.ref_audio_{index}", audio_id, 0)
-        alive.add(audio_id)
-
-    drop(prompt, *(node_id for node_id in _ref_node_ids() if node_id not in alive))
-
-
-def _wire_text_only(prompt: Prompt) -> None:
-    drop(prompt, N.LOAD_FIRST_FRAME, N.LOAD_LAST_FRAME, N.FIT_FIRST, N.FIT_LAST)
-    drop(prompt, *_ref_node_ids())
-    if has(prompt, N.CONDITIONING):
-        prompt[str(N.CONDITIONING)]["inputs"].pop("first_frame", None)
-        prompt[str(N.CONDITIONING)]["inputs"].pop("last_frame", None)
-
-
-# --- model path ------------------------------------------------------------
-
-
-def _wire_model_loader(prompt: Prompt, config: GenerationConfig) -> int:
-    """Select the loader for this model file and point the encoder at its CLIP."""
-    filename = resolve_model_filename(config.diffusion_model)
-    if config.uses_gguf:
-        drop(prompt, N.UNET, N.INT8_UNET, N.CLIP)
-        if has(prompt, N.GGUF_UNET):
-            widget(prompt, N.GGUF_UNET, "model_name", filename)
-        if has(prompt, N.GGUF_CLIP):
-            # The template's saved clip_name stands: which text encoder pairs with which
-            # quantised model is knowledge the lab does not have and should not invent.
-            if has(prompt, N.CONDITIONING):
-                link(prompt, N.CONDITIONING, "clip", N.GGUF_CLIP, 0)
-        _require(prompt, N.GGUF_UNET, "GGUF model loader")
-        return N.GGUF_UNET
-
-    drop(prompt, N.GGUF_UNET, N.GGUF_CLIP, N.INT8_UNET)
-    if has(prompt, N.UNET):
-        widget(prompt, N.UNET, "unet_name", filename)
-    if has(prompt, N.CONDITIONING) and has(prompt, N.CLIP):
-        link(prompt, N.CONDITIONING, "clip", N.CLIP, 0)
-    _require(prompt, N.UNET, "diffusion model loader")
-    return N.UNET
-
-
-def _wire_model_chain(prompt: Prompt, config: GenerationConfig, loader: int) -> None:
-    """loader → [turbo LoRA] → [attention patch] → sage → sigma shift → [cache] → sampling.
-
-    The attention patch and Sage attention stack rather than exclude each other. Omitting
-    Sage while the patch was active diverged from the graphs that ran successfully in
-    ComfyUI, so both stay in the chain.
-    """
-    previous: int | str = loader
-
-    if config.turbo and has(prompt, N.TURBO_LORA):
-        link(prompt, N.TURBO_LORA, "model", previous, 0)
-        previous = N.TURBO_LORA
-    else:
-        drop(prompt, N.TURBO_LORA)
-
-    # The optional LoRA slot is never part of a benchmark; link past it.
-    drop(prompt, N.OPTIONAL_LORA)
-
-    if config.sol_attn and has(prompt, N.SOL_ATTN):
-        link(prompt, N.SOL_ATTN, "model", previous, 0)
-        previous = N.SOL_ATTN
-    else:
-        drop(prompt, N.SOL_ATTN)
-
-    _require(prompt, N.SAGE_ATTN, "Sage attention patch")
-    link(prompt, N.SAGE_ATTN, "model", previous, 0)
-    previous = N.SAGE_ATTN
-
-    _require(prompt, N.SIGMA_SHIFT, "sigma shift node")
-    link(prompt, N.SIGMA_SHIFT, "model", previous, 0)
-    previous = N.SIGMA_SHIFT
-
-    active_cache = N.CACHE_NODE_BY_NAME.get(config.cache) if config.cache_active else None
-    drop(prompt, *(node for node in N.CACHE_NODES if node != active_cache))
-    if active_cache is not None:
-        if not has(prompt, active_cache):
-            raise WorkflowError(
-                f"the workflow has no {config.cache} cache node (node {active_cache})"
-            )
-        link(prompt, active_cache, "model", previous, 0)
-        previous = active_cache
-
-    _require(prompt, N.SCHEDULER, "scheduler")
-    _require(prompt, N.GUIDER, "guider")
-    link(prompt, N.SCHEDULER, "model", previous, 0)
-    link(prompt, N.GUIDER, "model", previous, 0)
-
-    if active_cache is not None:
-        _set_known_widgets(prompt, active_cache, cache_widgets(config))
-    if config.sol_attn and has(prompt, N.SOL_ATTN):
-        _set_known_widgets(prompt, N.SOL_ATTN, sol_widgets(config))
-
-
-# --- video path ------------------------------------------------------------
-
-
-def _wire_video_path(prompt: Prompt, config: GenerationConfig) -> None:
-    if config.clean_vram and has(prompt, N.CLEAN_VRAM):
-        link(prompt, N.CLEAN_VRAM, "anything", N.SAMPLER, 0)
-        if has(prompt, N.VAE_DECODE):
-            link(prompt, N.VAE_DECODE, "samples", N.CLEAN_VRAM, 0)
-    else:
-        drop(prompt, N.CLEAN_VRAM)
-        if has(prompt, N.VAE_DECODE) and has(prompt, N.SAMPLER):
-            link(prompt, N.VAE_DECODE, "samples", N.SAMPLER, 0)
-
-    images: int | None = N.VAE_DECODE if has(prompt, N.VAE_DECODE) else None
-
-    if config.rife and has(prompt, N.RIFE) and images is not None:
-        link(prompt, N.RIFE, "images", images, 0)
-        images = N.RIFE
-    else:
-        drop(prompt, N.RIFE)
-        if not config.rife:
-            drop(prompt, N.INTERP_FPS)
-
-    if config.upscaler and has(prompt, N.UPSCALER) and images is not None:
-        link(prompt, N.UPSCALER, "images", images, 0)
-        images = N.UPSCALER
-    else:
-        drop(prompt, N.UPSCALER)
-
-    if images is not None and has(prompt, N.VIDEO_COMBINE):
-        link(prompt, N.VIDEO_COMBINE, "images", images, 0)
-
-    # Video-only output. MiniMax audio latents frequently contain NaN or +Inf, which makes
-    # the ffmpeg AAC mux fail after the picture track is already written — losing the whole
-    # file. A benchmark only needs the picture track.
-    drop(prompt, N.VAE_DECODE_AUDIO)
-    if config.mode != "r2v":
-        drop(prompt, N.VAE_AUDIO)
-    if has(prompt, N.VIDEO_COMBINE):
-        prompt[str(N.VIDEO_COMBINE)]["inputs"].pop("audio", None)
-        widget(prompt, N.VIDEO_COMBINE, "trim_to_audio", False)
-        fps = (
-            _primitive(prompt, N.INTERP_FPS, DEFAULT_INTERP_FPS)
-            if config.rife
-            else _primitive(prompt, N.BASE_FPS, DEFAULT_BASE_FPS)
-        )
-        widget(prompt, N.VIDEO_COMBINE, "frame_rate", fps)
-
-
-def _wire_conditioning_output(prompt: Prompt, config: GenerationConfig) -> None:
-    if config.clean_vram and has(prompt, N.CLEAN_TEXT_ENCODER) and has(prompt, N.CONDITIONING):
-        link(prompt, N.CLEAN_TEXT_ENCODER, "anything", N.CONDITIONING, 0)
-        link(prompt, N.GUIDER, "conditioning", N.CLEAN_TEXT_ENCODER, 0)
-        return
-    drop(prompt, N.CLEAN_TEXT_ENCODER)
-    if has(prompt, N.GUIDER) and has(prompt, N.CONDITIONING):
-        link(prompt, N.GUIDER, "conditioning", N.CONDITIONING, 0)
-
-
-# --- pruning ---------------------------------------------------------------
-
-
-def _prune_dangling_links(prompt: Prompt) -> None:
-    """Remove every input that points at a node no longer in the prompt."""
-    alive = set(prompt)
-    for node in prompt.values():
-        for name, value in list(node["inputs"].items()):
-            if (
-                isinstance(value, list)
-                and len(value) == 2
-                and isinstance(value[0], str)
-                and value[0] not in alive
-            ):
-                del node["inputs"][name]
-
-
-def _prune_incomplete_outputs(prompt: Prompt) -> None:
-    """Drop save nodes left without their required inputs.
-
-    ComfyUI validates output nodes as graph roots, so an orphan `SaveImage` rejects the
-    whole prompt even though nothing depends on it.
-    """
-    required = {"SaveImage": "images", "SaveAudio": "audio", "SaveVideo": "video"}
-    for node_id, node in list(prompt.items()):
-        needed = required.get(node.get("class_type") or "")
-        if needed is None:
-            continue
-        inputs = node.get("inputs") or {}
-        if needed not in inputs or "filename_prefix" not in inputs:
-            drop(prompt, node_id)
 
 
 def output_filename_prefix(tag: str) -> str:
@@ -454,7 +107,667 @@ def output_filename_prefix(tag: str) -> str:
     return f"h3lab/{safe or 'run'}"
 
 
-# --- entry point -----------------------------------------------------------
+def to_api_prompt(workflow: dict[str, Any], **kwargs: Any) -> Prompt:
+    """Flatten an editor workflow into the API prompt shape, unpatched."""
+    return read_api_prompt(workflow, **kwargs)
+
+
+# --- the patch -------------------------------------------------------------
+
+
+class _Patch:
+    """One workflow being fitted to one config."""
+
+    def __init__(
+        self,
+        workflow: dict[str, Any],
+        config: GenerationConfig,
+        *,
+        output_tag: str,
+        schemas: Schemas,
+    ) -> None:
+        self.config = config
+        self.output_tag = output_tag
+        self.schemas = schemas
+        self.graph = read(workflow, widget_names=schemas.widget_names)
+        self.roles = R.resolve(self.graph)
+        self.minted = 0
+        missing = self.roles.missing()
+        if missing:
+            raise WorkflowError(
+                "this workflow is missing "
+                + ", ".join(sorted(missing))
+                + " — the lab cannot tell which node does that job. Tag the node's title "
+                "(for example MS_ROLE:sampler) or check `h3lab check`."
+            )
+
+    # -- access
+
+    def node(self, role: str) -> Node | None:
+        return self.roles.node(self.graph, role)
+
+    def need(self, role: str) -> Node:
+        node = self.node(role)
+        if node is None:
+            raise WorkflowError(f"this workflow has no {role.replace('_', ' ')}")
+        return node
+
+    def value_of(self, role: str, default: Any) -> Any:
+        node = self.node(role)
+        if node is None:
+            return default
+        value = node.inputs.get("value")
+        return default if value is None or is_link(value) else value
+
+    # -- writing
+
+    def accepts(self, node: Node, name: str) -> bool:
+        """Does this node have an input called *name*?
+
+        A dynamic input counts either way round: the saved node carries
+        `ref_images.ref_image_0` where the schema declares `ref_images`.
+        """
+        if name in node.inputs or name in node.input_types:
+            return True
+        if any(key.startswith(f"{name}.") for key in node.inputs):
+            return True
+        schema = self.schemas.get(node.class_type)
+        if schema is not None:
+            return schema.knows(name)
+        static = N.WIDGET_ORDER.get(node.class_type)
+        if static:
+            return name in static
+        # Nothing authoritative to check against; ComfyUI is the judge.
+        return not self.schemas
+
+    def set(self, node: Node | None, name: str, value: Any) -> None:
+        """Write a literal, replacing whatever the editor had wired into that input."""
+        if node is None:
+            return
+        node.inputs[name] = value
+
+    def set_known(self, node: Node | None, values: dict[str, Any]) -> None:
+        """Write only the inputs this node actually has."""
+        if node is None:
+            return
+        for name, value in values.items():
+            if self.accepts(node, name):
+                node.inputs[name] = value
+
+    def set_first(self, node: Node | None, names: Sequence[str], value: Any) -> bool:
+        """Write to the first of *names* the node knows. Node packs rename widgets."""
+        if node is None:
+            return False
+        for name in names:
+            if name in node.inputs:
+                node.inputs[name] = value
+                return True
+        for name in names:
+            if self.accepts(node, name):
+                node.inputs[name] = value
+                return True
+        return False
+
+    def connect(self, target: Node | None, name: str, source: Node | None, slot: int = 0) -> None:
+        if target is None or source is None:
+            return
+        target.inputs[name] = [source.id, slot]
+
+    def enable(self, role: str, wanted: bool, *, cut: bool = False) -> Node | None:
+        """State whether this run uses the node playing *role*."""
+        node = self.node(role)
+        if node is None:
+            return None
+        node.mode = ALWAYS if wanted else (MUTED if cut else BYPASSED)
+        return node
+
+    def wake_settings(self, node: Node | None, *, ignore: Sequence[str] = (), depth: int = 4) -> None:
+        """Bring the values a switched-on node reads on with it.
+
+        A template parks a whole group off at once: RIFE and the node holding the frame rate
+        it should resample to. Switching RIFE on and leaving that behind submits a graph that
+        interpolates to whatever ComfyUI defaults to. The picture inputs are excluded because
+        the lab decides where those come from.
+        """
+        if node is None or depth <= 0:
+            return
+        for name, source, _slot in node.links():
+            if name in ignore:
+                continue
+            upstream = self.graph.get(source)
+            if upstream is None or not upstream.disabled:
+                continue
+            upstream.mode = ALWAYS
+            self.wake_settings(upstream, depth=depth - 1)
+
+    def mint(self, node_id: str, class_type: str, output_types: tuple[str, ...]) -> Node:
+        node = self.graph.get(node_id)
+        if node is None:
+            node = self.graph.add(
+                Node(id=node_id, class_type=class_type, inputs={}, output_types=output_types)
+            )
+            self.minted += 1
+        node.mode = ALWAYS
+        return node
+
+    # -- the run
+
+    def build(self) -> Prompt:
+        self.wire_scalars()
+        self.wire_mode()
+        self.wire_model_chain()
+        self.wire_video_path()
+        self.thin()
+        self.keep_only_what_the_output_needs()
+        prompt = self.graph.prompt()
+        self.schemas.fill_defaults(prompt)
+        return prompt
+
+    # -- scalars
+
+    def wire_scalars(self) -> None:
+        config = self.config
+        conditioning = self.need(R.CONDITIONING)
+        self.set(conditioning, "prompt", config.prompt)
+
+        scheduler = self.need(R.SCHEDULER)
+        self.set(scheduler, "scheduler", config.scheduler)
+        # A literal replaces whatever step plumbing the editor used, so the run's step count
+        # is the one recorded in the config and the plumbing prunes itself away.
+        self.set(scheduler, "steps", config.effective_steps)
+        self.set(self.node(R.SAMPLER_SELECT), "sampler_name", config.sampler)
+
+        noise = self.node(R.NOISE)
+        if noise is not None and self.accepts(noise, "noise_seed"):
+            self.set(noise, "noise_seed", config.seed)
+        self.set_first(self.node(R.SEED), ("seed",), config.seed)
+
+        resolution = self.node(R.RESOLUTION)
+        self.set_known(
+            resolution,
+            {
+                "aspect_ratio": config.aspect_ratio or DEFAULT_ASPECT,
+                "megapixels": config.mp,
+            },
+        )
+        # Duration feeds the frame-count maths the template owns, so it is written to the
+        # primitive rather than onto the conditioning's `length`.
+        self.set_first(self.node(R.DURATION), ("value",), config.duration_s)
+
+        video = self.need(R.VIDEO_OUT)
+        self.set_known(
+            video,
+            {
+                "filename_prefix": output_filename_prefix(self.output_tag),
+                "frame_rate": self.frame_rate(),
+                "trim_to_audio": False,
+            },
+        )
+
+    def frame_rate(self) -> Any:
+        """What to tell the muxer, given how many frames the interpolator will hand it.
+
+        RIFE resamples to a target rate it is told, so the video node is told the same
+        number. FILM multiplies the frames it is given, so the rate multiplies with them —
+        writing the base rate instead would produce a correct file that plays at half speed.
+        """
+        if self.config.interp == "rife":
+            return self.value_of(R.INTERP_FPS, DEFAULT_INTERP_FPS)
+        base = self.value_of(R.BASE_FPS, DEFAULT_BASE_FPS)
+        return base * FILM_MULTIPLIER if self.config.interp == "film" else base
+
+    # -- media
+
+    def wire_mode(self) -> None:
+        if self.config.mode == "r2v":
+            self.wire_references()
+        elif self.config.mode == "t2v":
+            self.wire_text_only()
+        else:
+            self.wire_keyframes()
+
+    def _clear_refs(self) -> None:
+        conditioning = self.need(R.CONDITIONING)
+        for name in list(conditioning.inputs):
+            if name.split(".", 1)[0] in {family for family, _, _, _ in REF_FAMILIES}:
+                del conditioning.inputs[name]
+
+    def wire_keyframes(self) -> None:
+        conditioning = self.need(R.CONDITIONING)
+        self._clear_refs()
+
+        first = self.node(R.FIRST_FRAME)
+        if first is None:
+            raise WorkflowError(
+                "this workflow has no first-frame loader, so it cannot run a first/last "
+                "frame generation"
+            )
+        first.mode = ALWAYS
+        self.set_first(first, _MEDIA_WIDGETS, _basename(self.config.first_frame))
+        self.feed(conditioning, "first_frame", first)
+
+        last = self.node(R.LAST_FRAME)
+        if self.config.last_frame and last is not None:
+            last.mode = ALWAYS
+            self.set_first(last, _MEDIA_WIDGETS, _basename(self.config.last_frame))
+            self.feed(conditioning, "last_frame", last)
+        else:
+            conditioning.inputs.pop("last_frame", None)
+            if last is not None:
+                last.mode = MUTED
+
+    def wire_text_only(self) -> None:
+        conditioning = self.need(R.CONDITIONING)
+        self._clear_refs()
+        for name in ("first_frame", "last_frame"):
+            conditioning.inputs.pop(name, None)
+        for role in (R.FIRST_FRAME, R.LAST_FRAME):
+            node = self.node(role)
+            if node is not None:
+                node.mode = MUTED
+
+    def wire_references(self) -> None:
+        config = self.config
+        conditioning = self.need(R.CONDITIONING)
+        if not self.accepts(conditioning, "ref_images"):
+            raise WorkflowError(
+                f"the conditioning node in this workflow ({conditioning.class_type}) takes no "
+                "reference images, so it cannot run a reference generation"
+            )
+        for name in ("first_frame", "last_frame"):
+            conditioning.inputs.pop(name, None)
+        for role in (R.FIRST_FRAME, R.LAST_FRAME):
+            node = self.node(role)
+            if node is not None and node.id not in self._ref_sources():
+                node.mode = MUTED
+
+        if self.accepts(conditioning, "audio_vae"):
+            self.connect(conditioning, "audio_vae", self.node(R.AUDIO_VAE))
+        self.set_known(conditioning, {"ref_image_size": config.ref_image_size})
+
+        video_audios = list(config.ref_video_audios[:MAX_REF_VIDEOS])
+        for family, prefix, item, limit in REF_FAMILIES:
+            if family == "ref_video_audios":
+                continue
+            names = list(getattr(config, family)[:limit])
+            self.wire_ref_family(conditioning, family, prefix, item, names)
+            if family == "ref_videos":
+                self.wire_video_audio(conditioning, len(names), video_audios)
+
+    def _ref_sources(self) -> set[str]:
+        conditioning = self.need(R.CONDITIONING)
+        found: set[str] = set()
+        for name, value in conditioning.inputs.items():
+            if name.split(".", 1)[0] in {family for family, _, _, _ in REF_FAMILIES} and is_link(
+                value
+            ):
+                found.add(str(value[0]))
+                found.update(node.id for node in R.ancestors(self.graph, str(value[0])))
+        return found
+
+    def wire_ref_family(
+        self,
+        conditioning: Node,
+        family: str,
+        prefix: str,
+        item: str,
+        names: list[str],
+    ) -> None:
+        for index in range(self.slot_count(conditioning, prefix, item, len(names))):
+            slot = f"{prefix}.{item}_{index}"
+            name = names[index] if index < len(names) else ""
+            loaders = self.loaders_for(conditioning, slot, family)
+            if not name:
+                conditioning.inputs.pop(slot, None)
+                for loader in loaders:
+                    loader.mode = MUTED
+                continue
+            if loaders:
+                for loader in loaders:
+                    loader.mode = ALWAYS
+                self.set_first(loaders[-1], _MEDIA_WIDGETS, _basename(name))
+            else:
+                self.mint_ref_chain(conditioning, slot, family, index, name)
+
+    def mint_ref_chain(
+        self, conditioning: Node, slot: str, family: str, index: int, name: str
+    ) -> None:
+        """Supply a loader the template does not have — or has left unwired.
+
+        A run with more references than the workflow has slots still has to run, and a slot
+        whose loader lost its link in the editor is the same problem from the other end.
+        """
+        class_type, outputs = _MINTED[family]
+        loader = self.mint(f"h3:{family}_{index}", class_type, outputs)
+        self.set_first(loader, _MEDIA_WIDGETS, _basename(name))
+        if family != "ref_videos":
+            self.connect(conditioning, slot, loader)
+            return
+        # A reference video reaches the conditioning as frames, never as a video.
+        components = self.components_for(conditioning, slot, index)
+        self.connect(components, "video", loader)
+        self.connect(conditioning, slot, components)
+
+    def components_for(self, conditioning: Node, slot: str, index: int) -> Node:
+        current = conditioning.inputs.get(slot)
+        if is_link(current):
+            existing = self.graph.get(str(current[0]))
+            if existing is not None and existing.class_type == "GetVideoComponents":
+                existing.mode = ALWAYS
+                return existing
+        return self.mint(
+            f"h3:ref_video_components_{index}",
+            "GetVideoComponents",
+            ("IMAGE", "AUDIO", "FLOAT", "INT"),
+        )
+
+    def wire_video_audio(
+        self, conditioning: Node, video_count: int, overrides: list[str]
+    ) -> None:
+        """A reference video's soundtrack, unless the run supplies a separate file."""
+        slots = self.slot_count(
+            conditioning, "ref_video_audios", "ref_video_audio", max(video_count, len(overrides))
+        )
+        for index in range(slots):
+            slot = f"ref_video_audios.ref_video_audio_{index}"
+            override = overrides[index] if index < len(overrides) else ""
+            if override:
+                loaders = [
+                    node
+                    for node in self.loaders_for(conditioning, slot, "ref_video_audios")
+                    if node.class_type == "LoadAudio"
+                ]
+                if loaders:
+                    for loader in loaders:
+                        loader.mode = ALWAYS
+                    self.set_first(loaders[-1], _MEDIA_WIDGETS, _basename(override))
+                else:
+                    self.mint_ref_chain(
+                        conditioning, slot, "ref_video_audios", index, override
+                    )
+            elif index >= video_count:
+                conditioning.inputs.pop(slot, None)
+
+    def slot_count(self, conditioning: Node, prefix: str, item: str, wanted: int) -> int:
+        existing = 0
+        while f"{prefix}.{item}_{existing}" in conditioning.inputs:
+            existing += 1
+        return max(existing, wanted)
+
+    def loaders_for(self, conditioning: Node, slot: str, family: str) -> list[Node]:
+        """The chain behind one reference slot: everything up to and including the loader.
+
+        The loader comes last, because that is the node the filename belongs on. Whatever
+        sits between it and the conditioning (a `GetVideoComponents`, a resize) has to come
+        alive with it.
+        """
+        value = conditioning.inputs.get(slot)
+        if not is_link(value):
+            return []
+        source = self.graph.get(str(value[0]))
+        if source is None:
+            return []
+        chain = [source, *R.ancestors(self.graph, source.id)]
+        wanted = _LOADER_CLASSES[family]
+        found = [index for index, node in enumerate(chain) if node.class_type in wanted]
+        if not found:
+            return []
+        return chain[: found[-1] + 1]
+
+    def feed(self, target: Node, name: str, source: Node) -> None:
+        """Make sure *target.name* is fed by *source*, through whatever sits between them."""
+        current = target.inputs.get(name)
+        reachable = {node.id for node in R.descendants(self.graph, source.id)} | {source.id}
+        if is_link(current) and str(current[0]) in reachable:
+            return
+        tail = source
+        while True:
+            consumers = [
+                node for node, _name, _slot in self.graph.consumers(tail.id) if node.id != target.id
+            ]
+            if len(consumers) != 1:
+                break
+            tail = consumers[0]
+        self.connect(target, name, tail)
+
+    # -- model chain
+
+    def wire_model_chain(self) -> None:
+        config = self.config
+        loader = self.pick_model_loader()
+        self.set_first(
+            loader,
+            ("unet_name", "model_name", "ckpt_name", "clip_name"),
+            resolve_model_filename(config.diffusion_model),
+        )
+
+        turbo = self.enable(R.TURBO_LORA, config.turbo)
+        if config.turbo:
+            if turbo is None:
+                raise WorkflowError(
+                    "this workflow has no turbo LoRA node, so it cannot run with turbo on"
+                )
+            named = self.set_first(turbo, ("lora_name", "lora"), config.turbo_lora_file)
+            strength = self.set_first(
+                turbo,
+                ("strength", "strength_model", "lora_strength"),
+                config.turbo_lora_strength,
+            )
+            if not (named and strength):
+                raise WorkflowError(
+                    f"the turbo LoRA node ({turbo.class_type}) has no input for the LoRA file "
+                    "or its strength, so the lab cannot choose one"
+                )
+
+        # The optional LoRA slot is never part of a benchmark; the run passes it by.
+        self.enable(R.OPTIONAL_LORA, False)
+
+        sol = self.enable(R.SOL_ATTN, config.sol_attn)
+        if config.sol_attn:
+            self.set_known(sol, sol_widgets(config))
+
+        wanted_cache = R.CACHE_ROLES.get(config.cache) if config.cache_active else None
+        for name, role in R.CACHE_ROLES.items():
+            node = self.enable(role, role == wanted_cache)
+            if role == wanted_cache:
+                if node is None:
+                    raise WorkflowError(
+                        f"this workflow has no {name} cache node, so it cannot run with that "
+                        "cache selected"
+                    )
+                self.set_known(node, cache_widgets(config))
+
+    def pick_model_loader(self) -> Node:
+        gguf = self.node(R.GGUF_LOADER)
+        plain = self.node(R.DIFFUSION_LOADER)
+        if plain is None and gguf is None:
+            raise WorkflowError("this workflow has no diffusion model loader")
+        if self.config.uses_gguf:
+            if gguf is None:
+                raise WorkflowError(
+                    f"{self.config.diffusion_model} needs a GGUF loader and this workflow has "
+                    "none"
+                )
+            self.swap(gguf, plain)
+            self.swap(self.node(R.GGUF_CLIP_LOADER), self.node(R.CLIP_LOADER))
+            return gguf
+        self.swap(plain, gguf)
+        self.swap(self.node(R.CLIP_LOADER), self.node(R.GGUF_CLIP_LOADER))
+        assert plain is not None
+        plain.mode = ALWAYS
+        return plain
+
+    def swap(self, keep: Node | None, drop: Node | None) -> None:
+        """Use *keep* wherever the workflow used *drop*.
+
+        A template wires one loader into the chain and parks the alternative beside it. Which
+        one is wired is the template's business, so the chosen node inherits the other's
+        consumers rather than assuming it already has them.
+        """
+        if keep is None:
+            return
+        keep.mode = ALWAYS
+        if drop is None or drop.id == keep.id:
+            return
+        for consumer, name, slot in self.graph.consumers(drop.id):
+            consumer.inputs[name] = [keep.id, slot]
+        drop.mode = MUTED
+
+    # -- video path
+
+    def wire_video_path(self) -> None:
+        config = self.config
+        self.enable(R.CLEAN_VRAM, config.clean_vram)
+        self.enable(R.CLEAN_TEXT_ENCODER, config.clean_vram)
+
+        rife = self.enable(R.RIFE, config.interp == "rife")
+        film = self.enable(R.FILM, config.interp == "film")
+        self.enable(R.FILM_LOADER, config.interp == "film")
+        if config.interp == "film" and film is not None:
+            self.set_known(film, {"multiplier": FILM_MULTIPLIER})
+
+        chosen = {"rife": rife, "film": film}.get(config.interp)
+        if config.interp != "off" and chosen is None:
+            raise WorkflowError(
+                f"this workflow has no {config.interp.upper()} node, so it cannot interpolate"
+            )
+
+        # The template keeps both interpolators parked beside the picture path with only one
+        # of them wired in. Which one a run uses is a benchmark axis, so the lab places it.
+        after = self.need(R.VAE_DECODE)
+        if chosen is not None:
+            self.wake_settings(chosen, ignore=_IMAGE_INPUTS)
+            self.put_on_image_path(chosen, after=after)
+            after = chosen
+
+        upscaler = self.enable(R.UPSCALER, config.upscaler)
+        if upscaler is not None and config.upscaler:
+            self.wake_settings(upscaler, ignore=_IMAGE_INPUTS)
+            self.put_on_image_path(upscaler, after=after)
+
+        # Video-only output. MiniMax audio latents frequently contain NaN or +Inf, which makes
+        # the ffmpeg AAC mux fail after the picture track is already written — losing the whole
+        # file. A benchmark only needs the picture track.
+        self.enable(R.VAE_DECODE_AUDIO, False, cut=True)
+
+    def reaches_output(self, node: Node) -> bool:
+        video = self.node(R.VIDEO_OUT)
+        if video is None:
+            return False
+        if node.id == video.id:
+            return True
+        return any(found.id == video.id for found in R.descendants(self.graph, node.id))
+
+    def put_on_image_path(self, node: Node, *, after: Node) -> None:
+        """Splice *node* in immediately downstream of *after*, if it is not already in.
+
+        Everything that read the pictures from *after* reads them from *node* instead. Nodes
+        the template left switched off stay in the path here and are thinned out later, so
+        the order the template chose survives.
+        """
+        if self.reaches_output(node):
+            return
+        target: tuple[Node, str] | None = None
+        for consumer, name, slot in self.graph.consumers(after.id):
+            if slot == 0 and consumer.id != node.id and self.reaches_output(consumer):
+                target = (consumer, name)
+                break
+        self.set_first(node, ("images", "image"), [after.id, 0])
+        if target is None:
+            video = self.node(R.VIDEO_OUT)
+            self.connect(video, "images", node)
+            return
+        consumer, name = target
+        consumer.inputs[name] = [node.id, 0]
+
+    # -- thinning and pruning
+
+    def thin(self) -> None:
+        """Remove every switched-off node, reconnecting what depended on it.
+
+        A bypassed node hands its consumers whatever fed it, matched by slot type — the rule
+        ComfyUI itself uses. A muted node hands them nothing.
+        """
+        for node in list(self.graph):
+            if node.mode == BYPASSED:
+                self.drop(node, pass_through=True)
+            elif node.mode == MUTED:
+                self.drop(node, pass_through=False)
+
+    def drop(self, node: Node, *, pass_through: bool) -> None:
+        for consumer, name, slot in self.graph.consumers(node.id):
+            replacement = self.pass_through_source(node, slot) if pass_through else None
+            if replacement is None:
+                consumer.inputs.pop(name, None)
+            else:
+                consumer.inputs[name] = list(replacement)
+        self.graph.remove(node.id)
+
+    def pass_through_source(self, node: Node, slot: int) -> list[Any] | None:
+        wanted = ""
+        if slot < len(node.output_types):
+            wanted = node.output_types[slot]
+        if not wanted:
+            wanted = self.schemas.output_type(node.class_type, slot)
+        links = list(node.links())
+        if wanted:
+            for name, source, source_slot in links:
+                if node.input_types.get(name) == wanted:
+                    return [source, source_slot]
+        # A wildcard slot (`easy cleanGpuUsed`) declares no useful type; with one input there
+        # is only one thing it could have been passing through.
+        if len(links) == 1:
+            return [links[0][1], links[0][2]]
+        return None
+
+    def keep_only_what_the_output_needs(self) -> None:
+        """Drop everything the chosen output does not depend on.
+
+        ComfyUI validates every output node in a prompt as a graph root, so a save node the
+        run does not want fails the submission even though nothing reads from it.
+        """
+        video = self.node(R.VIDEO_OUT)
+        if video is None:
+            raise WorkflowError("this workflow has no video output node left after patching")
+        if "images" not in video.inputs:
+            raise WorkflowError(
+                "nothing reaches the video output node; the image path in this workflow is "
+                "broken"
+            )
+        keep = {video.id}
+        queue: deque[str] = deque([video.id])
+        while queue:
+            node = self.graph.get(queue.popleft())
+            if node is None:
+                continue
+            for _name, source, _slot in node.links():
+                if source not in keep:
+                    keep.add(source)
+                    queue.append(source)
+        for node_id in list(self.graph.nodes):
+            if node_id not in keep:
+                self.graph.remove(node_id)
+
+
+# --- entry points ----------------------------------------------------------
+
+
+def build(
+    workflow: dict[str, Any],
+    config: GenerationConfig,
+    *,
+    output_tag: str = "run",
+    schemas: Schemas | None = None,
+) -> tuple[Prompt, Graph, R.Roles]:
+    """The prompt, plus the patched graph and roles behind it (for export and reports)."""
+    patch = _Patch(
+        workflow,
+        config,
+        output_tag=output_tag,
+        schemas=schemas if schemas is not None else static_schemas(),
+    )
+    prompt = patch.build()
+    return prompt, patch.graph, patch.roles
 
 
 def apply_config(
@@ -462,55 +775,20 @@ def apply_config(
     config: GenerationConfig,
     *,
     output_tag: str = "run",
+    schemas: Schemas | None = None,
 ) -> Prompt:
     """Build an executable prompt for exactly this configuration.
 
     *output_tag* only affects the output filename. It must never touch a sampling input,
     or two runs of the same configuration would stop being comparable.
+
+    *schemas* is the installed ComfyUI's own description of its nodes. Without it the widget
+    order saved in the workflow is trusted as-is, which is right for a graph the lab only
+    inspects and not quite enough for one it submits.
     """
-    prompt = to_api_prompt(workflow)
-
-    if has(prompt, N.PROMPT):
-        widget(prompt, N.PROMPT, "value", config.prompt)
-    if has(prompt, N.SEED):
-        widget(prompt, N.SEED, "seed", config.seed)
-    if has(prompt, N.NOISE):
-        noise_inputs = prompt[str(N.NOISE)]["inputs"]
-        existing = noise_inputs.get("noise_seed")
-        # Keep the link from the seed node when the template has one; only an unlinked
-        # noise node needs the literal.
-        if not (isinstance(existing, list) and len(existing) == 2):
-            widget(prompt, N.NOISE, "noise_seed", config.seed)
-    if has(prompt, N.SCHEDULER):
-        widget(prompt, N.SCHEDULER, "scheduler", config.scheduler)
-        # A scalar replaces whatever step plumbing the editor used, so the run's step
-        # count is the one recorded in the config.
-        widget(prompt, N.SCHEDULER, "steps", config.effective_steps)
-    if has(prompt, N.SAMPLER_SELECT):
-        widget(prompt, N.SAMPLER_SELECT, "sampler_name", config.sampler)
-    if has(prompt, N.RESOLUTION):
-        widget(prompt, N.RESOLUTION, "aspect_ratio", config.aspect_ratio or DEFAULT_ASPECT)
-        widget(prompt, N.RESOLUTION, "megapixels", config.mp)
-    if has(prompt, N.DURATION):
-        widget(prompt, N.DURATION, "value", config.duration_s)
-    if has(prompt, N.VIDEO_COMBINE):
-        widget(prompt, N.VIDEO_COMBINE, "filename_prefix", output_filename_prefix(output_tag))
-
-    if config.mode == "t2v":
-        _wire_text_only(prompt)
-    elif config.mode == "r2v":
-        _wire_references(prompt, config)
-    else:
-        _wire_keyframes(prompt, config)
-
-    loader = _wire_model_loader(prompt, config)
-    _wire_model_chain(prompt, config, loader)
-    _wire_conditioning_output(prompt, config)
-    _wire_video_path(prompt, config)
-
-    drop(prompt, *N.EDITOR_ONLY_NODES)
-    _prune_dangling_links(prompt)
-    _prune_incomplete_outputs(prompt)
+    prompt, _graph, _roles = build(
+        workflow, config, output_tag=output_tag, schemas=schemas
+    )
     return prompt
 
 
@@ -520,22 +798,16 @@ def missing_links(prompt: Prompt) -> list[str]:
     problems: list[str] = []
     for node_id, node in prompt.items():
         for name, value in node["inputs"].items():
-            if (
-                isinstance(value, list)
-                and len(value) == 2
-                and isinstance(value[0], str)
-                and value[0] not in alive
-            ):
+            if is_link(value) and value[0] not in alive:
                 problems.append(f"{node_id}.{name} → {value[0]} (absent)")
     return sorted(problems)
 
 
 def referenced_files(prompt: Prompt) -> list[str]:
     """Input media the prompt expects ComfyUI to already have."""
-    keys = ("image", "file", "audio")
     found: list[str] = []
     for node in prompt.values():
-        for key in keys:
+        for key in _MEDIA_WIDGETS:
             value = node["inputs"].get(key)
             if isinstance(value, str) and value:
                 found.append(value)

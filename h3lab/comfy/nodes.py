@@ -1,122 +1,17 @@
-"""Node ids and widget orders for the MiniMax H3 workflow templates.
+"""What the lab knows about node *classes*, as opposed to any one workflow.
 
-The ids come from the workflow JSON files in the repository root. Grouping them by role
-means the prompt builder reads as intent rather than as a wall of magic numbers.
+Everything here is keyed by class type, never by node id. Ids are an accident of how a
+workflow was last edited — `roles.py` works out which node does what, and the ids it falls
+back on live there, with the rules that use them.
+
+The widget order table is a fallback. A node saved by a recent editor declares its own order,
+and a running ComfyUI knows the installed one; both outrank this file. It answers for nodes
+that declare nothing and for hand-written graphs in tests.
 """
 
 from __future__ import annotations
 
 from typing import Final
-
-# --- loaders and encoders --------------------------------------------------
-UNET: Final = 1
-CLIP: Final = 2
-VAE_VIDEO: Final = 3
-VAE_AUDIO: Final = 4
-GGUF_UNET: Final = 130
-GGUF_CLIP: Final = 131
-INT8_UNET: Final = 124
-
-# --- conditioning ----------------------------------------------------------
-CONDITIONING: Final = 5  # MiniMaxH3ImageToVideo or MiniMaxH3ReferenceToVideo
-PROMPT: Final = 107
-RESOLUTION: Final = 98
-DURATION: Final = 102
-FRAME_MATH: Final = 103
-
-# --- sampling --------------------------------------------------------------
-SCHEDULER: Final = 6
-SAMPLER_SELECT: Final = 7
-GUIDER: Final = 8
-SAMPLER: Final = 10
-SEED: Final = 118
-NOISE: Final = 119
-SIGMA_SHIFT: Final = 123
-
-# --- model patches ---------------------------------------------------------
-SAGE_ATTN: Final = 91
-SOL_ATTN: Final = 92
-TURBO_LORA: Final = 155
-OPTIONAL_LORA: Final = 148
-
-# --- caches ----------------------------------------------------------------
-EASY_CACHE: Final = 15
-SPECTRUM: Final = 122
-H3_CACHE: Final = 128
-
-# --- media inputs ----------------------------------------------------------
-LOAD_FIRST_FRAME: Final = 20
-LOAD_LAST_FRAME: Final = 145
-FIT_FIRST: Final = 146
-FIT_LAST: Final = 147
-
-REF_IMAGE_BASE: Final = 200  # 200–208, nine LoadImage nodes
-REF_VIDEO_BASE: Final = 210  # 210–212, three LoadVideo nodes
-REF_VIDEO_COMPONENTS_BASE: Final = 220  # 220–222, GetVideoComponents per video
-REF_AUDIO_BASE: Final = 230  # 230–232, three standalone LoadAudio nodes
-# Soundtrack overrides live at 240+ so they can never collide with the standalone
-# LoadAudio nodes at 230+.
-REF_VIDEO_AUDIO_BASE: Final = 240
-
-# --- post-processing and output -------------------------------------------
-VAE_DECODE: Final = 125
-VAE_DECODE_AUDIO: Final = 12
-CLEAN_VRAM: Final = 97
-CLEAN_TEXT_ENCODER: Final = 144
-RIFE: Final = 96
-INTERP_FPS: Final = 95
-UPSCALER: Final = 111
-BASE_FPS: Final = 108
-VIDEO_COMBINE: Final = 110
-
-# --- nodes that exist only to drive the ComfyUI editor --------------------
-# Switches and step plumbing are resolved offline, so they never reach the API prompt.
-QUANT_SWITCH: Final = 126
-CACHE_SWITCH: Final = 127
-CLIP_SWITCH: Final = 140
-MODEL_SWITCH: Final = 142
-ATTN_SWITCH: Final = 163
-STEPS_SWITCH: Final = 158
-FPS_SWITCH: Final = 109
-TURBO_STEPS: Final = 157
-DEFAULT_STEPS: Final = 159
-FLOAT_TO_INT: Final = 161
-CACHE_BYPASSER: Final = 139
-TRANSFORMER_BYPASSER: Final = 143
-
-# Optional editor exports. Their links break once the video path is rewired, and ComfyUI
-# validates them as graph roots if they are left in the prompt.
-SECONDARY_COMBINE: Final = 150
-IMAGE_FROM_BATCH: Final = 152
-SAVE_AUDIO: Final = 149
-LAST_FRAME_INDEX: Final = 151
-SAVE_LAST_FRAME: Final = 153
-
-EDITOR_ONLY_NODES: Final[tuple[int, ...]] = (
-    QUANT_SWITCH,
-    CACHE_SWITCH,
-    CLIP_SWITCH,
-    MODEL_SWITCH,
-    ATTN_SWITCH,
-    STEPS_SWITCH,
-    FPS_SWITCH,
-    TURBO_STEPS,
-    DEFAULT_STEPS,
-    FLOAT_TO_INT,
-    SECONDARY_COMBINE,
-    IMAGE_FROM_BATCH,
-    SAVE_AUDIO,
-    LAST_FRAME_INDEX,
-    SAVE_LAST_FRAME,
-)
-
-CACHE_NODES: Final[tuple[int, ...]] = (EASY_CACHE, SPECTRUM, H3_CACHE)
-
-CACHE_NODE_BY_NAME: Final[dict[str, int]] = {
-    "easy": EASY_CACHE,
-    "spectrum": SPECTRUM,
-    "h3": H3_CACHE,
-}
 
 # Node types that only exist in the editor graph and have no executable class.
 UI_ONLY_TYPES: Final[frozenset[str]] = frozenset(
@@ -129,8 +24,29 @@ UI_ONLY_TYPES: Final[frozenset[str]] = frozenset(
     }
 )
 
+# The commentary an export keeps. The rest of `UI_ONLY_TYPES` is resolved switchgear: an
+# rgthree bypasser drives nodes by group membership, and in an export the groups it drove no
+# longer all exist, so it would offer to toggle nothing.
+UI_KEPT_TYPES: Final[frozenset[str]] = frozenset({"Note", "MarkdownNote"})
+
+# Output slots of the loaders `apply_config` mints when the template bypassed them. Only the
+# editor projection needs these: an API prompt names its source node and slot index, while a
+# node in the editor has to declare the slots those indices refer to.
+OUTPUT_SLOTS: Final[dict[str, tuple[tuple[str, str], ...]]] = {
+    "LoadImage": (("IMAGE", "IMAGE"), ("MASK", "MASK")),
+    "LoadVideo": (("VIDEO", "VIDEO"),),
+    "LoadAudio": (("AUDIO", "AUDIO"),),
+    "GetVideoComponents": (
+        ("images", "IMAGE"),
+        ("audio", "AUDIO"),
+        ("fps", "FLOAT"),
+        ("bit_depth", "INT"),
+    ),
+}
+
 # Widget order matching each node's `widgets_values` array. Editor-only trailing entries
-# (control_after_generate, seed_mode) are deliberately absent.
+# (control_after_generate, seed_mode) are deliberately absent. Refresh it against the
+# installed ComfyUI with `h3lab check --widgets`.
 WIDGET_ORDER: Final[dict[str, list[str] | None]] = {
     "UNETLoader": ["unet_name", "weight_dtype"],
     "OTUNetLoaderW8A8": [
@@ -153,7 +69,7 @@ WIDGET_ORDER: Final[dict[str, list[str] | None]] = {
     "CLIPLoader": ["clip_name", "type", "device"],
     "CLIPLoaderGGUF": ["clip_name", "type"],
     "VAELoader": ["vae_name"],
-    "LoadImage": ["image"],
+    "LoadImage": ["image", "upload"],
     "LoadVideo": ["file"],
     "LoadAudio": ["audio"],
     "GetVideoComponents": [],
@@ -173,6 +89,10 @@ WIDGET_ORDER: Final[dict[str, list[str] | None]] = {
         "debug",
         "history_storage",
         "bootstrap_first_forecast",
+        "anchor_residual_feedback",
+        "selective_rollback_correction",
+        "offline_smoothing_replay",
+        "audio_blend_weight",
     ],
     "UC_MiniMaxH3Cache": [
         "reuse_threshold",
@@ -191,10 +111,13 @@ WIDGET_ORDER: Final[dict[str, list[str] | None]] = {
         "sink_conditioning",
         "morton",
         "morton_curve",
+        "int8_pv",
         "verbose",
         "use_tma",
+        "dense_blocks",
+        "tau_profile",
     ],
-    "MiniMaxH3TurboLoRA": ["lora_name", "strength_model"],
+    "MiniMaxH3TurboLoRA": ["lora_name", "strength", "low_vram"],
     "LoraLoaderModelOnly": ["lora_name", "strength_model"],
     "ImageScale": ["upscale_method", "width", "height", "crop"],
     "CM_FloatToInt": ["a"],
@@ -216,12 +139,22 @@ WIDGET_ORDER: Final[dict[str, list[str] | None]] = {
         "batch_size",
         "use_fp16",
     ],
-    "RTXVideoSuperResolution": ["resize_type", "scale", "quality"],
+    "FrameInterpolationModelLoader": ["model_name"],
+    "FrameInterpolate": ["multiplier"],
+    # A dynamic combo: the chosen mode decides whether the following widgets are
+    # `resize_type.scale` or `resize_type.width` + `resize_type.height`. Only the saved node
+    # knows, which is why what a node declares outranks this table.
+    "RTXVideoSuperResolution": ["resize_type", "quality"],
     "VHS_VideoCombine": None,  # dict-shaped widgets_values, handled separately
+    "Seed (rgthree)": ["seed"],
+    "SaveImage": ["filename_prefix"],
+    "SaveAudio": ["filename_prefix"],
+    "ImageFromBatch": ["batch_index", "length"],
     "Any Switch (rgthree)": [],
     "BasicGuider": [],
     "SamplerCustomAdvanced": [],
     "VAEDecode": [],
     "VAEDecodeAudio": [],
     "easy cleanGpuUsed": [],
+    "MiniMaxH3MemoryEfficientSageAttentionPatch": [],
 }

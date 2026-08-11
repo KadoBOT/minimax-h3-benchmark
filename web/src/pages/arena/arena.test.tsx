@@ -14,8 +14,8 @@ const MATCHUP = {
     a_run_id: "a",
     b_run_id: "b",
     pool: "pool1",
-    pool_label: "flf2v · 0.5 MP · 5s · 16:9 · no rife · no upscale",
-    held: { Megapixels: "0.5 MP", Duration: "5s", RIFE: "off", Upscaler: "off" },
+    pool_label: "flf2v · 0.5 MP · 5s · 16:9 · no interp · no upscale",
+    held: { Megapixels: "0.5 MP", Duration: "5s", Interpolation: "off", Upscaler: "off" },
     differences: [{ field: "sampler", label: "Sampler", values: ["euler", "dpmpp_2m"] }],
     axis: "sampler",
     seed_matched: true,
@@ -179,6 +179,14 @@ describe("the arena", () => {
 
     expect(await screen.findByText(/nothing fair to compare yet/i)).toBeInTheDocument()
     expect(screen.getByText(/sweep a sampler/i)).toBeInTheDocument()
+  })
+
+  it("offers participant filtering control defaulting to score >= 7", async () => {
+    fakeApi({ ...BASELINE_ROUTES, "/api/arena/next": MATCHUP })
+    renderApp(<ArenaPage />)
+
+    expect(await screen.findByText(/participants:/i)).toBeInTheDocument()
+    expect(screen.getByText(/score ≥ 7 \(default\)/i)).toBeInTheDocument()
   })
 })
 

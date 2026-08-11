@@ -32,6 +32,52 @@ filmstrip, and probe facts (width, height, fps, frame count, byte size).
 `sec_per_it` (seconds per sampler step, the same unit ComfyUI's tqdm prints), sampler
 step count, and whether ComfyUI served the sampler from its execution cache.
 
+**Turbo LoRA** — the distilled LoRA the `turbo` toggle applies, named by the `turbo_lora`
+field and scaled by `turbo_lora_strength`. Which file is chosen is part of a run's identity: two
+turbo runs with different LoRAs are two experiments, and both fields are hashed, contested in
+the arena, and sweepable. A turbo run samples at the step count its LoRA was distilled for,
+read from the filename (`..._4step_...` → 4 steps), so the step field is inert while turbo is
+on. With turbo off both fields are cleared, so every non-turbo run hashes alike.
+
+**Frame interpolation** — the `interp` field: which interpolator, if any, runs between the
+decode and the muxer. One of `off` (24 fps, every frame sampled), `film` (FILM Net doubles
+the frames it is given, so 48 fps), `rife` (RIFE resamples to 60 fps). Post-processing, not
+generation: it invents frames rather than sampling them, which is why it is a *held setting*
+in the arena rather than a contested one.
+
+**Workflow** — a ComfyUI graph in the editor's own format: positioned nodes, links, and
+groups. The lab keeps one per mode as a **template** and never edits it at runtime. A template
+may contain **subgraphs**: reusable definitions instanced as a single node on the canvas.
+
+**Prompt** — the same graph in ComfyUI's API format, a flat mapping of node id to class and
+inputs. This is what a run submits. It carries no layout, so it opens as a heap of boxes;
+`workflow` is the form a person can read. A run's **exported workflow** is its prompt
+projected back into the template's layout, which is also the graph embedded in the still
+saved beside the video.
+
+**Execution id** — the id a node has in a prompt. For a node drawn at the top level it is the
+number the editor gave it; for a node inside a subgraph it is the instance path joined with
+colons (`169:10` is local node 10 inside instance 169), which is the id ComfyUI's own executor
+reports progress and errors against. Ids are addresses, not names: editing a template moves
+them, so nothing in the lab may be keyed by one.
+
+**Role** — what a node *is* to the lab, independent of where it sits: `sampler`,
+`conditioning`, `turbo_lora`, `video_out`, and so on. Roles are resolved per template by
+looking at a node's title tag (`MS_INPUT_STEPS`), then its class, then its wiring, then the id
+it had when the lab was written. A title of the form `MS_ROLE:duration` is an explicit override
+that beats every guess. `h3lab check --roles` prints the table with the rule that found each
+one, and a role found only by *first of class* is reported as a guess.
+
+**Essential role** — a role no prompt can be built without: the diffusion loader,
+conditioning, scheduler, guider, sampler, VAE decode, and video output. A template missing one
+fails `h3lab check` instead of failing a run.
+
+**Node schema** — the installed ComfyUI's own description of a node class, read from
+`/object_info`: its input names, which are required, each combo's options, and the widget
+order. It is the authority on how a node's widgets are named, because a node pack can rename
+one between two updates. The lab works without it — the widget order saved in the template
+answers first — but with it, a renamed widget is reported instead of rejected.
+
 ## Judgement
 
 **Rating** — a human's absolute judgement of one run: `stars` 1–10 overall, plus optional
@@ -87,13 +133,14 @@ one rule is that the pair must be comparable, so a vote is evidence about the se
 rather than about the resolution.
 
 **Held setting** — a config field that must be identical on both sides of a matchup: mode,
-prompt, media, aspect, megapixels, duration, RIFE, upscaler, widget overrides. RIFE and the
-upscaler are held rather than ranked because they make a clip look better without making
-the generation better, so a voter who can see one is answering a different question.
+prompt, media, aspect, megapixels, duration, frame interpolation, upscaler, widget
+overrides. Interpolation and the upscaler are held rather than ranked because they make a
+clip look better without making the generation better, so a voter who can see one is
+answering a different question.
 
 **Contested setting** — a config field the arena is willing to differ on, and therefore
-ranks: weights, sampler, scheduler, steps, turbo, cache, cache preset, Sol-Attn, Sol
-preset.
+ranks: weights, sampler, scheduler, steps, turbo, turbo LoRA, turbo LoRA strength, cache, cache
+preset, Sol-Attn, Sol preset.
 
 **Ignored setting** — `seed` and `clean_vram`, which are neither held nor ranked. Clearing
 VRAM cannot change a pixel; the seed can change everything but is noise rather than a
@@ -151,6 +198,11 @@ time, because there is one GPU.
 
 **Reconcile** — the startup step that finds runs left in a live status by a crash and marks
 them `interrupted`.
+
+**Template reload** — a template is parsed once and held, but its modification time and size
+are checked on the way into every run. An edited file is read again and announced as a
+`lab.message`; an unchanged one is a cache hit. A run always holds one graph from start to
+finish, so an edit mid-sweep cannot change what a finished run claims to have executed.
 
 **Run status** — `queued` → `running` → `succeeded`, or `failed` / `cancelled` /
 `interrupted`.

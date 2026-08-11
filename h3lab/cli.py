@@ -48,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = sub.add_parser("check", help="report what is wrong without queueing anything")
     check.add_argument("--json", action="store_true", help="machine-readable output")
+    check.add_argument(
+        "--roles",
+        action="store_true",
+        help="name the node playing each role in every template",
+    )
 
     sub.add_parser("import-legacy", help="pull runs out of the previous lab's database")
     sub.add_parser("routes", help="list every route the API answers")
@@ -89,47 +94,102 @@ def _probe_config(mode: str):
     return GenerationConfig(**fields)
 
 
-def _checks(settings: Settings) -> list[dict[str, object]]:
+class Report:
+    """What `check` found: one row per subsystem, plus the role table per template."""
+
+    def __init__(self) -> None:
+        self.checks: list[dict[str, object]] = []
+        self.roles: dict[str, list[dict[str, object]]] = {}
+
+    def record(self, name: str, ok: bool, detail: str) -> None:
+        self.checks.append({"check": name, "ok": ok, "detail": detail})
+
+    @property
+    def ok(self) -> bool:
+        return all(bool(item["ok"]) for item in self.checks)
+
+
+def _role_detail(rows: list[dict[str, object]]) -> tuple[bool, str]:
+    """One sentence about how well the lab still recognises a template.
+
+    An essential role with nobody to play it is a failure — that template cannot be built.
+    Every other absence is information: no template has every optional node.
+    """
+    found = [row for row in rows if row["node"]]
+    missing = [str(row["role"]) for row in rows if not row["node"] and row["essential"]]
+    detail = f"{len(found)}/{len(rows)} roles"
+    if missing:
+        return False, f"{detail} — no {', '.join(missing)}"
+    guessed = [str(row["role"]) for row in rows if row["how"] == "first of class"]
+    if guessed:
+        detail += f" — guessed: {', '.join(guessed)}"
+    return True, detail
+
+
+def _checks(settings: Settings) -> Report:
     """Each check answers one question a user would otherwise answer by trial and error."""
+    from h3lab.comfy import roles as R
     from h3lab.comfy.client import ComfyClient, ComfyError
-    from h3lab.comfy.graph import apply_config, load_workflow, missing_links
+    from h3lab.comfy.graph import build, load_workflow, missing_links
+    from h3lab.comfy.schema import Schemas
+    from h3lab.comfy.workflow import read
     from h3lab.domain.config import GEN_MODES
     from h3lab.engine import artifacts
 
-    results: list[dict[str, object]] = []
-
-    def record(name: str, ok: bool, detail: str) -> None:
-        results.append({"check": name, "ok": ok, "detail": detail})
+    report = Report()
+    record = report.record
 
     record("data directory", True, str(settings.data_dir))
     settings.ensure_dirs()
 
-    for mode in GEN_MODES:
-        path = settings.workflow_path(mode)
-        if not path.is_file():
-            record(f"workflow {mode}", False, f"missing at {path}")
-            continue
-        try:
-            prompt = apply_config(load_workflow(path), _probe_config(mode), output_tag="check")
-            dangling = missing_links(prompt)
-            record(
-                f"workflow {mode}",
-                not dangling,
-                f"{len(prompt)} nodes" if not dangling else f"dangling links: {dangling}",
-            )
-        except Exception as exc:  # noqa: BLE001 - a broken template is the answer, not a crash
-            record(f"workflow {mode}", False, f"{type(exc).__name__}: {exc}")
-
+    # ComfyUI comes first because its answer changes the workflow checks: with the live node
+    # schemas in hand, a widget a node pack renamed is reported here instead of at run time.
     client = ComfyClient(settings.comfy_url, connect_timeout_s=1.5, request_timeout_s=5.0)
+    schemas = Schemas()
     try:
         stats = client.system_stats()
         devices = stats.get("devices") or []
         name = devices[0].get("name", "unknown") if devices else "unknown"
         record("comfyui", True, f"{settings.comfy_url} — {name}")
+        schemas = Schemas.from_client(client)
+        record(
+            "node schemas",
+            bool(schemas),
+            f"{len(schemas)} node classes installed" if schemas else "ComfyUI answered nothing",
+        )
     except ComfyError as exc:
         record("comfyui", False, f"{settings.comfy_url} — {exc}")
     finally:
         client.close()
+
+    for mode in GEN_MODES:
+        path = settings.workflow_path(mode)
+        if not path.is_file():
+            record(f"workflow {mode}", False, f"missing at {path}")
+            record(f"roles {mode}", False, f"missing at {path}")
+            continue
+        try:
+            template = load_workflow(path)
+            # Roles are read from the template itself, not from the patched graph: the
+            # question is what this file contains, not what one probe config switched on.
+            graph = read(template, widget_names=schemas.widget_names)
+            rows = R.resolve(graph).report(graph)
+            report.roles[mode] = rows
+            record(f"roles {mode}", *_role_detail(rows))
+        except Exception as exc:  # noqa: BLE001 - an unreadable template is the answer
+            record(f"roles {mode}", False, f"{type(exc).__name__}: {exc}")
+        try:
+            prompt, _graph, _roles = build(
+                template, _probe_config(mode), output_tag="check", schemas=schemas
+            )
+            trouble = missing_links(prompt) + schemas.problems(prompt)
+            record(
+                f"workflow {mode}",
+                not trouble,
+                f"{len(prompt)} nodes" if not trouble else "; ".join(trouble),
+            )
+        except Exception as exc:  # noqa: BLE001 - a broken template is the answer, not a crash
+            record(f"workflow {mode}", False, f"{type(exc).__name__}: {exc}")
 
     models_dir = settings.models_dir
     if models_dir.is_dir():
@@ -153,13 +213,33 @@ def _checks(settings: Settings) -> list[dict[str, object]]:
         dist.is_file(),
         str(settings.web_dist) if dist.is_file() else "not built — run `npm run build` in web/",
     )
-    return results
+    return report
 
 
-def command_check(settings: Settings, as_json: bool, out: TextIO) -> int:
-    results = _checks(settings)
+def _write_roles(report: Report, out: TextIO) -> None:
+    """The role table: which node the lab believes plays each part, and why it believes it."""
+    for mode, rows in report.roles.items():
+        out.write(f"\nroles — {mode}\n")
+        width = max(len(str(row["role"])) for row in rows)
+        for row in rows:
+            if not row["node"]:
+                out.write(f"  {str(row['role']).ljust(width)}  —\n")
+                continue
+            line = f"  {str(row['role']).ljust(width)}  {row['node']:<8} {row['class_type']}"
+            title = str(row["title"] or "")
+            if title:
+                line += f" “{title}”"
+            out.write(f"{line}  ({row['how']})\n")
+
+
+def command_check(settings: Settings, as_json: bool, out: TextIO, roles: bool = False) -> int:
+    report = _checks(settings)
+    results = report.checks
     if as_json:
-        json.dump({"ok": all(item["ok"] for item in results), "checks": results}, out, indent=2)
+        payload: dict[str, object] = {"ok": report.ok, "checks": results}
+        if roles:
+            payload["roles"] = report.roles
+        json.dump(payload, out, indent=2)
         out.write("\n")
     else:
         width = max(len(str(item["check"])) for item in results)
@@ -172,8 +252,14 @@ def command_check(settings: Settings, as_json: bool, out: TextIO) -> int:
             if failed
             else f"\nall {len(results)} checks passed\n"
         )
+        if roles:
+            _write_roles(report, out)
     # ffmpeg and the front end are optional; the lab runs without them.
-    fatal = {"comfyui"} | {item["check"] for item in results if str(item["check"]).startswith("workflow")}
+    fatal = {"comfyui"} | {
+        item["check"]
+        for item in results
+        if str(item["check"]).startswith(("workflow", "roles"))
+    }
     return EXIT_PROBLEM if any(not i["ok"] and i["check"] in fatal for i in results) else EXIT_OK
 
 
@@ -255,6 +341,7 @@ def command_serve(settings: Settings, args: argparse.Namespace, out: TextIO) -> 
             port=settings.port,
             reload=True,
             factory=False,
+            timeout_graceful_shutdown=1.0,
         )
         return EXIT_OK
 
@@ -264,7 +351,13 @@ def command_serve(settings: Settings, args: argparse.Namespace, out: TextIO) -> 
     lab = Lab(settings, start_worker=not args.no_worker)
     app = create_app(lab=lab, settings=settings)
     try:
-        uvicorn.run(app, host=settings.host, port=settings.port, log_level="info")
+        uvicorn.run(
+            app,
+            host=settings.host,
+            port=settings.port,
+            log_level="info",
+            timeout_graceful_shutdown=1.0,
+        )
     finally:
         lab.close()
     return EXIT_OK
@@ -282,7 +375,9 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
     settings = settings_from(args)
 
     handlers = {
-        "check": lambda: command_check(settings, as_json=args.json, out=stream),
+        "check": lambda: command_check(
+            settings, as_json=args.json, out=stream, roles=getattr(args, "roles", False)
+        ),
         "routes": lambda: command_routes(settings, stream),
         "openapi": lambda: command_openapi(settings, stream),
         "import-legacy": lambda: command_import_legacy(settings, stream),

@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from h3lab.comfy.catalog import Catalog, CatalogCache
 from h3lab.comfy.client import ComfyClient
+from h3lab.comfy.editor import run_provenance, to_editor_workflow
 from h3lab.comfy.graph import apply_config, describe, missing_links
 from h3lab.domain.arena import (
     ArenaRun,
@@ -205,7 +206,7 @@ class Lab:
 
         self.events = EventBus()
         self.catalog_cache = CatalogCache(self.settings)
-        self.workflows = WorkflowCache(self.settings)
+        self.workflows = WorkflowCache(self.settings, events=self.events)
         self.client = client or ComfyClient(
             self.settings.comfy_url, run_timeout_s=self.settings.comfy_timeout_s
         )
@@ -222,6 +223,7 @@ class Lab:
     def close(self) -> None:
         self.runner.stop()
         self.client.close()
+        self.events.close()
 
     # --- catalog and status ------------------------------------------------
 
@@ -396,6 +398,19 @@ class Lab:
             duplicate_of=self.runs.hashes().get(config_hash(config)),
             **identity,
         )
+
+    def workflow_for_run(self, run_id: str) -> dict[str, Any]:
+        """The run's graph as a ComfyUI editor workflow, ready to open.
+
+        Built from the template as it is on disk now rather than stored per run: a run is its
+        config, and the config is what the export applies. If the template has since changed,
+        the export follows it — which is the same graph the lab would submit if the run were
+        queued again today, and so the honest answer to "give me this run's workflow".
+        """
+        run = self.runs.require(run_id)
+        workflow = self.workflows.get(run.config.mode)
+        prompt = apply_config(workflow, run.config, output_tag=run.id)
+        return to_editor_workflow(workflow, prompt, provenance=run_provenance(run))
 
     def cancel(self, run_id: str) -> bool:
         return self.runner.cancel(run_id)
@@ -598,22 +613,25 @@ class Lab:
 
     # --- the arena ---------------------------------------------------------
 
-    def arena_runs(self) -> list[ArenaRun]:
+    def arena_runs(self, min_stars: int | None = None) -> list[ArenaRun]:
         """The runs the arena is allowed to work with: finished, watchable, not archived.
 
         A voter cannot compare what will not play, so a run without a video is not in the
         arena at all — not offered, and not counted in what is left to judge.
         """
+        filter_min = min_stars if min_stars is not None and min_stars > 0 else None
         return [
             ArenaRun(run_id=run.id, config=run.config, sec_per_it=run.metrics.sec_per_it)
-            for run in self.runs.all(RunFilter(status=("succeeded",), archived=False))
+            for run in self.runs.all(RunFilter(status=("succeeded",), archived=False, min_stars=filter_min))
             if run.artifact.has_video
         ]
 
-    def arena_matchup(self, *, exclude: Sequence[str] = ()) -> ArenaMatchup | None:
+    def arena_matchup(
+        self, *, exclude: Sequence[str] = (), min_stars: int | None = None
+    ) -> ArenaMatchup | None:
         """The next fair pair to show, or nothing if no two runs are comparable yet."""
         chosen = next_matchup(
-            self.arena_runs(), self.votes.list(limit=5000), exclude=exclude
+            self.arena_runs(min_stars=min_stars), self.votes.list(limit=5000), exclude=exclude
         )
         if chosen is None:
             return None
@@ -623,9 +641,9 @@ class Lab:
             b=self.get_run(chosen.b_run_id),
         )
 
-    def arena_standings(self) -> ArenaStandings:
+    def arena_standings(self, min_stars: int | None = None) -> ArenaStandings:
         """What every vote so far is evidence about, replayed against today's runs."""
-        return arena_table(self.arena_runs(), self.votes.list(limit=5000))
+        return arena_table(self.arena_runs(min_stars=min_stars), self.votes.list(limit=5000))
 
     # --- maintenance -------------------------------------------------------
 
@@ -661,6 +679,8 @@ _COMPARABLE_FIELDS: tuple[tuple[str, str], ...] = (
     ("scheduler", "Scheduler"),
     ("sampler", "Sampler"),
     ("steps", "Steps"),
+    ("turbo_lora", "Turbo LoRA"),
+    ("turbo_lora_strength", "Turbo strength"),
     ("mp", "Megapixels"),
     ("duration_s", "Duration"),
     ("aspect_ratio", "Aspect"),

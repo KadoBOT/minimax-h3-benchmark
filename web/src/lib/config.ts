@@ -13,10 +13,27 @@ export type Draft = GenerationConfig
 /** Fields that stop mattering once something else is set, so the form can grey them out. */
 export function inertFields(config: Draft): Set<string> {
   const inert = new Set<string>()
-  if (config.turbo) inert.add("steps") // the turbo LoRA has a fixed 4-step schedule
+  if (config.turbo) inert.add("steps") // the LoRA's own schedule replaces the step count
   if (config.cache === "none" || config.cache_enabled === false) inert.add("cache_preset")
   if (!config.sol_attn) inert.add("sol_preset")
   return inert
+}
+
+/** The LoRA a turbo run will load: the one it names, or the machine's default. */
+export function turboLora(config: Draft, catalog: Catalog | undefined): string {
+  return config.turbo_lora || catalog?.default_turbo_lora || ""
+}
+
+/**
+ * The schedule a turbo run samples at.
+ *
+ * A distilled LoRA is trained for a fixed step count and says so in its filename, so picking
+ * a different one silently changes the sampling. The count is read on the server and shipped
+ * in the catalog rather than parsed again here, so the form and the run cannot disagree.
+ */
+export function turboSteps(config: Draft, catalog: Catalog | undefined): number | undefined {
+  if (!config.turbo) return undefined
+  return catalog?.turbo_lora_steps?.[turboLora(config, catalog)]
 }
 
 export function needsOf(meta: Meta | undefined, mode: string | undefined): ModeNeeds | undefined {

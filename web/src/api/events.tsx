@@ -9,6 +9,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient, type QueryClient } from "@tanstack/react-query"
+import { toast } from "sonner"
 
 import { keys } from "./keys"
 import { routes } from "./routes"
@@ -189,6 +190,14 @@ function apply(client: QueryClient, event: LabEvent) {
       void client.invalidateQueries({ queryKey: keys.status })
       void client.invalidateQueries({ queryKey: keys.catalog })
       return
+
+    // Something happened that nobody asked for: a template re-read after an edit, a preview
+    // that could not be downloaded. Worth saying once, out loud, wherever the user is.
+    case "lab.message": {
+      const said = text((event.data ?? {})["text"])
+      if (said) toast.message(said)
+      return
+    }
 
     default:
       return

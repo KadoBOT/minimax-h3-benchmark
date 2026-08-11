@@ -34,9 +34,11 @@ async def events(lab: LabDep, request: Request, after: int = 0) -> StreamingResp
     async def pump() -> object:
         idle = 0.0
         try:
-            while not await request.is_disconnected():
+            while not subscription.closed and not await request.is_disconnected():
                 # The bus is thread-blocking by design; keep the event loop free while waiting.
                 event = await asyncio.to_thread(subscription.get, POLL_S)
+                if subscription.closed:
+                    break
                 if event is not None:
                     idle = 0.0
                     yield event.to_sse()

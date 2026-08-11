@@ -17,36 +17,56 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { display, label as fieldLabel } from "@/lib/config"
-import { plural } from "@/lib/format"
+import { loraStem, modelStem, plural } from "@/lib/format"
 import { Choice } from "./config-form"
 
 /** Fields worth sweeping, with the values each one can take. */
-type Sweepable = { field: string; values: (string | number | boolean)[] }
+type Sweepable = {
+  field: string
+  values: (string | number | boolean)[]
+  /** For values whose filenames are 60 characters of shared prefix. */
+  render?: (value: string | number | boolean) => string
+}
 
 function sweepable(meta: Meta | undefined, catalog: SweepCatalog): Sweepable[] {
-  return [
+  const axes: Sweepable[] = [
     { field: "cache", values: meta?.caches ?? [] },
     { field: "cache_preset", values: meta?.preset_levels ?? [] },
     { field: "sol_preset", values: meta?.preset_levels ?? [] },
     { field: "sol_attn", values: [true, false] },
     { field: "turbo", values: [true, false] },
-    { field: "rife", values: [true, false] },
+    {
+      field: "turbo_lora",
+      values: catalog.turbo_loras ?? [],
+      render: (value) => loraStem(String(value)),
+    },
+    { field: "turbo_lora_strength", values: [0.5, 0.75, 1, 1.25] },
+    { field: "interp", values: meta?.interpolations ?? [] },
     { field: "upscaler", values: [true, false] },
     { field: "clean_vram", values: [true, false] },
     { field: "sampler", values: catalog.samplers },
     { field: "scheduler", values: catalog.schedulers },
     { field: "aspect_ratio", values: catalog.aspect_ratios },
-    { field: "diffusion_model", values: catalog.diffusion_models },
+    {
+      field: "diffusion_model",
+      values: catalog.diffusion_models,
+      render: (value) => modelStem(String(value)),
+    },
     { field: "steps", values: [4, 8, 12, 16, 20, 28, 36] },
     { field: "mp", values: [0.25, 0.5, 0.75, 1, 1.5] },
-  ].filter((axis) => axis.values.length > 1)
+  ]
+  return axes.filter((axis) => axis.values.length > 1)
 }
+
+/** Axes that only mean something while another setting is on, and what turns them on. */
+const NEEDS_TURBO = new Set(["turbo_lora", "turbo_lora_strength"])
 
 type SweepCatalog = {
   samplers: string[]
   schedulers: string[]
   aspect_ratios: string[]
   diffusion_models: string[]
+  turbo_loras?: string[]
 }
 
 type Picked = { field: string; values: (string | number | boolean)[] }
@@ -158,11 +178,17 @@ export function SweepBuilder({
                             : "border-rule text-muted-foreground hover:border-rule/80 hover:text-bone rounded-sm border px-2 py-1 font-mono text-xs"
                         }
                       >
-                        {display(value)}
+                        {found?.render ? found.render(value) : display(value)}
                       </button>
                     )
                   })}
                 </div>
+                {NEEDS_TURBO.has(axis.field) && !base.turbo ? (
+                  <p className="text-signal mt-1.5 text-xs">
+                    Turbo is off, so no LoRA is loaded and every run here is the same run. Turn
+                    Turbo on above to vary this.
+                  </p>
+                ) : null}
               </div>
             )
           })}

@@ -18,6 +18,7 @@ export const routes = {
   runRating: (id: string) => `/api/runs/${id}/rating`,
   runRerun: (id: string) => `/api/runs/${id}/rerun`,
   runCancel: (id: string) => `/api/runs/${id}/cancel`,
+  runWorkflow: (id: string) => `/api/runs/${id}/workflow`,
   dryRun: () => `/api/runs/dry-run`,
 
   queue: () => `/api/queue`,

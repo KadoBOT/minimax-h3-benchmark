@@ -107,6 +107,20 @@ export function modelStem(filename: string | null | undefined): string {
   return stem || "default"
 }
 
+/**
+ * A turbo LoRA in the few characters that tell it apart from the others.
+ *
+ * Mirrors `lora_stem` in `h3lab/domain/config.py`, which is what the run labels and the arena
+ * standings use — a LoRA has to read the same in the picker as in the row it produced.
+ */
+export function loraStem(filename: string | null | undefined): string {
+  const stem = modelStem(filename)
+  for (const noise of ["turbo_", "turbo-"]) {
+    if (stem.toLowerCase().startsWith(noise)) return stem.slice(noise.length) || "default"
+  }
+  return stem
+}
+
 export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`
 }

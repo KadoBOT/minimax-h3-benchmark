@@ -20,7 +20,12 @@ from h3lab.comfy.client import (
     PromptTimeout,
     _describe_messages,
 )
-from h3lab.domain.config import BASELINE_FIRST_FRAME, BASELINE_REF_IMAGES
+from h3lab.domain.config import (
+    BASELINE_FIRST_FRAME,
+    BASELINE_REF_IMAGES,
+    DEFAULT_TURBO_LORA,
+    DEFAULT_TURBO_STRENGTH,
+)
 from h3lab.settings import Settings
 
 VIDEO_BYTES = b"\x00\x00\x00\x18ftypmp42 not a real video but a real payload"
@@ -167,6 +172,33 @@ def test_queue_sends_the_graph_and_returns_the_prompt_id(comfy, client):
     assert prompt_id == "p1"
     assert state.queued[0]["prompt"]["1"]["class_type"] == "PrimitiveFloat"
     assert state.queued[0]["client_id"] == client.client_id
+
+
+def test_a_submitted_workflow_travels_as_png_metadata(comfy, client):
+    """VHS writes every `extra_pnginfo` key into the PNG it saves beside the video.
+
+    Without this the only chunk written is `prompt`, the API format — which ComfyUI can open,
+    as a wall of unpositioned boxes. The `workflow` key is what makes the saved image open as
+    the graph a person would recognise.
+    """
+    state, _url = comfy
+    workflow = {"nodes": [{"id": 1, "type": "PrimitiveFloat"}], "links": []}
+    client.queue({"1": {"class_type": "PrimitiveFloat", "inputs": {}}}, workflow=workflow)
+    assert state.queued[0]["extra_data"]["extra_pnginfo"]["workflow"] == workflow
+
+
+def test_a_submission_without_a_workflow_sends_no_metadata_block(comfy, client):
+    state, _url = comfy
+    client.queue({"1": {"class_type": "PrimitiveFloat", "inputs": {}}})
+    assert "extra_data" not in state.queued[0]
+
+
+def test_execute_forwards_the_workflow_it_was_given(comfy, client):
+    state, _url = comfy
+    state.history["p1"] = succeeded()
+    workflow = {"nodes": [], "links": []}
+    client.execute({"1": {"class_type": "X", "inputs": {}}}, track=False, workflow=workflow)
+    assert state.queued[0]["extra_data"]["extra_pnginfo"]["workflow"] == workflow
 
 
 def test_a_rejected_graph_reports_which_node_and_input_failed(comfy, client):
@@ -525,3 +557,84 @@ def test_an_incomplete_baseline_reference_set_offers_nothing(tmp_path: Path):
     """
     catalog = _catalog_over(tmp_path, [BASELINE_REF_IMAGES[0], "unrelated.png"])
     assert catalog.default_ref_images == []
+
+
+# --- turbo LoRAs -----------------------------------------------------------
+
+
+def test_the_lora_list_comes_from_the_node_that_will_load_it(comfy, tmp_path: Path):
+    """The installed node's own combo is the only list that cannot disagree with the run."""
+    state, url = comfy
+    state.object_info["MiniMaxH3TurboLoRA"] = {
+        "MiniMaxH3TurboLoRA": {
+            "input": {
+                "required": {
+                    "lora_name": [
+                        "COMBO",
+                        {
+                            "options": [
+                                "MiniMax-H3-Turbo-LoRA-4steps.safetensors",
+                                "MiniMax-H3-Turbo-LoRA-8steps.safetensors",
+                                "wan22_lightx2v.safetensors",
+                            ]
+                        },
+                    ]
+                }
+            }
+        }
+    }
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        models_dir=tmp_path / "models",
+        comfy_input_dir=tmp_path / "input",
+        comfy_url=url,
+    )
+    catalog = build_catalog(settings)
+
+    assert catalog.turbo_loras_source == "comfy"
+    assert catalog.turbo_loras == [
+        "MiniMax-H3-Turbo-LoRA-4steps.safetensors",
+        "MiniMax-H3-Turbo-LoRA-8steps.safetensors",
+    ]
+    assert catalog.default_turbo_lora == "MiniMax-H3-Turbo-LoRA-4steps.safetensors"
+    assert catalog.defaults["turbo_lora"] == catalog.default_turbo_lora
+    assert catalog.defaults["turbo_lora_strength"] == DEFAULT_TURBO_STRENGTH
+    # The form should not have to parse a filename to say what a run will sample at.
+    assert catalog.turbo_lora_steps == {
+        "MiniMax-H3-Turbo-LoRA-4steps.safetensors": 4,
+        "MiniMax-H3-Turbo-LoRA-8steps.safetensors": 8,
+    }
+
+
+def test_an_offline_comfy_still_offers_the_loras_on_disk(tmp_path: Path):
+    loras = tmp_path / "loras"
+    loras.mkdir()
+    for name in ("minimax_h3_turbo_6step.safetensors", "some_other_lora.safetensors"):
+        (loras / name).write_bytes(b"")
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        models_dir=tmp_path / "models" / "diffusion_models",
+        loras_dir=loras,
+        comfy_input_dir=tmp_path / "input",
+        comfy_url="http://127.0.0.1:9",
+    )
+    catalog = build_catalog(settings)
+
+    assert catalog.turbo_loras_source == "disk"
+    assert catalog.turbo_loras == ["minimax_h3_turbo_6step.safetensors"]
+    assert catalog.default_turbo_lora == "minimax_h3_turbo_6step.safetensors"
+
+
+def test_with_nothing_to_read_the_picker_still_names_the_shipped_lora(tmp_path: Path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        models_dir=tmp_path / "models",
+        comfy_input_dir=tmp_path / "input",
+        comfy_url="http://127.0.0.1:9",
+    )
+    catalog = build_catalog(settings)
+
+    assert catalog.turbo_loras_source == "fallback"
+    assert catalog.turbo_loras == [DEFAULT_TURBO_LORA]
+    assert catalog.default_turbo_lora == DEFAULT_TURBO_LORA

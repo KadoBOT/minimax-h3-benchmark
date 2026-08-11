@@ -11,7 +11,7 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 from pydantic import BaseModel, ConfigDict
 
@@ -24,12 +24,15 @@ from h3lab.domain.config import (
     DEFAULT_GGUF_UNET,
     DEFAULT_SAMPLER,
     DEFAULT_SCHEDULER,
+    DEFAULT_TURBO_LORA,
+    DEFAULT_TURBO_STRENGTH,
     DEFAULT_UNET,
     GEN_MODES,
     MAX_REF_AUDIOS,
     MAX_REF_IMAGES,
     MAX_REF_VIDEOS,
     PRESET_LEVELS,
+    turbo_steps_for,
 )
 from h3lab.settings import Settings
 
@@ -107,6 +110,18 @@ def list_models(directory: Path) -> list[str]:
     return [name for name in _listdir(directory, MODEL_SUFFIXES) if is_h3_model(name)]
 
 
+def list_turbo_loras(directory: Path) -> list[str]:
+    """The H3 LoRAs on disk. Same filter as the weights: this model's files, not every LoRA."""
+    return [name for name in _listdir(directory, MODEL_SUFFIXES) if is_h3_model(name)]
+
+
+def default_turbo_lora(names: list[str]) -> str:
+    """The LoRA a turbo run starts from: the one the templates ship with, if it is here."""
+    if DEFAULT_TURBO_LORA in names:
+        return DEFAULT_TURBO_LORA
+    return names[0] if names else DEFAULT_TURBO_LORA
+
+
 def default_model(names: list[str]) -> str:
     if DEFAULT_UNET in names:
         return DEFAULT_UNET
@@ -159,6 +174,13 @@ class Catalog(BaseModel):
     diffusion_models_source: str
     default_diffusion_model: str
 
+    turbo_loras: list[str] = []
+    turbo_loras_source: str = "fallback"
+    default_turbo_lora: str = DEFAULT_TURBO_LORA
+    # The schedule each LoRA was distilled for, read from its filename here rather than
+    # again in the browser, so the form and the run can never quote different step counts.
+    turbo_lora_steps: dict[str, int] = {}
+
     images: list[str]
     videos: list[str]
     audios: list[str]
@@ -176,32 +198,78 @@ class Catalog(BaseModel):
     defaults: dict[str, Any] = {}
 
 
-def _comfy_lists(client: ComfyClient) -> tuple[list[str], list[str], list[str]] | None:
+class _Live(NamedTuple):
+    """The lists a running ComfyUI answered for. Any one of them may be empty."""
+
+    schedulers: list[str]
+    samplers: list[str]
+    aspects: list[str]
+    loras: list[str]
+
+    @property
+    def usable(self) -> bool:
+        return bool(self.schedulers and self.samplers)
+
+
+def _comfy_loras(client: ComfyClient) -> list[str]:
+    """What the turbo node itself will accept, which is the only list that cannot be wrong.
+
+    It offers every LoRA in the folder, so it is filtered to this model's files the same way
+    the weights list is. A LoRA for another model in the picker is not a choice, it is a
+    failed run five minutes later.
+    """
+    for class_type, input_name in (
+        ("MiniMaxH3TurboLoRA", "lora_name"),
+        ("LoraLoaderModelOnly", "lora_name"),
+    ):
+        options = client.combo_options(class_type, input_name)
+        if options:
+            return [name for name in options if is_h3_model(name)]
+    return []
+
+
+def _from_comfy(client: ComfyClient) -> _Live | None:
+    """Every list the installed nodes can answer for, or `None` if none of them answered.
+
+    The lists are gathered together but judged apart. An instance without the resolution
+    node still knows its LoRAs, and a sampler list that comes back empty is no reason to
+    fall back to a guessed LoRA list.
+    """
     try:
         schedulers = client.combo_options("BasicScheduler", "scheduler")
         samplers = client.combo_options("KSamplerSelect", "sampler_name")
         aspects = client.combo_options("ResolutionSelector", "aspect_ratio")
+        loras = _comfy_loras(client)
     except ComfyError:
         return None
-    if not schedulers or not samplers:
-        return None
-    return schedulers, samplers, aspects or list(FALLBACK_ASPECTS)
+    return _Live(schedulers, samplers, aspects or list(FALLBACK_ASPECTS), loras)
 
 
 def build_catalog(settings: Settings, client: ComfyClient | None = None) -> Catalog:
     owned = client is None
     client = client or ComfyClient(settings.comfy_url)
     try:
-        lists = _comfy_lists(client)
+        live = _from_comfy(client)
     finally:
         if owned:
             client.close()
+    loras = live.loras if live is not None else []
 
     models = list_models(settings.diffusion_models_dir)
     models_source = "disk"
     if not models:
         models = [DEFAULT_UNET, DEFAULT_GGUF_UNET]
         models_source = "fallback"
+
+    loras_source = "comfy"
+    if not loras:
+        loras = list_turbo_loras(settings.lora_models_dir)
+        loras_source = "disk"
+    if not loras:
+        loras = [DEFAULT_TURBO_LORA]
+        loras_source = "fallback"
+    chosen_lora = default_turbo_lora(loras)
+    lora_steps = {name: turbo_steps_for(name) for name in loras}
 
     images = _listdir(settings.comfy_input_dir, IMAGE_SUFFIXES)
     videos = _listdir(settings.comfy_input_dir, VIDEO_SUFFIXES)
@@ -226,6 +294,9 @@ def build_catalog(settings: Settings, client: ComfyClient | None = None) -> Cata
         "seed": 42,
         "mp": 0.5,
         "duration_s": 5.0,
+        "turbo": False,
+        "turbo_lora": chosen_lora,
+        "turbo_lora_strength": DEFAULT_TURBO_STRENGTH,
         "cache_enabled": True,
         "cache": "spectrum",
         "cache_preset": "moderate",
@@ -233,7 +304,7 @@ def build_catalog(settings: Settings, client: ComfyClient | None = None) -> Cata
         "sol_preset": "moderate",
     }
 
-    if lists is None:
+    if live is None or not live.usable:
         return Catalog(
             comfy_online=False,
             comfy_url=settings.comfy_url,
@@ -244,6 +315,10 @@ def build_catalog(settings: Settings, client: ComfyClient | None = None) -> Cata
             diffusion_models=models,
             diffusion_models_source=models_source,
             default_diffusion_model=chosen_model,
+            turbo_loras=loras,
+            turbo_loras_source=loras_source,
+            default_turbo_lora=chosen_lora,
+            turbo_lora_steps=lora_steps,
             images=images,
             videos=videos,
             audios=audios,
@@ -253,7 +328,7 @@ def build_catalog(settings: Settings, client: ComfyClient | None = None) -> Cata
             defaults=defaults,
         )
 
-    schedulers, samplers, aspects = lists
+    schedulers, samplers, aspects = live.schedulers, live.samplers, live.aspects
     # Prefer a default the running instance actually offers.
     if DEFAULT_SCHEDULER not in schedulers and schedulers:
         defaults["scheduler"] = schedulers[0]
@@ -272,6 +347,10 @@ def build_catalog(settings: Settings, client: ComfyClient | None = None) -> Cata
         diffusion_models=models,
         diffusion_models_source=models_source,
         default_diffusion_model=chosen_model,
+        turbo_loras=loras,
+        turbo_loras_source=loras_source,
+        default_turbo_lora=chosen_lora,
+        turbo_lora_steps=lora_steps,
         images=images,
         videos=videos,
         audios=audios,

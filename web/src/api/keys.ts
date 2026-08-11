@@ -20,8 +20,9 @@ export const keys = {
   leaderboard: (quality: number, speed: number, limit: number) =>
     ["leaderboard", quality, speed, limit] as const,
   insight: (axis: string) => ["insights", axis] as const,
-  arenaStandings: ["arena", "standings"] as const,
-  arenaMatchup: (exclude: string[]) => ["arena", "next", [...exclude].sort()] as const,
+  arenaStandings: (minStars: number | null = 7) => ["arena", "standings", minStars] as const,
+  arenaMatchup: (exclude: string[], minStars: number | null = 7) =>
+    ["arena", "next", [...exclude].sort(), minStars] as const,
 } as const
 
 /** Everything derived from the set of runs, invalidated together after a run changes. */
