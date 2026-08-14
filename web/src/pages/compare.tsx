@@ -64,8 +64,12 @@ function BenchCompare() {
   return (
     <div className="space-y-4">
       <div
-        className="grid gap-3"
-        style={{ gridTemplateColumns: `repeat(${Math.min(runs.length, 4)}, minmax(0, 1fr))` }}
+        className={cn(
+          "grid gap-3 grid-cols-1",
+          runs.length >= 2 && "sm:grid-cols-2",
+          runs.length === 3 && "lg:grid-cols-3",
+          runs.length >= 4 && "lg:grid-cols-4"
+        )}
       >
         {runs.map((view) => (
           <CompareCard key={view.run.id} view={view} onRemove={() => bench.remove(view.run.id)} />
@@ -111,8 +115,8 @@ function BenchCompare() {
 
 function DiffTable({ differences, count }: { differences: FieldDiff[]; count: number }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+    <div className="overflow-x-auto max-w-full">
+      <table className="w-full min-w-[480px] text-sm">
         <tbody className="divide-rule/60 divide-y">
           {differences.map((diff) => (
             <tr key={diff.field}>

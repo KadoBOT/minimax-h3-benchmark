@@ -36,8 +36,18 @@ step count, and whether ComfyUI served the sampler from its execution cache.
 field and scaled by `turbo_lora_strength`. Which file is chosen is part of a run's identity: two
 turbo runs with different LoRAs are two experiments, and both fields are hashed, contested in
 the arena, and sweepable. A turbo run samples at the step count its LoRA was distilled for,
-read from the filename (`..._4step_...` → 4 steps), so the step field is inert while turbo is
-on. With turbo off both fields are cleared, so every non-turbo run hashes alike.
+read from the filename (`..._4step_...` → 4 steps), and the validator writes that count into
+`steps`, so the field a person reads is the schedule the sampler was given. With turbo off both
+LoRA fields are cleared instead. Either way the derived fields follow the toggle, so two runs
+that produce the same pixels hash alike whatever the form happened to be holding.
+
+**Preview frame** — what the `ModelPreviewOverrideKJ` node in every template draws of the latent
+while it samples. The templates feed the clip's frame count into that node, so a frame is normally
+a short video of the whole shot as it stands rather than a still. The newest one for the run in
+flight is held in memory by the worker and served from `GET /api/runs/{id}/preview`; the
+`run.progress` event carries only `preview_seq` and `preview_mime`, never the bytes, so the event
+bus stays a log of state changes. A preview is a progress indicator, not an artifact: it is never
+written to disk and it is gone when the run ends.
 
 **Frame interpolation** — the `interp` field: which interpolator, if any, runs between the
 decode and the muxer. One of `off` (24 fps, every frame sampled), `film` (FILM Net doubles

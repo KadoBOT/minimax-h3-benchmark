@@ -195,7 +195,7 @@ export function SweepBuilder({
         </div>
       )}
 
-      <div className="border-rule mt-4 grid gap-4 border-t pt-4 sm:grid-cols-2">
+      <div className="border-rule mt-4 grid gap-4 border-t pt-4 grid-cols-1 sm:grid-cols-2">
         <div>
           <Label className="text-muted-foreground mb-1.5 block text-xs">
             Repeats per combination
@@ -206,9 +206,10 @@ export function SweepBuilder({
               const picked = Number(value[0])
               if (Number.isFinite(picked) && picked > 0) setRepeats(picked)
             }}
+            className="w-full flex-wrap sm:flex-nowrap"
           >
             {[1, 2, 3, 5, 8].map((count) => (
-              <ToggleGroupItem key={count} value={String(count)}>
+              <ToggleGroupItem key={count} value={String(count)} className="flex-1">
                 {count}
               </ToggleGroupItem>
             ))}
@@ -222,9 +223,10 @@ export function SweepBuilder({
               const picked = value[0]
               if (picked) setSeedStrategy(picked as SweepRequest["seed_strategy"])
             }}
+            className="w-full flex-wrap sm:flex-nowrap"
           >
             {(meta?.seed_strategies ?? []).map((strategy) => (
-              <ToggleGroupItem key={strategy} value={strategy} className="capitalize">
+              <ToggleGroupItem key={strategy} value={strategy} className="flex-1 capitalize text-xs">
                 {strategy}
               </ToggleGroupItem>
             ))}
@@ -239,31 +241,34 @@ export function SweepBuilder({
         </div>
       </div>
 
-      <div className="border-rule mt-4 flex flex-wrap items-end gap-6 border-t pt-4">
-        <Stat label="Combinations" value={combinations} />
-        <Stat label="Runs" value={projected} tone={projected > 60 ? "signal" : "bone"} />
-        {result ? (
-          <>
-            <Stat label="New" value={result.new_count} tone="mint" />
-            <Stat
-              label="Already run"
-              value={result.duplicate_count}
-              tone={result.duplicate_count ? "signal" : "muted"}
-            />
-          </>
-        ) : null}
+      <div className="border-rule mt-4 flex flex-wrap items-center gap-4 sm:gap-6 border-t pt-4">
+        <div className="flex flex-wrap gap-4 sm:gap-6">
+          <Stat label="Combinations" value={combinations} />
+          <Stat label="Runs" value={projected} tone={projected > 60 ? "signal" : "bone"} />
+          {result ? (
+            <>
+              <Stat label="New" value={result.new_count} tone="mint" />
+              <Stat
+                label="Already run"
+                value={result.duplicate_count}
+                tone={result.duplicate_count ? "signal" : "muted"}
+              />
+            </>
+          ) : null}
+        </div>
 
-        <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs">
+        <label className="w-full sm:w-auto sm:ml-auto flex cursor-pointer items-center gap-2 text-xs">
           <Switch checked={skipDuplicates} onCheckedChange={setSkipDuplicates} size="sm" />
           <span className="text-muted-foreground">Skip what already ran</span>
         </label>
 
-        <div className="flex gap-1.5">
+        <div className="flex gap-1.5 w-full sm:w-auto">
           <Button
             variant="outline"
             size="sm"
             disabled={blocked || preview.isPending}
             onClick={() => preview.mutate(request)}
+            className="flex-1 sm:flex-none"
           >
             Preview
           </Button>
@@ -271,6 +276,7 @@ export function SweepBuilder({
             size="sm"
             disabled={blocked || start.isPending}
             onClick={() => start.mutate(request)}
+            className="flex-1 sm:flex-none"
           >
             <Layers data-icon="inline-start" className="size-3.5" />
             Queue {plural(skipDuplicates && result ? result.new_count : projected, "run")}

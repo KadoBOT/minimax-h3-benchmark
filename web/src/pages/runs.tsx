@@ -153,8 +153,8 @@ export function RunsPage() {
         <KeyboardHint />
       </PageHeader>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="relative min-w-52 flex-1">
+      <div className="mb-4 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+        <div className="relative w-full sm:w-auto sm:min-w-52 flex-1">
           <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
           <Input
             ref={searchBox}
@@ -177,77 +177,84 @@ export function RunsPage() {
           ) : null}
         </div>
 
-        <Choice
-          value={sort ?? "recent"}
-          options={Object.keys(SORTS)}
-          render={(value) => SORTS[value] ?? value}
-          onChange={(value) => setSort(value as RunListParams["sort"])}
-          label="Sort runs by"
-          size="sm"
-          className="w-36 shrink-0"
-        />
-
-        <ToggleGroup
-          size="sm"
-          value={statuses}
-          onValueChange={(value) => setStatuses(value as Run["status"][])}
-        >
-          {STATUSES.map((status) => (
-            <ToggleGroupItem key={status} value={status} className="capitalize">
-              {status}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-
-        <ToggleGroup
-          size="sm"
-          value={[
-            ...(onlyFavourites ? ["favourite"] : []),
-            ...(onlyRated === true ? ["rated"] : []),
-            ...(onlyRated === false ? ["unrated"] : []),
-            ...(showArchived ? ["archived"] : []),
-          ]}
-          onValueChange={(value) => {
-            const picked = new Set(value as string[])
-            setOnlyFavourites(picked.has("favourite"))
-            setOnlyRated(picked.has("rated") ? true : picked.has("unrated") ? false : undefined)
-            setShowArchived(picked.has("archived"))
-          }}
-        >
-          <ToggleGroupItem value="favourite">Favourites</ToggleGroupItem>
-          <ToggleGroupItem value="unrated">Unrated</ToggleGroupItem>
-          <ToggleGroupItem value="rated">Rated</ToggleGroupItem>
-          <ToggleGroupItem value="archived">Archived</ToggleGroupItem>
-        </ToggleGroup>
-
-        {tags.data && tags.data.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <Choice
-            value={tag}
-            options={tags.data}
-            onChange={setTag}
-            label="Filter by tag"
-            emptyLabel="Any tag"
-            placeholder="Any tag"
+            value={sort ?? "recent"}
+            options={Object.keys(SORTS)}
+            render={(value) => SORTS[value] ?? value}
+            onChange={(value) => setSort(value as RunListParams["sort"])}
+            label="Sort runs by"
             size="sm"
-            className="w-32 shrink-0"
+            className="w-full sm:w-36 shrink-0"
           />
-        ) : null}
 
-        {active > 0 ? (
-          <Button
-            variant="ghost"
+          {tags.data && tags.data.length > 0 ? (
+            <Choice
+              value={tag}
+              options={tags.data}
+              onChange={setTag}
+              label="Filter by tag"
+              emptyLabel="Any tag"
+              placeholder="Any tag"
+              size="sm"
+              className="w-full sm:w-32 shrink-0"
+            />
+          ) : null}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 overflow-x-auto max-w-full py-0.5">
+          <ToggleGroup
             size="sm"
-            onClick={() => {
-              setStatuses([])
-              setOnlyFavourites(false)
-              setOnlyRated(undefined)
-              setTag("")
-              setShowArchived(false)
-            }}
+            value={statuses}
+            onValueChange={(value) => setStatuses(value as Run["status"][])}
+            className="flex-wrap sm:flex-nowrap"
           >
-            Clear filters
-          </Button>
-        ) : null}
+            {STATUSES.map((status) => (
+              <ToggleGroupItem key={status} value={status} className="capitalize text-xs px-2 sm:px-2.5">
+                {status}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+
+          <ToggleGroup
+            size="sm"
+            value={[
+              ...(onlyFavourites ? ["favourite"] : []),
+              ...(onlyRated === true ? ["rated"] : []),
+              ...(onlyRated === false ? ["unrated"] : []),
+              ...(showArchived ? ["archived"] : []),
+            ]}
+            onValueChange={(value) => {
+              const picked = new Set(value as string[])
+              setOnlyFavourites(picked.has("favourite"))
+              setOnlyRated(picked.has("rated") ? true : picked.has("unrated") ? false : undefined)
+              setShowArchived(picked.has("archived"))
+            }}
+            className="flex-wrap sm:flex-nowrap"
+          >
+            <ToggleGroupItem value="favourite" className="text-xs px-2 sm:px-2.5">Favourites</ToggleGroupItem>
+            <ToggleGroupItem value="unrated" className="text-xs px-2 sm:px-2.5">Unrated</ToggleGroupItem>
+            <ToggleGroupItem value="rated" className="text-xs px-2 sm:px-2.5">Rated</ToggleGroupItem>
+            <ToggleGroupItem value="archived" className="text-xs px-2 sm:px-2.5">Archived</ToggleGroupItem>
+          </ToggleGroup>
+
+          {active > 0 ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setStatuses([])
+                setOnlyFavourites(false)
+                setOnlyRated(undefined)
+                setTag("")
+                setShowArchived(false)
+              }}
+              className="text-xs"
+            >
+              Clear filters
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {runs.isError ? (

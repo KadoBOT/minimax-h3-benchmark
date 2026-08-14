@@ -23,6 +23,15 @@ export type Progress = {
   secPerIt: number | null
   /** Human name of the node currently executing, e.g. "sampler". */
   node: string | null
+  /**
+   * How many frames ComfyUI has drawn of this run so far, or null when it draws none.
+   *
+   * The frame itself is fetched from the run's preview URL; this counter is what tells the
+   * browser a newer one exists, and doubles as the cache key that gets it.
+   */
+  previewSeq: number | null
+  /** What that frame is: a picture, or a short clip of the latent as it stands. */
+  previewMime: string | null
 }
 
 type Stream = {
@@ -113,10 +122,24 @@ function nextProgress(current: Progress | null, event: LabEvent): Progress | nul
       // A rate is only published once one is trustworthy; keep the last known one meanwhile.
       secPerIt: number(data.sec_per_it) ?? (current?.runId === event.run_id ? current.secPerIt : null),
       node: text(data.node_label) ?? text(data.node),
+      // Progress ticks and preview frames arrive on the same channel but not together, so the
+      // last count seen stands until a newer one does.
+      previewSeq:
+        number(data.preview_seq) ?? (current?.runId === event.run_id ? current.previewSeq : null),
+      previewMime:
+        text(data.preview_mime) ?? (current?.runId === event.run_id ? current.previewMime : null),
     }
   }
   if (event.kind === "run.started" && event.run_id) {
-    return { runId: event.run_id, step: null, stepTotal: null, secPerIt: null, node: null }
+    return {
+      runId: event.run_id,
+      step: null,
+      stepTotal: null,
+      secPerIt: null,
+      node: null,
+      previewSeq: null,
+      previewMime: null,
+    }
   }
   if (event.kind === "run.finished" && current?.runId === event.run_id) return null
   return current

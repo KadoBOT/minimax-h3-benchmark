@@ -147,6 +147,30 @@ def test_a_turbo_run_samples_at_the_step_count_its_lora_was_distilled_for(base_c
     assert six.effective_steps == 6
 
 
+def test_a_turbo_run_stores_the_step_count_it_will_sample_at(base_config):
+    """The field a person reads and the number the sampler is given are one number.
+
+    `steps` is hashed, contested in the arena and printed on the run page, so a turbo run that
+    kept whatever was in the box before the toggle was flipped advertises a schedule it will
+    not use.
+    """
+    turbo = base_config.merged(steps=16, turbo=True)
+    assert turbo.steps == turbo.effective_steps == 4
+
+    eight = base_config.merged(
+        steps=16, turbo=True, turbo_lora="minimax_h3_turbo_8step.safetensors"
+    )
+    assert eight.steps == eight.effective_steps == 8
+
+
+def test_two_turbo_runs_of_one_lora_are_one_experiment_whatever_the_step_box_held(base_config):
+    """The mirror of the rule that clears the LoRA when turbo is off."""
+    from_twenty = base_config.merged(steps=20, turbo=True)
+    from_eight = base_config.merged(steps=8, turbo=True)
+    assert config_hash(from_twenty) == config_hash(from_eight)
+    assert config_diff([from_twenty, from_eight]) == []
+
+
 def test_a_version_number_in_a_lora_name_is_not_read_as_a_step_count(base_config):
     """`turbo_v4_step600` is version four at training step 600, not a four-step schedule."""
     config = base_config.merged(

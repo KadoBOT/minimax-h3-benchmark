@@ -169,7 +169,7 @@ function HeldBand({
               <span className="edge-code text-muted-foreground/70">{label}</span>
               <span
                 title={value}
-                className="text-bone/90 max-w-[18rem] truncate font-mono text-xs"
+                className="text-bone/90 max-w-[min(18rem,60vw)] truncate font-mono text-xs"
               >
                 {value}
               </span>
@@ -256,26 +256,28 @@ function Differences({ differences }: { differences: FieldDiff[] }) {
         have decided
       </summary>
       {revealed ? (
-        <table className="mt-3 w-full max-w-2xl text-sm">
-          <thead>
-            <tr className="edge-code text-muted-foreground border-rule border-b">
-              <th className="w-40 py-1.5 pr-3 text-left font-normal">Setting</th>
-              <th className="w-1/3 py-1.5 pr-3 text-left font-normal">Left</th>
-              <th className="w-1/3 py-1.5 text-left font-normal">Right</th>
-            </tr>
-          </thead>
-          <tbody className="divide-rule/60 divide-y">
-            {differences.map((diff) => (
-              <tr key={diff.field}>
-                <th scope="row" className="text-muted-foreground py-1.5 pr-3 text-left font-normal">
-                  {diff.label}
-                </th>
-                <td className="text-bone py-1.5 pr-3 font-mono text-xs">{diff.values[0]}</td>
-                <td className="text-signal py-1.5 font-mono text-xs">{diff.values[1]}</td>
+        <div className="overflow-x-auto max-w-full">
+          <table className="mt-3 w-full min-w-[360px] max-w-2xl text-sm">
+            <thead>
+              <tr className="edge-code text-muted-foreground border-rule border-b">
+                <th className="w-40 py-1.5 pr-3 text-left font-normal">Setting</th>
+                <th className="w-1/3 py-1.5 pr-3 text-left font-normal">Left</th>
+                <th className="w-1/3 py-1.5 text-left font-normal">Right</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-rule/60 divide-y">
+              {differences.map((diff) => (
+                <tr key={diff.field}>
+                  <th scope="row" className="text-muted-foreground py-1.5 pr-3 text-left font-normal">
+                    {diff.label}
+                  </th>
+                  <td className="text-bone py-1.5 pr-3 font-mono text-xs">{diff.values[0]}</td>
+                  <td className="text-signal py-1.5 font-mono text-xs">{diff.values[1]}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : null}
     </details>
   )

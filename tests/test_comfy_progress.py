@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import json
+import struct
 import time
 
 import pytest
@@ -174,6 +177,114 @@ def test_a_progress_label_says_what_the_node_is_not_where_it_sits():
     # A class nobody wrote a word for still reads better than a number.
     assert labels["169:122"] == "SpectrumApplyMiniMaxH3"
     assert labels["h3:ref_0"] == "Load image"
+
+
+def preview_message(image: bytes = b"\xff\xd8jpeg-bytes", mime: str = "image/jpeg") -> dict:
+    """A message shaped the way the preview override node sends one."""
+    return {
+        "node_id": "169:421",
+        "image": base64.b64encode(image).decode(),
+        "mime": mime,
+        "step": 2,
+        "total": 4,
+    }
+
+
+def preview_frame(image: bytes = b"\xff\xd8jpeg-bytes", image_type: int = 1) -> bytes:
+    """A frame shaped the way ComfyUI's own `send_image` builds one."""
+    return struct.pack(">I", 1) + struct.pack(">I", image_type) + image
+
+
+def test_the_picture_the_override_node_drew_becomes_the_newest_frame():
+    """Every template previews through that node, which sends the image inside the message."""
+    tracker = ProgressTracker.of(PROMPT)
+    assert tracker.preview() is None
+
+    assert tracker.on_preview_message(preview_message()) is True
+    first = tracker.preview()
+    assert first is not None
+    assert first.data == b"\xff\xd8jpeg-bytes"
+    assert first.content_type == "image/jpeg"
+    assert first.seq == 1
+
+    assert tracker.on_preview_message(preview_message(b"\xff\xd8second")) is True
+    second = tracker.preview()
+    assert second is not None and second.data == b"\xff\xd8second" and second.seq == 2
+    # The bytes never ride on the event bus; the count is what says a new frame exists.
+    assert tracker.snapshot()["preview_seq"] == 2
+
+
+def test_a_preview_of_the_whole_clip_is_kept_as_the_video_it_arrives_as():
+    """The templates feed the frame count in, so a step comes back as a few hundred ms of MP4."""
+    tracker = ProgressTracker()
+    clip = b"\x00\x00\x00 ftypiso5moof-and-the-rest"
+
+    assert tracker.on_preview_message(preview_message(clip, mime="video/mp4")) is True
+    newest = tracker.preview()
+    assert newest is not None
+    assert newest.data == clip
+    assert newest.content_type == "video/mp4"
+    # The browser is told what to put it in without fetching it first.
+    assert tracker.snapshot()["preview_mime"] == "video/mp4"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {},
+        {"image": ""},
+        {"image": "not base64 at all!"},
+        {"image": base64.b64encode(b"").decode()},
+        # The node also sends a sigma table with no picture attached; that is not a frame.
+        {"sigmas": [1.0, 0.5], "step": 0, "total": 4},
+        {"image": base64.b64encode(b"anything").decode(), "mime": "application/json"},
+    ],
+)
+def test_a_message_without_a_picture_in_it_is_ignored(message: dict):
+    tracker = ProgressTracker()
+    assert tracker.on_preview_message(message) is False
+    assert tracker.preview() is None
+    assert "preview_seq" not in tracker.snapshot()
+
+
+def test_comfys_own_preview_frame_is_read_too():
+    """A graph without the override node previews the way ComfyUI does: a binary frame."""
+    tracker = ProgressTracker()
+
+    assert tracker.on_preview(preview_frame()) is True
+    newest = tracker.preview()
+    assert newest is not None
+    assert newest.data == b"\xff\xd8jpeg-bytes"
+    assert newest.content_type == "image/jpeg"
+    assert newest.seq == 1
+
+
+def test_a_preview_frame_can_carry_its_own_metadata():
+    metadata = json.dumps({"image_type": "image/png", "node_id": "169:421"}).encode()
+    frame = struct.pack(">I", 4) + struct.pack(">I", len(metadata)) + metadata + b"\x89PNGdata"
+    tracker = ProgressTracker()
+
+    assert tracker.on_preview(frame) is True
+    newest = tracker.preview()
+    assert newest is not None
+    assert newest.data == b"\x89PNGdata"
+    assert newest.content_type == "image/png"
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        b"",
+        b"\x00\x00",
+        struct.pack(">I", 3) + b"\x00\x00\x00\x05node1text",  # a progress-text frame
+        struct.pack(">I", 1) + struct.pack(">I", 1),  # a header with no image behind it
+    ],
+)
+def test_a_frame_that_is_not_a_picture_is_ignored(frame: bytes):
+    tracker = ProgressTracker()
+    assert tracker.on_preview(frame) is False
+    assert tracker.preview() is None
+    assert "preview_seq" not in tracker.snapshot()
 
 
 def test_a_node_the_prompt_never_mentioned_is_named_by_its_id():

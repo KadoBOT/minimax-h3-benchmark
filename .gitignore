@@ -16,4 +16,9 @@ results/
 
 # Front end
 node_modules/
+node_modules.trash/
+*.trash/
 web/dist/
+web/node_modules/
+web/node_modules.trash/
+

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 
 from h3lab.api.deps import LabDep
@@ -62,6 +62,25 @@ def run_workflow(lab: LabDep, run_id: str) -> JSONResponse:
     return JSONResponse(
         workflow,
         headers={"Content-Disposition": f'attachment; filename="h3lab-{run_id}.json"'},
+    )
+
+
+@router.get("/runs/{run_id}/preview", response_class=Response)
+def run_preview(lab: LabDep, run_id: str) -> Response:
+    """The frame ComfyUI is drawing right now, for the run that is rendering.
+
+    404 is the normal answer, not an error: a run that is queued, finished, or built from a
+    template with no preview override has no frame, and the page asking simply shows nothing.
+    """
+    frame = lab.preview(run_id)
+    if frame is None:
+        raise HTTPException(status_code=404, detail="no preview frame for this run")
+    return Response(
+        content=frame.data,
+        media_type=frame.content_type,
+        # Every frame lives at the same URL for a few hundred milliseconds. A cached one is a
+        # picture of a sampling step that is already over.
+        headers={"Cache-Control": "no-store", "X-Preview-Seq": str(frame.seq)},
     )
 
 

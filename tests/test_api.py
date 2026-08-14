@@ -475,6 +475,42 @@ async def test_cancelling_a_finished_run_says_so_rather_than_failing(
     assert "already finished" in response.json()["detail"]
 
 
+async def test_the_frame_comfy_is_drawing_is_served_while_the_run_renders(
+    client: httpx.AsyncClient, config, lab, stub
+):
+    """A preview is a picture of the run in flight, so it lives with the worker, not on disk."""
+    stub.preview_image = b"\xff\xd8live-frame"
+    stub.block.clear()  # hold the run open, the way a GPU would
+    run_id = await queue_run(client, config)
+    waiting = await queue_run(client, config, seed=99)
+
+    lab.runner.start()
+    try:
+        for _ in range(250):
+            response = await client.get(f"{API}/runs/{run_id}/preview")
+            if response.status_code == 200:
+                break
+            await asyncio.sleep(0.02)
+
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"] == "image/jpeg"
+        assert response.headers["cache-control"] == "no-store"
+        assert response.content == b"\xff\xd8live-frame"
+
+        # A run that is only queued has nothing to show, and says so plainly.
+        assert (await client.get(f"{API}/runs/{waiting}/preview")).status_code == 404
+    finally:
+        stub.block.set()
+        lab.runner.stop()
+
+
+async def test_a_run_that_is_not_rendering_has_no_preview(client: httpx.AsyncClient, config):
+    run_id = await queue_run(client, config)
+    response = await client.get(f"{API}/runs/{run_id}/preview")
+    assert response.status_code == 404
+    assert "no preview" in response.json()["detail"]
+
+
 # --- sweeps ----------------------------------------------------------------
 
 

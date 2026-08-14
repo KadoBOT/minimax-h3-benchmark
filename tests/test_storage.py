@@ -172,6 +172,34 @@ def test_a_non_turbo_run_from_before_the_lora_axis_still_claims_no_lora(
     assert run.config_hash == config_hash(run.config)
 
 
+def test_a_queued_turbo_run_has_its_leftover_step_count_corrected(tmp_path: Path, base_config):
+    """The 16 runs already waiting must not have to be deleted and queued again.
+
+    They were stored with the step count the form held before turbo was switched on, which is
+    not the schedule they will sample at. v4 rewrites the value and both digests in place; the
+    row keeps its id, its seq and its place in the queue.
+    """
+    stored = json.loads(base_config.model_dump_json())
+    stored["turbo"] = True
+    stored["turbo_lora"] = "minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors"
+    stored["steps"] = 8
+    _pre_rename_db(tmp_path / "pre.db", json.dumps(stored))
+    conn = sqlite3.connect(tmp_path / "pre.db")
+    conn.execute("UPDATE runs SET status = 'queued' WHERE id = 'r1'")
+    conn.commit()
+    conn.close()
+
+    store = open_store(tmp_path / "pre.db")
+    run = RunRepository(store).require("r1")
+
+    assert run.status == "queued"
+    assert run.config.steps == run.config.effective_steps == 4
+    assert run.config_hash == config_hash(run.config)
+    assert run.recipe_hash == recipe_hash(run.config)
+    written = json.loads(scalar(store(), "SELECT config_json FROM runs WHERE id = 'r1'"))
+    assert written["steps"] == 4
+
+
 def test_a_config_the_rename_cannot_parse_is_left_exactly_as_it_was(tmp_path: Path):
     _pre_rename_db(tmp_path / "pre.db", '{"mode": "flf2v", "first_frame": ')
 

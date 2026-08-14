@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import sys
 import threading
 from pathlib import Path
@@ -63,6 +64,10 @@ class StubComfy:
         self.cancels = 0
         self.object_info_reads = 0
         self.raise_on_execute: Exception | None = None
+        # A picture to send the way the preview override node does, for the tests that care.
+        # Left unset, this stub says nothing on that channel, exactly like a graph with no
+        # preview override in it.
+        self.preview_image: bytes | None = None
         self.sec_per_it: float | None = 8.5
         self.video_bytes = b"stub video payload"
         self.downloads: list[str] = []
@@ -103,6 +108,15 @@ class StubComfy:
             else:
                 tracker.on_executing({"node": node})
                 tracker.on_progress({"node": node, "value": 1, "max": 20})
+                if self.preview_image is not None:
+                    tracker.on_preview_message(
+                        {
+                            "image": base64.b64encode(self.preview_image).decode(),
+                            "mime": "image/jpeg",
+                            "step": 1,
+                            "total": 20,
+                        }
+                    )
                 snapshot = tracker.snapshot()
             snapshot.setdefault("sec_per_it", self.sec_per_it)
             self.progress.append(dict(snapshot))

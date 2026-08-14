@@ -162,6 +162,12 @@ MIGRATIONS: tuple[Migration, ...] = (
     # each config through the current model fills in the file the templates shipped with —
     # the one those runs actually loaded — and recomputes both digests from it.
     Migration(version=3, name="turbo-lora-as-a-setting", fn=_rehash_configs),
+    # A turbo run now stores the schedule its LoRA was distilled for rather than whatever the
+    # step field held when the toggle was flipped. `steps` is hashed, so every turbo row ever
+    # written carries a leftover and a digest computed from it. Re-parsing each config through
+    # the current model corrects the value and both digests in place, which is what lets a
+    # queue full of turbo runs be repaired instead of thrown away.
+    Migration(version=4, name="turbo-steps-follow-the-lora", fn=_rehash_configs),
 )
 
 LATEST_VERSION = max(migration.version for migration in MIGRATIONS)

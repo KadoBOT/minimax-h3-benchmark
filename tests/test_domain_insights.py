@@ -77,6 +77,29 @@ def test_paired_groups_only_runs_that_match_on_everything_else(base_config):
     assert comparison.stars.mean * sign == pytest.approx(1.5)
 
 
+def test_turbo_pairs_against_a_normal_run_even_though_the_schedule_moved(base_config):
+    """Turbo is only ever measured against a run that sampled at the normal count.
+
+    A turbo config carries its LoRA's schedule, so the two sides differ in `steps` as well as
+    in `turbo` — and a pairing that treated that as a second difference would have nothing to
+    compare, which is exactly what `cache_enabled` once did to the cache axis.
+    """
+    runs = []
+    for seed in (1, 2):
+        stem = base_config.merged(seed=seed)
+        runs.append(make_run(f"n{seed}", stem.merged(turbo=False), stars=8, rate=10.0))
+        runs.append(make_run(f"t{seed}", stem.merged(turbo=True), stars=5, rate=2.0))
+
+    assert runs[1].config.steps == 4 and runs[0].config.steps == 20
+
+    comparison = paired(runs, "turbo")[0]
+    assert comparison.pair_groups == 2
+    assert comparison.matched_on == "seed"
+    sign = 1 if comparison.value_a == "on" else -1
+    assert comparison.stars.mean * sign == pytest.approx(-3.0)
+    assert comparison.speed_pct.mean * sign == pytest.approx(80.0)
+
+
 def test_paired_ignores_groups_with_only_one_axis_value(base_config):
     runs = [
         make_run("a", base_config.merged(cache="spectrum"), stars=8, rate=8.0),

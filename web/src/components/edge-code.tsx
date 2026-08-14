@@ -27,22 +27,31 @@ export function EdgeCode({
 
   return (
     <div
-      className={cn("edge-code text-muted-foreground flex items-center gap-2.5", className)}
+      className={cn(
+        "edge-code text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1",
+        className
+      )}
       data-testid="edge-code"
     >
-      {showLabel ? <span className="text-bone/70 tracking-[0.14em]">{run.label}</span> : null}
-      <span className={cn(failed ? "text-crimson" : "text-signal")}>
+      {showLabel ? (
+        <span className="text-bone/70 max-w-full truncate tracking-[0.14em]">{run.label}</span>
+      ) : null}
+      <span className={cn("shrink-0", failed ? "text-crimson" : "text-signal")}>
         {failed ? "failed" : secPerIt(run.metrics?.sec_per_it)}
       </span>
-      <span className={cn("flex items-center gap-1", view.stars != null && "text-mint")}>
+      <span className={cn("flex shrink-0 items-center gap-1", view.stars != null && "text-mint")}>
         <Star className="size-2.5" strokeWidth={2.5} fill={view.stars != null ? "currentColor" : "none"} />
         {view.stars ?? "—"}
       </span>
-      {view.elo != null ? <span title={`${view.elo_games ?? 0} comparisons`}>{elo(view.elo)}</span> : null}
-      <span className="ml-auto flex items-center gap-2.5">
+      {view.elo != null ? (
+        <span className="shrink-0" title={`${view.elo_games ?? 0} comparisons`}>
+          {elo(view.elo)}
+        </span>
+      ) : null}
+      <span className="flex min-w-0 items-center gap-2.5 sm:ml-auto">
         <Age run={run} />
         <span className="hidden sm:inline">{modelStem(run.config.diffusion_model)}</span>
-        <span className="text-muted-foreground/70" title={`config ${run.config_hash}`}>
+        <span className="text-muted-foreground/70 shrink-0" title={`config ${run.config_hash}`}>
           {shortHash(run.config_hash)}
         </span>
       </span>

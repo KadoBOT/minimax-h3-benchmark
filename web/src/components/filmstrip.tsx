@@ -79,8 +79,8 @@ export function Filmstrip({
     return <StripPlaceholder run={run} className={className} onClick={onClick} />
   }
 
-  const handleEnter = () => {
-    if (!previewable || wantsStillness()) return
+  const handleEnter = (event: React.PointerEvent) => {
+    if (!previewable || wantsStillness() || event.pointerType === "touch") return
     clearTimeout(dwell.current)
     dwell.current = setTimeout(() => setPlaying(true), PREVIEW_DELAY_MS)
   }
@@ -117,7 +117,7 @@ export function Filmstrip({
         onPointerLeave={handleLeave}
         onClick={onClick}
         className={cn(
-          "bg-ink relative overflow-hidden",
+          "bg-ink relative max-w-full min-w-0 overflow-hidden touch-pan-y min-h-[36px] sm:min-h-0",
           onClick && "cursor-pointer",
           className
         )}
@@ -135,8 +135,7 @@ export function Filmstrip({
           decoding="async"
           draggable={false}
           className={cn(
-            "h-full origin-left select-none",
-            !strip && "object-cover",
+            "h-full origin-left select-none object-cover",
             zoomed ? "transition-none" : "w-full transition-[width] duration-150"
           )}
           style={

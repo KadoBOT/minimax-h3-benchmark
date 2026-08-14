@@ -6,13 +6,15 @@
  * ranking — and the loop is walked dozens of times a night.
  */
 
-import { FlaskConical, GitCompare, Layers, ListVideo, Swords, Trophy } from "lucide-react"
+import { useState } from "react"
+import { FlaskConical, GitCompare, Layers, ListVideo, Menu, Swords, Trophy, X } from "lucide-react"
 import { NavLink } from "react-router"
 
 import { useStatus } from "@/api/hooks"
 import { useStream } from "@/api/events"
 import { BenchTray } from "@/components/bench-tray"
 import { LiveBadge } from "@/components/live-badge"
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 const DESTINATIONS = [
@@ -25,11 +27,108 @@ const DESTINATIONS = [
 ] as const
 
 export function Shell({ children }: { children: React.ReactNode }) {
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const { data: status } = useStatus()
+  const stream = useStream()
+  const active = status?.active_run_id != null
+
   return (
-    <div className="bg-ink flex min-h-screen">
+    <div className="bg-ink flex min-h-dvh flex-col overflow-x-clip lg:flex-row">
+      {/* Mobile Top Header */}
+      <header className="border-rule bg-sidebar/95 sticky top-0 z-30 flex items-center justify-between gap-2 border-b px-3 py-2.5 backdrop-blur lg:hidden supports-[padding:max(0px)]:pt-[max(0.625rem,env(safe-area-inset-top))]">
+        <div className="flex min-w-0 items-center gap-2">
+          <Mark active={active} />
+          <div className="min-w-0">
+            <div className="display text-bone text-base leading-none">H3 Lab</div>
+            <div className="edge-code text-muted-foreground text-[10px]">bench for h3</div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <LiveBadge live={stream.live} status={status} compact />
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={mobileOpen ? "Close navigation menu" : "Open navigation menu"}
+            onClick={() => setMobileOpen(!mobileOpen)}
+            className="text-bone size-10"
+          >
+            {mobileOpen ? <X className="size-5" /> : <Menu className="size-5" />}
+          </Button>
+        </div>
+      </header>
+
+      {/* Mobile Nav Overlay Drawer */}
+      {mobileOpen ? (
+        <div
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-xs lg:hidden"
+          onClick={() => setMobileOpen(false)}
+          aria-hidden
+        />
+      ) : null}
+      <div
+        className={cn(
+          "border-rule bg-sidebar fixed top-0 bottom-0 left-0 z-50 flex w-72 max-w-[80vw] flex-col border-r p-4 shadow-xl transition-transform duration-200 ease-in-out lg:hidden",
+          mobileOpen ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
+        <div className="mb-4 flex items-center justify-between border-b border-rule/60 pb-3">
+          <div className="flex items-center gap-2.5">
+            <Mark active={active} />
+            <div>
+              <div className="display text-bone text-base leading-none">H3 Lab</div>
+              <div className="edge-code text-muted-foreground text-xs">bench for h3</div>
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Close navigation"
+            onClick={() => setMobileOpen(false)}
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
+
+        <nav aria-label="Mobile sections" className="flex flex-1 flex-col gap-1 overflow-y-auto">
+          {DESTINATIONS.map(({ to, label, icon: Icon, hint }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === "/"}
+              title={hint}
+              onClick={() => setMobileOpen(false)}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-3 rounded-md px-3 py-2.5 text-sm transition-colors",
+                  "text-muted-foreground hover:bg-sidebar-accent hover:text-bone",
+                  isActive && "bg-sidebar-accent text-bone font-medium"
+                )
+              }
+            >
+              <Icon className="size-4 shrink-0" strokeWidth={1.9} />
+              <div className="flex flex-col">
+                <span>{label}</span>
+                <span className="edge-code text-muted-foreground/70 text-[10px] font-normal">
+                  {hint}
+                </span>
+              </div>
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="mt-auto border-t border-rule/60 pt-3">
+          <LiveBadge live={stream.live} status={status} />
+        </div>
+      </div>
+
+      {/* Desktop Sidebar Rail */}
       <Rail />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <main className="min-w-0 flex-1 px-5 py-6 pb-28 lg:px-8">{children}</main>
+
+      {/* Main Content Area */}
+      <div className="flex min-w-0 flex-1 flex-col overflow-x-clip">
+        <main className="min-w-0 flex-1 overflow-x-clip px-3 py-4 pb-36 sm:px-5 sm:py-6 sm:pb-28 lg:px-8 supports-[padding:max(0px)]:pb-[max(9rem,calc(env(safe-area-inset-bottom)+8rem))]">
+          {children}
+        </main>
       </div>
       <BenchTray />
     </div>
@@ -44,11 +143,11 @@ function Rail() {
   return (
     <nav
       aria-label="Sections"
-      className="border-rule bg-sidebar sticky top-0 flex h-screen w-14 shrink-0 flex-col items-center gap-1 border-r py-3 lg:w-[13.5rem] lg:items-stretch lg:px-3"
+      className="border-rule bg-sidebar sticky top-0 hidden h-screen w-[13.5rem] shrink-0 flex-col gap-1 border-r px-3 py-3 lg:flex"
     >
-      <div className="mb-3 flex items-center gap-2.5 px-1 lg:px-1.5">
+      <div className="mb-3 flex items-center gap-2.5 px-1.5">
         <Mark active={active} />
-        <div className="hidden min-w-0 lg:block">
+        <div className="min-w-0">
           <div className="display text-bone text-[0.95rem] leading-none">H3 Lab</div>
           <div className="edge-code text-muted-foreground mt-1">bench for h3</div>
         </div>
@@ -78,13 +177,13 @@ function Rail() {
                 )}
               />
               <Icon className="size-4 shrink-0" strokeWidth={1.9} />
-              <span className="hidden lg:inline">{label}</span>
+              <span>{label}</span>
             </>
           )}
         </NavLink>
       ))}
 
-      <div className="mt-auto hidden lg:block">
+      <div className="mt-auto">
         <LiveBadge live={stream.live} status={status} />
       </div>
     </nav>

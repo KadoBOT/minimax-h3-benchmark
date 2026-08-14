@@ -1,9 +1,18 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
 import { LabPage } from "@/pages/lab"
-import { BASELINE_ROUTES, CATALOG, CONFIG, fakeApi, makeView, renderApp } from "@/test/harness"
+import {
+  BASELINE_ROUTES,
+  CATALOG,
+  CONFIG,
+  EMPTY_QUEUE,
+  fakeApi,
+  makeView,
+  renderApp,
+} from "@/test/harness"
+import { FakeEventSource } from "@/test/setup"
 
 const DRY_RUN = {
   ok: true,
@@ -181,6 +190,123 @@ describe("the lab", () => {
     await userEvent.click(screen.getByRole("switch", { name: /turbo/i }))
     expect(steps).toHaveValue(28)
     expect(steps).toBeEnabled()
+  })
+
+  it("comes back to the lab's own step count when a turbo config had none to give back", async () => {
+    /**
+     * A stored turbo run carries the schedule its LoRA was distilled for — the server writes it
+     * there — so a draft that arrives with turbo on has no memory of a normal step count. Handing
+     * back the LoRA's four is how a bench whose normal is twenty quietly starts running at four.
+     */
+    window.localStorage.setItem(
+      "h3lab.draft",
+      JSON.stringify({
+        ...CONFIG,
+        turbo: true,
+        turbo_lora: "minimax_h3_turbo_4step.safetensors",
+        steps: 4,
+      })
+    )
+    fakeApi({ ...BASELINE_ROUTES })
+    renderApp(<LabPage />)
+
+    const steps = await screen.findByRole("spinbutton", { name: /steps/i })
+    expect(steps).toHaveValue(4)
+
+    await userEvent.click(screen.getByRole("switch", { name: /turbo/i }))
+    expect(steps).toHaveValue(20)
+    expect(steps).toBeEnabled()
+  })
+
+  it("shows the frame ComfyUI is drawing while a run is in flight", async () => {
+    /** A benchmark that takes four minutes a run is a blank panel until something is on it. */
+    const active = makeView({ run: { id: "r-live", label: "#9 r2v · 4st", status: "running" } })
+    fakeApi({
+      ...BASELINE_ROUTES,
+      "/api/queue": { ...EMPTY_QUEUE, active_run_id: "r-live", active, queued: [], total: 0 },
+    })
+    renderApp(<LabPage />)
+    await screen.findByText("#9 r2v · 4st")
+
+    // Nothing to show until ComfyUI says it has drawn something.
+    expect(screen.queryByRole("img", { name: /preview frame/i })).not.toBeInTheDocument()
+
+    const source = FakeEventSource.instances.at(-1)!
+    act(() => {
+      source.emit({ seq: 1, kind: "run.started", run_id: "r-live", data: {} })
+      source.emit({
+        seq: 2,
+        kind: "run.progress",
+        run_id: "r-live",
+        data: { step: 2, step_total: 4, preview_seq: 3, preview_mime: "image/jpeg" },
+      })
+    })
+
+    const frame = await screen.findByRole("img", { name: /preview frame 3/i })
+    expect(frame).toHaveAttribute("src", "/api/runs/r-live/preview?f=3")
+  })
+
+  it("plays the preview when the frame is a clip rather than a picture", async () => {
+    /**
+     * The templates hand the whole clip to the preview node, so a step comes back as a short
+     * MP4 of the latent so far. Motion is what a video benchmark is judging; an `img` would
+     * show a broken frame and say nothing.
+     */
+    const active = makeView({ run: { id: "r-live", label: "#9 r2v · 4st", status: "running" } })
+    fakeApi({
+      ...BASELINE_ROUTES,
+      "/api/queue": { ...EMPTY_QUEUE, active_run_id: "r-live", active, queued: [], total: 0 },
+    })
+    renderApp(<LabPage />)
+    await screen.findByText("#9 r2v · 4st")
+
+    const source = FakeEventSource.instances.at(-1)!
+    act(() => {
+      source.emit({ seq: 1, kind: "run.started", run_id: "r-live", data: {} })
+      source.emit({
+        seq: 2,
+        kind: "run.progress",
+        run_id: "r-live",
+        data: { step: 1, step_total: 4, preview_seq: 1, preview_mime: "video/mp4" },
+      })
+    })
+
+    const clip = await screen.findByLabelText(/preview frame 1/i)
+    expect(clip.tagName).toBe("VIDEO")
+    expect(clip).toHaveAttribute("src", "/api/runs/r-live/preview?f=1")
+    expect((clip as HTMLVideoElement).muted).toBe(true)
+    expect(clip).toHaveAttribute("loop")
+  })
+
+  it("drops a frame it cannot show without giving up on the ones after it", async () => {
+    /** A frame can be gone by the time it is asked for; the next one is a fresh chance. */
+    const active = makeView({ run: { id: "r-live", label: "#9 r2v · 4st", status: "running" } })
+    fakeApi({
+      ...BASELINE_ROUTES,
+      "/api/queue": { ...EMPTY_QUEUE, active_run_id: "r-live", active, queued: [], total: 0 },
+    })
+    renderApp(<LabPage />)
+    await screen.findByText("#9 r2v · 4st")
+
+    const source = FakeEventSource.instances.at(-1)!
+    const progress = (seq: number) => ({
+      seq,
+      kind: "run.progress" as const,
+      run_id: "r-live",
+      data: { step: seq, step_total: 4, preview_seq: seq, preview_mime: "image/jpeg" },
+    })
+
+    act(() => {
+      source.emit({ seq: 0, kind: "run.started", run_id: "r-live", data: {} })
+      source.emit(progress(1))
+    })
+    fireEvent.error(await screen.findByAltText(/preview frame 1/i))
+    expect(screen.queryByAltText(/preview frame/i)).not.toBeInTheDocument()
+
+    act(() => {
+      source.emit(progress(2))
+    })
+    expect(await screen.findByAltText(/preview frame 2/i)).toBeInTheDocument()
   })
 
   it("queues a strength the keyboard moved", async () => {

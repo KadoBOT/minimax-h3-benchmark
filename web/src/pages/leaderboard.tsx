@@ -41,8 +41,13 @@ export function LeaderboardPage() {
         hint="Runs nobody has judged sink to the bottom rather than scoring zero — unlooked-at is not the same as bad."
         className="mb-4"
       >
-        <div className="flex items-center gap-4">
-          <span className="edge-code text-mint w-24 shrink-0">quality {quality}</span>
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-4">
+          <div className="flex items-center justify-between sm:justify-start gap-4">
+            <span className="edge-code text-mint w-24 shrink-0">quality {quality}</span>
+            <span className="edge-code text-signal w-24 shrink-0 text-right sm:hidden">
+              speed {100 - quality}
+            </span>
+          </div>
           <Slider
             value={[quality]}
             min={0}
@@ -54,7 +59,7 @@ export function LeaderboardPage() {
             className="flex-1"
             aria-label="How much quality matters against speed"
           />
-          <span className="edge-code text-signal w-24 shrink-0 text-right">
+          <span className="edge-code text-signal w-24 shrink-0 text-right hidden sm:inline">
             speed {100 - quality}
           </span>
         </div>
@@ -134,36 +139,38 @@ function BoardRow({ entry }: { entry: LeaderboardEntry }) {
   return (
     <article
       className={cn(
-        "border-rule bg-panel flex items-center gap-3 rounded-lg border p-2.5",
+        "border-rule bg-panel flex flex-col md:flex-row md:items-center gap-3 rounded-lg border p-2.5",
         entry.rank === 1 && !entry.unrated && "border-mint-dim/60",
         view.is_baseline && "border-signal/60"
       )}
     >
-      <div
-        className={cn(
-          "tabular w-8 shrink-0 text-center font-mono text-lg",
-          entry.rank === 1 && !entry.unrated ? "text-mint" : "text-muted-foreground"
-        )}
-      >
-        {entry.rank}
+      <div className="flex w-full min-w-0 items-center gap-2 sm:gap-3 md:w-auto">
+        <div
+          className={cn(
+            "tabular w-6 shrink-0 text-center font-mono text-base sm:text-lg",
+            entry.rank === 1 && !entry.unrated ? "text-mint" : "text-muted-foreground"
+          )}
+        >
+          {entry.rank}
+        </div>
+
+        <Link to={`/runs/${run.id}`} className="min-w-0 w-full shrink sm:w-44 sm:shrink-0">
+          <Filmstrip run={run} scrub={false} className="rounded-sm" />
+        </Link>
       </div>
 
-      <Link to={`/runs/${run.id}`} className="w-44 shrink-0">
-        <Filmstrip run={run} scrub={false} className="rounded-sm" />
-      </Link>
-
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 overflow-hidden">
         {/* Two lines rather than one: what a label ends with is what distinguishes it. */}
         <Link
           to={`/runs/${run.id}`}
-          className="text-bone line-clamp-2 font-mono text-sm hover:underline"
+          className="text-bone line-clamp-2 break-all font-mono text-sm hover:underline"
         >
           {run.label}
         </Link>
         <EdgeCode view={view} showLabel={false} className="mt-1" />
       </div>
 
-      <div className="flex shrink-0 items-center gap-5">
+      <div className="flex flex-wrap shrink-0 items-center justify-between md:justify-end gap-3 sm:gap-5 border-t md:border-t-0 border-rule/40 pt-2 md:pt-0">
         <Stat
           label="Score"
           value={entry.unrated ? "—" : entry.score.toFixed(3)}
@@ -224,8 +231,8 @@ function BestRecipes() {
       title="Recipes by mean rating"
       hint="Every run that shares a recipe, averaged. More replicates means more trust."
     >
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+      <div className="overflow-x-auto max-w-full">
+        <table className="w-full min-w-[550px] text-sm">
           <thead>
             <tr className="text-muted-foreground edge-code border-rule border-b">
               <th className="py-1.5 pr-3 text-left font-normal">Recipe</th>

@@ -294,8 +294,8 @@ def contested_differences(a: GenerationConfig, b: GenerationConfig) -> list[Fiel
             found[field] = FieldDiff(
                 field=field, label=FIELD_LABELS.get(field, field), values=values
             )
-    for derived, determinant in DERIVED_FROM.items():
-        if derived in found and determinant in found:
+    for derived, determinants in DERIVED_FROM.items():
+        if derived in found and any(name in found for name in determinants):
             del found[derived]
     return [found[field] for field in CONTESTED_ORDER if field in found]
 

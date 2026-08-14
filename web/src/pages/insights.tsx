@@ -86,7 +86,7 @@ export function InsightsPage() {
 function AxisReport({ insight }: { insight: AxisInsight }) {
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 lg:grid-cols-2">
+      <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
         <VerdictCard verdict={insight.quality_verdict} title="Best looking" />
         <VerdictCard verdict={insight.speed_verdict} title="Fastest" />
       </div>
@@ -96,8 +96,8 @@ function AxisReport({ insight }: { insight: AxisInsight }) {
           title="Matched comparisons"
           hint="Each row is one value against another, measured only where everything else was held equal."
         >
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="overflow-x-auto max-w-full">
+            <table className="w-full min-w-[500px] text-sm">
               <thead>
                 <tr className="text-muted-foreground edge-code border-rule border-b">
                   <th className="py-1.5 pr-3 text-left font-normal">Comparison</th>
@@ -147,8 +147,8 @@ function AxisReport({ insight }: { insight: AxisInsight }) {
             </Tooltip>
           }
         >
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="overflow-x-auto max-w-full">
+            <table className="w-full min-w-[520px] text-sm">
               <thead>
                 <tr className="text-muted-foreground edge-code border-rule border-b">
                   <th className="py-1.5 pr-3 text-left font-normal">{insight.label}</th>
@@ -186,7 +186,12 @@ function VerdictCard({ verdict, title }: { verdict: Verdict; title: string }) {
         {won ? null : <CircleHelp className="size-3" />}
         {title}
       </div>
-      <div className={cn("display text-xl", won ? "text-mint" : "text-muted-foreground")}>
+      <div
+        className={cn(
+          "display text-lg break-words sm:text-xl",
+          won ? "text-mint" : "text-muted-foreground"
+        )}
+      >
         {won ? verdict.value : "Inconclusive"}
       </div>
       <p className="text-muted-foreground mt-2 text-sm">{verdict.reason}</p>

@@ -177,7 +177,9 @@ axis: turbo_lora_strength → 0.6, 0.8, 1.0
 
 A turbo run samples at the step count its LoRA was distilled for, read from the filename
 (`..._4step_...` → 4 steps), which is why the step field goes inert and says so while turbo is
-on. Turning turbo off clears both fields, so every non-turbo run still hashes alike no matter
+on — and the count is written into the run rather than left at whatever the form was holding, so
+what a stored turbo run says it sampled at is what it sampled at. Turning turbo off clears both
+LoRA fields and hands the step count back, so every non-turbo run still hashes alike no matter
 which LoRA was picked before.
 
 ### Frame interpolation
@@ -270,6 +272,13 @@ a listener of that name and never reaches `onmessage`, which is the handler the 
 naming them once left the socket open, error-free, and completely silent. The kind travels in
 the payload instead. `tests/test_contract.py` pins the wire format against the client, and
 `scripts/smoke.py` queues a run from outside the page to prove a real browser still moves.
+
+The queue panel also shows what the sampler is looking at. Every template carries a preview
+override node, and the templates hand it the clip's frame count, so each sampling step comes back
+as a couple of hundred milliseconds of video of the whole shot as it stands. The newest one is
+held in memory for the run in flight and served from `GET /api/runs/{id}/preview`; the progress
+event carries only the frame count and its media type, so the stream never hauls a picture around.
+Nothing is written to disk and nothing survives the run — the artifact of a run is still its video.
 
 ## Pages
 

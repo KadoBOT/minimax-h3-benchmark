@@ -36,7 +36,7 @@ export function StarRating({
       aria-label="Rating out of ten"
       data-testid="star-rating"
     >
-      <div className="flex items-center gap-[3px]">
+      <div className="flex items-center gap-0.5 sm:gap-[3px]">
         {Array.from({ length: STARS_MAX }, (_, index) => {
           const star = index + 1
           const filled = star <= current
@@ -49,7 +49,8 @@ export function StarRating({
               onClick={() => (star === current && onClear ? onClear() : onChange(star))}
               className={cn(
                 "rounded-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:outline-none",
-                size === "sm" ? "h-4 w-2" : "h-6 w-3",
+                // Wider hit targets on touch; still dense on desktop.
+                size === "sm" ? "h-7 w-2.5 sm:h-4 sm:w-2" : "h-8 w-3.5 sm:h-6 sm:w-3",
                 filled ? "bg-mint" : "bg-rule hover:bg-mint-dim"
               )}
             />
@@ -115,9 +116,9 @@ export function CriteriaRating({
         const label = meta.data?.criterion_labels?.[name] ?? name
         const current = value[name] ?? 0
         return (
-          <div key={name} className="flex items-center justify-between gap-4">
+          <div key={name} className="flex flex-wrap items-center justify-between gap-2 sm:gap-4">
             <span className="text-muted-foreground text-xs">{label}</span>
-            <div className="flex items-center gap-[3px]" role="group" aria-label={label}>
+            <div className="flex items-center gap-1 sm:gap-[3px]" role="group" aria-label={label}>
               {Array.from({ length: CRITERION_MAX }, (_, index) => {
                 const score = index + 1
                 const filled = score <= current
@@ -134,7 +135,7 @@ export function CriteriaRating({
                       onChange(next)
                     }}
                     className={cn(
-                      "focus-visible:ring-ring/60 h-4 w-4 rounded-sm transition-colors focus-visible:ring-2 focus-visible:outline-none",
+                      "focus-visible:ring-ring/60 h-5 w-5 sm:h-4 sm:w-4 rounded-sm transition-colors focus-visible:ring-2 focus-visible:outline-none",
                       filled ? "bg-mint" : "bg-rule hover:bg-mint-dim"
                     )}
                   />

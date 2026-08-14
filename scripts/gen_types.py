@@ -178,7 +178,8 @@ def main(argv: list[str]) -> int:
     TARGET.parent.mkdir(parents=True, exist_ok=True)
     TARGET.write_text(text, encoding="utf-8")
     print(f"wrote {TARGET} ({len(text.splitlines())} lines)")
-    prettier = REPO_ROOT / "web" / "node_modules" / ".bin" / "prettier.cmd"
+    prettier_name = "prettier.cmd" if sys.platform == "win32" else "prettier"
+    prettier = REPO_ROOT / "web" / "node_modules" / ".bin" / prettier_name
     if prettier.is_file():
         subprocess.run([str(prettier), "--write", str(TARGET)], check=False, capture_output=True)
         print("formatted with prettier")

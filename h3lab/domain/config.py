@@ -118,8 +118,18 @@ BASELINE_REF_IMAGES: tuple[str, ...] = (
 
 
 def basename(value: str) -> str:
-    """ComfyUI loaders take bare filenames; browsers may hand us a full path."""
-    return Path(str(value).replace("\\", "/")).name
+    """Strip an OS path down to the name ComfyUI's loaders accept.
+
+    Combo values already look like ``minimax-h3/foo.safetensors`` — those must
+    stay intact. Only a real filesystem path (``/home/...`` or ``C:\\...``) is
+    reduced to its last component.
+    """
+    text = str(value).replace("\\", "/")
+    if not text:
+        return ""
+    if text.startswith("/") or (len(text) > 2 and text[1] == ":"):
+        return text.rsplit("/", 1)[-1]
+    return text.lstrip("./")
 
 
 def _clamp_names(values: Iterable[str] | None, limit: int) -> list[str]:
@@ -240,8 +250,15 @@ class GenerationConfig(BaseModel):
         # identity of two runs that produce the same pixels. With turbo on the opposite is
         # true: "" means the default file, and a run that says so has to say which, or it
         # would read as a different experiment from the one that spelled the name out.
+        #
+        # The step count is the same rule from the other side. A turbo run samples at the
+        # schedule its LoRA was distilled for, so whatever the step field held when the
+        # toggle was flipped is not a setting — it is a leftover, and leaving it in a hashed
+        # field makes two identical runs read as two experiments and shows a person a
+        # schedule the sampler was never given.
         if self.turbo:
             object.__setattr__(self, "turbo_lora", resolve_turbo_lora(self.turbo_lora))
+            object.__setattr__(self, "steps", turbo_steps_for(self.turbo_lora))
         else:
             object.__setattr__(self, "turbo_lora", "")
             object.__setattr__(self, "turbo_lora_strength", DEFAULT_TURBO_STRENGTH)
@@ -260,7 +277,12 @@ class GenerationConfig(BaseModel):
 
     @property
     def effective_steps(self) -> int:
-        """A turbo run samples at the step count its LoRA was distilled for."""
+        """The step count the sampler is given.
+
+        A turbo run samples at the schedule its LoRA was distilled for, which the validator
+        has already written into `steps`. The two can no longer disagree; this stays because
+        it is the name the rest of the lab asks the question by.
+        """
         return turbo_steps_for(self.turbo_lora) if self.turbo else self.steps
 
     @property
@@ -479,13 +501,16 @@ def field_display(field: str, value: Any) -> str:
     return str(value)
 
 
-# Fields the validator derives from another field. When the determinant already differs,
+# Fields the validator derives from another field. When a determinant already differs,
 # reporting the derived field too states the same fact twice: "Cache: none vs spectrum"
-# followed by "Cache on: off vs on" is one difference, not two.
-DERIVED_FROM: dict[str, str] = {
-    "cache_enabled": "cache",
-    "turbo_lora": "turbo",
-    "turbo_lora_strength": "turbo",
+# followed by "Cache on: off vs on" is one difference, not two. `steps` has two determinants
+# because a turbo run's schedule comes from its LoRA: both "Turbo: off vs on" and "Turbo
+# LoRA: 4step vs 8step" already say what happened to the step count.
+DERIVED_FROM: dict[str, tuple[str, ...]] = {
+    "cache_enabled": ("cache",),
+    "turbo_lora": ("turbo",),
+    "turbo_lora_strength": ("turbo",),
+    "steps": ("turbo", "turbo_lora"),
 }
 
 
@@ -500,8 +525,8 @@ def config_diff(configs: Sequence[GenerationConfig]) -> list[FieldDiff]:
             found[field] = FieldDiff(
                 field=field, label=FIELD_LABELS.get(field, field), values=rendered
             )
-    for derived, determinant in DERIVED_FROM.items():
-        if derived in found and determinant in found:
+    for derived, determinants in DERIVED_FROM.items():
+        if derived in found and any(name in found for name in determinants):
             del found[derived]
     return [found[field] for field in HASHED_FIELDS if field in found]
 

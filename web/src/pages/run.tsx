@@ -103,8 +103,8 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
         </Button>
       </PageHeader>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_23rem]">
-        <div className="space-y-4">
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_23rem]">
+        <div className="min-w-0 space-y-4">
           <div className="panel overflow-hidden p-0">
             {run.artifact?.video_path ? (
               <video
@@ -116,7 +116,13 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
                 controls
                 loop
                 playsInline
-                className="bg-ink max-h-[65vh] w-full"
+                className="bg-ink max-h-[55vh] sm:max-h-[65vh] w-full object-contain mx-auto"
+                style={{
+                  aspectRatio:
+                    run.artifact?.width && run.artifact?.height
+                      ? `${run.artifact.width} / ${run.artifact.height}`
+                      : "16 / 9",
+                }}
               />
             ) : (
               <div className="text-muted-foreground flex aspect-video items-center justify-center text-sm">
@@ -125,7 +131,7 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
             )}
             {run.artifact?.video_path ? (
               // The player is directly above; the strip's job here is scrubbing, not replaying.
-              <Filmstrip run={run} preview={false} className="border-rule border-t" />
+              <Filmstrip run={run} scrub preview={false} className="border-rule border-t min-h-[44px] sm:min-h-0" />
             ) : null}
           </div>
 
@@ -165,12 +171,12 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
             title="The config that made it"
             hint="The workflow download is the same settings as a graph ComfyUI opens."
           >
-            <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
+            <dl className="grid gap-x-6 gap-y-2 grid-cols-1 sm:grid-cols-2">
               {Object.entries(run.config)
                 .filter(([, value]) => value !== null && value !== "" && !isEmptyList(value))
                 .map(([field, value]) => (
-                  <div key={field} className="flex items-baseline justify-between gap-3 text-sm">
-                    <dt className="text-muted-foreground truncate">{labels(field)}</dt>
+                  <div key={field} className="flex items-baseline justify-between gap-2 sm:gap-3 text-sm">
+                    <dt className="text-muted-foreground truncate shrink-0 max-w-[55%]">{labels(field)}</dt>
                     <dd className="text-bone truncate text-right font-mono text-xs">
                       {display(value)}
                     </dd>
@@ -182,7 +188,7 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
                 value={presetName}
                 onChange={(event) => setPresetName(event.target.value)}
                 placeholder="save this config as…"
-                className="min-w-40 flex-1"
+                className="w-full sm:w-auto sm:min-w-40 flex-1"
               />
               <Button
                 variant="outline"
@@ -222,7 +228,7 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
 
         <div className="space-y-4">
           <Section title="What it cost">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-3 sm:gap-4">
               <Stat label="Seconds / step" value={secPerIt(run.metrics?.sec_per_it)} tone="signal" />
               <Stat label="Wall clock" value={seconds(run.metrics?.wall_s)} />
               <Stat
@@ -257,9 +263,9 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
                 <Stat label="VRAM" value="cleared first" tone="muted" />
               ) : null}
             </div>
-            <div className="border-rule mt-4 flex items-center justify-between border-t pt-3">
+            <div className="border-rule mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
               <StatusChip run={run} showRate={false} />
-              <span className="edge-code text-muted-foreground">
+              <span className="edge-code text-muted-foreground text-xs">
                 cfg {shortHash(run.config_hash)} · rcp {shortHash(run.recipe_hash)}
               </span>
             </div>

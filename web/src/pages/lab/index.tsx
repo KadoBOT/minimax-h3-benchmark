@@ -123,8 +123,8 @@ export function LabPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="space-y-4">
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+        <div className="min-w-0 space-y-4">
           <ConfigForm draft={draft} onChange={patch} meta={meta.data} catalog={catalog.data} />
           <SweepBuilder
             base={config}
@@ -140,7 +140,7 @@ export function LabPage() {
           />
         </div>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <QueuePanel />
 
           <Section title="This config" hint="Identity is what makes two runs comparable.">

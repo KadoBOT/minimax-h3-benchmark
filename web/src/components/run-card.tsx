@@ -48,11 +48,11 @@ export function RunCard({
         staged && !selected && "border-mint-dim/60"
       )}
     >
-      <div className="flex items-start gap-3">
-        <Link to={`/runs/${run.id}`} className="min-w-0 flex-1">
+      <div className="flex min-w-0 flex-col gap-2.5 sm:flex-row sm:items-start sm:gap-3">
+        <Link to={`/runs/${run.id}`} className="w-full min-w-0 sm:flex-1">
           <Filmstrip run={run} className="rounded-sm" />
         </Link>
-        <div className="flex w-36 shrink-0 flex-col items-end gap-1.5">
+        <div className="border-rule/40 flex w-full min-w-0 shrink-0 flex-wrap items-center justify-between gap-2 border-t pt-2 sm:w-36 sm:flex-col sm:items-end sm:justify-start sm:gap-1.5 sm:border-t-0 sm:pt-0">
           <StatusChip run={run} />
           <StarRating
             value={view.stars}
@@ -81,7 +81,7 @@ export function RunCard({
           </div>
         </div>
       </div>
-      <EdgeCode view={view} className="mt-2" />
+      <EdgeCode view={view} className="mt-2 min-w-0" />
     </article>
   )
 }
@@ -103,11 +103,11 @@ function IconAction({
         render={
           <Button
             variant="ghost"
-            size="icon-xs"
+            size="icon-sm"
             aria-label={label}
             aria-pressed={active}
             onClick={onClick}
-            className={cn(active ? "text-mint" : "text-muted-foreground")}
+            className={cn("size-9 sm:size-7", active ? "text-mint" : "text-muted-foreground")}
           >
             {children}
           </Button>

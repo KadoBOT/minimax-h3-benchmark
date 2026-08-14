@@ -19,7 +19,7 @@ from h3lab.comfy.client import ComfyClient, ComfyError, PromptRejected
 from h3lab.comfy.editor import run_provenance, to_editor_workflow
 from h3lab.comfy.graph import WorkflowError, build, load_workflow
 from h3lab.comfy.presets import cache_problems, cache_widgets, sol_widgets
-from h3lab.comfy.progress import ProgressTracker
+from h3lab.comfy.progress import Preview, ProgressTracker
 from h3lab.comfy.schema import SchemaCache
 from h3lab.domain.config import GenerationConfig
 from h3lab.domain.run import Artifact, Run, RunMetrics
@@ -161,6 +161,7 @@ class Runner:
         self._wake = threading.Event()
         self._lock = threading.Lock()
         self._active_run_id: str | None = None
+        self._tracker: ProgressTracker | None = None
         self._cancelling: set[str] = set()
         self._last_progress_at = 0.0
         self._last_error: str | None = None
@@ -200,6 +201,18 @@ class Runner:
     def active_run_id(self) -> str | None:
         with self._lock:
             return self._active_run_id
+
+    def preview(self, run_id: str) -> Preview | None:
+        """The newest frame ComfyUI has drawn for the run in flight.
+
+        Only ever the active run, and only in memory: a preview is a progress indicator, not a
+        result. What a finished run is worth keeping is its video, and that is already saved.
+        """
+        with self._lock:
+            if run_id != self._active_run_id:
+                return None
+            tracker = self._tracker
+        return tracker.preview() if tracker is not None else None
 
     def pause(self) -> None:
         self._paused.set()
@@ -281,6 +294,7 @@ class Runner:
             finally:
                 with self._lock:
                     self._active_run_id = None
+                    self._tracker = None
                     self._cancelling.discard(run.id)
 
     def _claim(self) -> Run | None:
@@ -330,12 +344,16 @@ class Runner:
             self._events.publish("run.finished", run_id=run.id, status="cancelled")
             return
 
+        tracker = ProgressTracker.of(prompt)
+        with self._lock:
+            self._tracker = tracker
+
         try:
             outcome = self._client.execute(
                 prompt,
                 on_live=self._progress_for(run.id),
                 workflow=editor,
-                tracker=ProgressTracker.of(prompt),
+                tracker=tracker,
             )
         except PromptRejected as exc:
             # A rejection is what an install that changed under us looks like: a node pack

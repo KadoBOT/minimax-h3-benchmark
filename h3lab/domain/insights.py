@@ -217,10 +217,10 @@ def _held_apart(axis: str) -> set[str]:
     ``cache_enabled`` follows ``cache``, so two runs differing only in cache differ in two
     fields on paper. Left in the key, that made the cache axis impossible to pair on: no two
     runs ever looked "identical apart from the axis", and the most important comparison in
-    the lab silently returned nothing.
+    the lab silently returned nothing. ``steps`` follows the turbo axes the same way.
     """
     return {axis} | {
-        derived for derived, determinant in DERIVED_FROM.items() if determinant == axis
+        derived for derived, determinants in DERIVED_FROM.items() if axis in determinants
     }
 
 

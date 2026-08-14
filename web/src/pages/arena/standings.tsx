@@ -167,8 +167,8 @@ function VerdictCard({ verdict, label }: { verdict: ArenaVerdict; label: string 
 
 function Table({ rows, what }: { rows: ArenaStanding[]; what: string }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+    <div className="overflow-x-auto max-w-full">
+      <table className="w-full min-w-[550px] text-sm">
         <thead>
           <tr className="text-muted-foreground edge-code border-rule border-b">
             <th className="w-8 py-1.5 pr-3 text-right font-normal">#</th>

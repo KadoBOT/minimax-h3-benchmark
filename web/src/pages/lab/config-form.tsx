@@ -6,7 +6,7 @@
  * outright, and fields a toggle has made irrelevant are shown inert with the reason.
  */
 
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Dices, Upload, X } from "lucide-react"
 
 import { useUpload } from "@/api/hooks"
@@ -45,6 +45,7 @@ export function ConfigForm({ draft, onChange, meta, catalog }: FormProps) {
   const inert = inertFields(draft)
   const accepted = acceptedFields(meta, draft.mode)
   const steps = turboSteps(draft, catalog)
+  const normalSteps = useNormalSteps(draft, meta)
 
   return (
     <div className="space-y-4">
@@ -59,10 +60,10 @@ export function ConfigForm({ draft, onChange, meta, catalog }: FormProps) {
                 const moved = { ...draft, mode: next }
                 onChange({ mode: next, ...mediaDefaults(moved, meta, catalog) })
               }}
-              className="w-full"
+              className="w-full max-sm:flex-col max-sm:items-stretch"
             >
               {(meta?.modes ?? []).map((needs) => (
-                <ToggleGroupItem key={needs.mode} value={needs.mode} className="flex-1">
+                <ToggleGroupItem key={needs.mode} value={needs.mode} className="w-full flex-1">
                   {needs.label}
                 </ToggleGroupItem>
               ))}
@@ -257,7 +258,9 @@ export function ConfigForm({ draft, onChange, meta, catalog }: FormProps) {
             label="Turbo"
             hint="A distilled LoRA samples in a handful of steps instead of twenty. Fast, and it changes the look — which is the thing worth measuring."
             checked={draft.turbo ?? false}
-            onChange={(checked) => onChange({ turbo: checked })}
+            onChange={(checked) =>
+              onChange(checked ? { turbo: true } : { turbo: false, steps: normalSteps() })
+            }
           />
           {draft.turbo ? (
             <div className="border-rule ml-5 space-y-3 border-l pl-4">
@@ -363,10 +366,12 @@ function Row({
   children: React.ReactNode
 }) {
   return (
-    <div>
-      <div className="mb-1.5 flex items-baseline justify-between gap-2">
-        <Label className="text-muted-foreground text-xs">{label}</Label>
-        {hint ? <span className="edge-code text-muted-foreground/70 truncate">{hint}</span> : null}
+    <div className="min-w-0">
+      <div className="mb-1.5 flex min-w-0 items-baseline justify-between gap-2">
+        <Label className="text-muted-foreground shrink-0 text-xs whitespace-nowrap">{label}</Label>
+        {hint ? (
+          <span className="edge-code text-muted-foreground/70 min-w-0 truncate text-right">{hint}</span>
+        ) : null}
       </div>
       {children}
     </div>
@@ -409,7 +414,11 @@ export function Choice({
 
   return (
     <Select value={value} onValueChange={(next) => onChange(String(next ?? ""))} items={items}>
-      <SelectTrigger size={size} aria-label={label ?? placeholder} className={cn("w-full", className)}>
+      <SelectTrigger
+        size={size}
+        aria-label={label ?? placeholder}
+        className={cn("w-full min-w-0", className)}
+      >
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
@@ -421,6 +430,24 @@ export function Choice({
       </SelectContent>
     </Select>
   )
+}
+
+/**
+ * The step count to come back to when turbo goes off.
+ *
+ * A turbo config stores the schedule its LoRA was distilled for, so a draft that arrives with
+ * turbo already on — from a preset, a stored run, or last night's session — has no normal count
+ * left in it. Handing the LoRA's four back is how a bench whose normal is twenty quietly starts
+ * running at four, so the last count seen with turbo off is remembered, and the lab's own default
+ * stands in when there has not been one.
+ */
+function useNormalSteps(draft: Draft, meta: Meta | undefined): () => number {
+  const typed = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (!draft.turbo && typeof draft.steps === "number") typed.current = draft.steps
+  }, [draft.turbo, draft.steps])
+  const fallback = (meta?.defaults as Draft | undefined)?.steps ?? 20
+  return () => typed.current ?? fallback
 }
 
 function Levels({
@@ -445,7 +472,11 @@ function Levels({
       className="w-full"
     >
       {levels.map((level) => (
-        <ToggleGroupItem key={level} value={level} className={cn("flex-1", !render && "capitalize")}>
+        <ToggleGroupItem
+          key={level}
+          value={level}
+          className={cn("min-w-[4.5rem] flex-1 sm:min-w-[60px]", !render && "capitalize")}
+        >
           {render ? render(level) : level}
         </ToggleGroupItem>
       ))}
@@ -561,8 +592,8 @@ function MediaPick({
   allowEmpty?: boolean
 }) {
   return (
-    <div className="space-y-1.5">
-      <div className="flex gap-1.5">
+    <div className="min-w-0 space-y-1.5">
+      <div className="flex min-w-0 gap-1.5">
         <Choice
           value={value}
           options={options}
@@ -573,7 +604,7 @@ function MediaPick({
         />
         <UploadButton onDone={onChange} />
       </div>
-      <Thumb name={value} className="aspect-video h-24 w-auto" />
+      <Thumb name={value} className="aspect-video h-24 max-w-full w-auto" />
     </div>
   )
 }
@@ -597,28 +628,31 @@ function MediaList({
   const room = Math.max(0, limit - values.length)
 
   return (
-    <div className="space-y-1.5">
+    <div className="min-w-0 space-y-1.5">
       {values.map((value, index) => (
-        <div key={`${value}-${index}`} className="flex items-center gap-1.5">
-          {previews ? <Thumb name={value} className="h-11 w-[4.9rem]" /> : null}
-          <Choice
-            value={value}
-            options={options}
-            onChange={(next) => onChange(values.map((item, at) => (at === index ? next : item)))}
-            label={`${label} ${index + 1}`}
-          />
+        <div key={`${value}-${index}`} className="flex min-w-0 items-center gap-1.5">
+          {previews ? <Thumb name={value} className="h-11 w-[4.9rem] shrink-0" /> : null}
+          <div className="min-w-0 flex-1">
+            <Choice
+              value={value}
+              options={options}
+              onChange={(next) => onChange(values.map((item, at) => (at === index ? next : item)))}
+              label={`${label} ${index + 1}`}
+            />
+          </div>
           <Button
             variant="ghost"
             size="icon"
             aria-label={`Remove ${value}`}
             onClick={() => onChange(values.filter((_, at) => at !== index))}
+            className="shrink-0"
           >
             <X className="size-3.5" />
           </Button>
         </div>
       ))}
       {room > 0 ? (
-        <div className="flex gap-1.5">
+        <div className="flex min-w-0 gap-1.5">
           <Choice
             value=""
             options={options.filter((option) => !values.includes(option))}

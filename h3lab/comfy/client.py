@@ -12,7 +12,7 @@ from typing import Any, Callable, Iterable
 import httpx
 
 from h3lab.comfy.graph import Prompt
-from h3lab.comfy.progress import ProgressTracker
+from h3lab.comfy.progress import PREVIEW_MESSAGE, ProgressTracker
 
 LiveCallback = Callable[[dict[str, Any]], None]
 
@@ -507,7 +507,8 @@ class _ProgressListener:
                         except Exception:
                             return
                         if isinstance(raw, bytes):
-                            continue  # binary preview frames
+                            self._on_binary(raw)
+                            continue
                         try:
                             message = json.loads(raw)
                         except json.JSONDecodeError:
@@ -521,6 +522,11 @@ class _ProgressListener:
         except Exception:
             return
 
+    def _on_binary(self, frame: bytes) -> None:
+        """A picture of the latent being sampled, if the graph asked ComfyUI to draw one."""
+        if self._tracker.on_preview(frame):
+            self._announce()
+
     def _handle(self, message: dict[str, Any]) -> None:
         kind = message.get("type")
         data = message.get("data") or {}
@@ -528,8 +534,14 @@ class _ProgressListener:
             self._tracker.on_progress(data)
         elif kind == "executing":
             self._tracker.on_executing(data)
+        elif kind == PREVIEW_MESSAGE:
+            if not self._tracker.on_preview_message(data):
+                return
         else:
             return
+        self._announce()
+
+    def _announce(self) -> None:
         if self._on_live is not None:
             try:
                 self._on_live(self._tracker.snapshot())

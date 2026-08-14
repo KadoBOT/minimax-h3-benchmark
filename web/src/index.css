@@ -135,11 +135,15 @@
     html {
         @apply font-sans;
         color-scheme: dark;
+        overflow-x: clip;
     }
 
     body {
         @apply bg-background text-foreground antialiased;
         font-synthesis-weight: none;
+        overflow-x: clip;
+        /* Long paths/prompts wrap; short labels still prefer word boundaries. */
+        overflow-wrap: break-word;
     }
 
     /* Numbers are the point of this app; they must never shift width as they tick. */

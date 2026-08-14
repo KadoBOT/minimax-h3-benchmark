@@ -15,6 +15,7 @@ from h3lab.comfy.catalog import Catalog, CatalogCache
 from h3lab.comfy.client import ComfyClient
 from h3lab.comfy.editor import run_provenance, to_editor_workflow
 from h3lab.comfy.graph import apply_config, describe, missing_links
+from h3lab.comfy.progress import Preview
 from h3lab.domain.arena import (
     ArenaRun,
     ArenaStandings,
@@ -411,6 +412,10 @@ class Lab:
         workflow = self.workflows.get(run.config.mode)
         prompt = apply_config(workflow, run.config, output_tag=run.id)
         return to_editor_workflow(workflow, prompt, provenance=run_provenance(run))
+
+    def preview(self, run_id: str) -> Preview | None:
+        """The frame ComfyUI is drawing for a run that is rendering right now."""
+        return self.runner.preview(run_id)
 
     def cancel(self, run_id: str) -> bool:
         return self.runner.cancel(run_id)

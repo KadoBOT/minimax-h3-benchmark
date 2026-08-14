@@ -13,14 +13,31 @@ what the console shows.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 # A multi-step node cannot finish this fast; below the floor it is burst delivery.
 MIN_SECONDS_PER_STEP = 0.05
 BURST_STEP_THRESHOLD = 8
 MIN_WALL_PER_STEP = 0.15
+
+# The preview override node in every template draws the latent itself and sends the picture as
+# JSON with the image base64'd inside. It also switches ComfyUI's own preview off while it
+# samples, so on these graphs this message is the only frame a run produces.
+PREVIEW_MESSAGE = "kj_preview_override"
+
+# ComfyUI's own previews arrive as binary frames instead, and only when it was started with a
+# preview method. Each opens with a 4-byte event type; two of them are pictures: `1` is a 4-byte
+# image type followed by the encoded image, and `4` is the same image behind a JSON header that
+# names its mime type. Everything else on that socket is not a frame worth showing.
+PREVIEW_IMAGE = 1
+PREVIEW_IMAGE_WITH_METADATA = 4
+IMAGE_TYPES = {1: "image/jpeg", 2: "image/png"}
 
 # Sampler classes: the nodes whose reading is worth preferring when several report the same
 # step count. Kept beside the role rules that name the same classes.
@@ -101,6 +118,54 @@ def sampler_nodes(prompt: Mapping[str, Any]) -> frozenset[str]:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class Preview:
+    """The newest picture ComfyUI drew of the latent it is sampling."""
+
+    data: bytes
+    content_type: str
+    seq: int
+
+
+def decode_preview(frame: bytes) -> tuple[bytes, str] | None:
+    """A preview image out of a binary WebSocket frame, or ``None`` if it is not one."""
+    if len(frame) < 8:
+        return None
+    event = int.from_bytes(frame[:4], "big")
+    if event == PREVIEW_IMAGE:
+        return frame[8:], IMAGE_TYPES.get(int.from_bytes(frame[4:8], "big"), "image/jpeg")
+    if event == PREVIEW_IMAGE_WITH_METADATA:
+        length = int.from_bytes(frame[4:8], "big")
+        try:
+            metadata = json.loads(frame[8 : 8 + length])
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            metadata = {}
+        kind = metadata.get("image_type") if isinstance(metadata, dict) else None
+        return frame[8 + length :], str(kind or "image/jpeg")
+    return None
+
+
+def decode_preview_message(data: Mapping[str, Any]) -> tuple[bytes, str] | None:
+    """A preview out of the override node's message, or ``None`` if it holds none.
+
+    Usually not a still. The templates wire the clip's frame count into the node, so every step
+    comes back as the whole latent decoded and encoded together — an MP4 where NVENC is present
+    and an animated WebP otherwise. The media type travels with it and decides nothing here; it
+    is what the browser is told when it asks for the frame.
+    """
+    raw = data.get("image")
+    if not isinstance(raw, str) or not raw:
+        return None
+    kind = str(data.get("mime") or "image/jpeg")
+    if not (kind.startswith("image/") or kind.startswith("video/")):
+        return None
+    try:
+        image = base64.b64decode(raw, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return (image, kind) if image else None
+
+
 def node_label(node_id: str | int | None, labels: Mapping[str, str] | None = None) -> str | None:
     if node_id is None:
         return None
@@ -129,6 +194,7 @@ class ProgressTracker:
         self._best_rate: float | None = None
         self._best_steps: int = 0
         self._live_rate: float | None = None
+        self._preview: Preview | None = None
 
     @classmethod
     def of(cls, prompt: Mapping[str, Any] | None) -> ProgressTracker:
@@ -219,6 +285,23 @@ class ProgressTracker:
             # Deliberately not finalising on value == max: a burst reaches max with almost
             # no wall clock. Finalisation happens when execution leaves the node.
 
+    def on_preview(self, frame: bytes) -> bool:
+        """Keep the newest picture out of a binary frame. Returns whether it held one."""
+        return self._keep(decode_preview(frame))
+
+    def on_preview_message(self, data: Mapping[str, Any]) -> bool:
+        """Keep the newest picture the override node sent. Returns whether it held one."""
+        return self._keep(decode_preview_message(data))
+
+    def _keep(self, decoded: tuple[bytes, str] | None) -> bool:
+        if decoded is None or not decoded[0]:
+            return False
+        data, content_type = decoded
+        with self._lock:
+            seq = (self._preview.seq if self._preview else 0) + 1
+            self._preview = Preview(data=data, content_type=content_type, seq=seq)
+        return True
+
     def on_executing(self, data: dict[str, Any]) -> None:
         now = time.perf_counter()
         raw = data.get("node")
@@ -244,13 +327,24 @@ class ProgressTracker:
             step = self.step
             total = self.step_total
             rate = self._best_rate if self._best_rate is not None else self._live_rate
+            preview = self._preview
         out: dict[str, Any] = {"node": node, "node_label": node_label(node, self.labels)}
         if step is not None and total is not None:
             out["step"] = step
             out["step_total"] = total
         if rate is not None and rate > 0:
             out["sec_per_it"] = round(rate, 3)
+        # The count and the media type, never the bytes: this goes out on the event bus, which
+        # keeps a replay buffer for reconnecting browsers. The number tells them a new frame
+        # exists and the type tells them what to put it in; they fetch it if they are looking.
+        if preview is not None:
+            out["preview_seq"] = preview.seq
+            out["preview_mime"] = preview.content_type
         return out
+
+    def preview(self) -> Preview | None:
+        with self._lock:
+            return self._preview
 
     def sec_per_it(self) -> float | None:
         """The final rate, or ``None`` when no reading survived the plausibility rules."""

@@ -552,6 +552,7 @@ export const API_PATHS = [
   "/api/runs/dry-run",
   "/api/runs/{run_id}",
   "/api/runs/{run_id}/cancel",
+  "/api/runs/{run_id}/preview",
   "/api/runs/{run_id}/rating",
   "/api/runs/{run_id}/rerun",
   "/api/runs/{run_id}/workflow",
