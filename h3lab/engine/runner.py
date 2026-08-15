@@ -15,6 +15,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from h3lab.comfy import roles as R
+from h3lab.comfy.catalog import (
+    InstalledNameError,
+    _comfy_loras,
+    match_installed,
+    resolve_run_weights,
+)
 from h3lab.comfy.client import ComfyClient, ComfyError, PromptRejected
 from h3lab.comfy.editor import run_provenance, to_editor_workflow
 from h3lab.comfy.graph import WorkflowError, build, load_workflow
@@ -109,7 +115,11 @@ class WorkflowCache:
             self._stamps.clear()
 
 
-def preflight(config: GenerationConfig, settings: Settings) -> list[str]:
+def preflight(
+    config: GenerationConfig,
+    settings: Settings,
+    client: ComfyClient | None = None,
+) -> list[str]:
     """Problems worth reporting before a run occupies the GPU."""
     problems: list[str] = []
     input_dir = settings.comfy_input_dir
@@ -117,10 +127,26 @@ def preflight(config: GenerationConfig, settings: Settings) -> list[str]:
         for name in config.media_files:
             if not (input_dir / name).is_file():
                 problems.append(f"{name} is not in ComfyUI's input folder")
-    lora_dir = settings.lora_models_dir
-    if config.turbo_lora_file and lora_dir.is_dir():
-        if not (lora_dir / config.turbo_lora_file).is_file():
-            problems.append(f"{config.turbo_lora_file} is not in ComfyUI's LoRA folder")
+    if config.turbo and config.turbo_lora_file:
+        if client is not None and client.is_up():
+            try:
+                loras = _comfy_loras(client)
+                if loras:
+                    try:
+                        match_installed(config.turbo_lora_file, loras, kind="LoRA")
+                    except InstalledNameError:
+                        problems.append(f"{config.turbo_lora_file} is not installed in ComfyUI")
+            except ComfyError:
+                pass
+        else:
+            lora_dir = settings.lora_models_dir
+            if lora_dir.is_dir():
+                target = lora_dir / config.turbo_lora_file
+                base_target = lora_dir / Path(config.turbo_lora_file).name
+                if not (target.is_file() or base_target.is_file()):
+                    has_files = any(lora_dir.rglob("*.safetensors")) or any(lora_dir.rglob("*.gguf"))
+                    if has_files:
+                        problems.append(f"{config.turbo_lora_file} is not in ComfyUI's LoRA folder")
     if not settings.workflow_path(config.mode).is_file():
         problems.append(f"no workflow template for mode {config.mode!r}")
     if config.mp < MIN_MEGAPIXELS:
@@ -324,13 +350,17 @@ class Runner:
     # --- one run -----------------------------------------------------------
 
     def _execute(self, run: Run) -> None:
-        problems = preflight(run.config, self._settings)
+        try:
+            config = resolve_run_weights(run.config, self._client)
+        except InstalledNameError as exc:
+            raise PreflightError(str(exc)) from exc
+        problems = preflight(config, self._settings, self._client)
         if problems:
             raise PreflightError("; ".join(problems))
 
-        workflow = self._workflows.get(run.config.mode)
+        workflow = self._workflows.get(config.mode)
         prompt, _graph, roles = build(
-            workflow, run.config, output_tag=run.id, schemas=self._schemas.get()
+            workflow, config, output_tag=run.id, schemas=self._schemas.get()
         )
         editor = to_editor_workflow(workflow, prompt, provenance=run_provenance(run))
 

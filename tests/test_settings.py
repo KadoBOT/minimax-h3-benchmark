@@ -54,6 +54,17 @@ def test_ensure_dirs_creates_every_media_directory(tmp_path: Path):
         assert directory.is_dir()
 
 
+def test_unified_graph_is_the_exact_name_for_every_mode(tmp_path: Path):
+    unified = tmp_path / "minimax_h3_unified.json"
+    t2v = tmp_path / "minimax_h3_t2v_workflow.json"
+    graded = tmp_path / "minimax_h3_r2v_graded.v5.json"
+    unified.write_text('{"nodes":[{"type":"MiniMaxH3ImageToVideo"}]}', encoding="utf-8")
+    t2v.write_text('{"nodes":[{"type":"MiniMaxH3TextToVideo"}]}', encoding="utf-8")
+    graded.write_text('{"nodes":[{"type":"MiniMaxH3ReferenceToVideo"}]}', encoding="utf-8")
+    for mode in ("t2v", "flf2v", "r2v"):
+        assert resolve_workflow_path(tmp_path, mode) == unified
+
+
 def test_exact_lab_names_win_over_a_newer_classified_file(tmp_path: Path):
     exact = tmp_path / "minimax_h3_flf2v_workflow.json"
     graded = tmp_path / "minimax_h3_flf2v_graded.v4.json"

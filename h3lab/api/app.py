@@ -129,11 +129,26 @@ _NO_BUILD = """<!doctype html>
 
 def routes_of(app: FastAPI) -> Iterator[tuple[str, str]]:
     """Every (method, path) pair the app answers. Used by `h3lab --check`."""
-    for route in app.routes:
-        methods = getattr(route, "methods", None) or set()
-        path = getattr(route, "path", "")
-        for method in sorted(methods):
-            yield method, path
+
+    def _walk(routes: Iterable[Any], prefix: str = "") -> Iterator[tuple[str, str]]:
+        for route in routes:
+            if hasattr(route, "original_router"):
+                inc_prefix = (
+                    getattr(getattr(route, "include_context", None), "prefix", "") or prefix
+                )
+                yield from _walk(route.original_router.routes, prefix=inc_prefix)
+            elif hasattr(route, "routes"):
+                sub_prefix = prefix.rstrip("/") + "/" + getattr(route, "path", "").strip("/")
+                yield from _walk(route.routes, prefix=sub_prefix.rstrip("/"))
+            else:
+                methods = getattr(route, "methods", None) or set()
+                path = prefix.rstrip("/") + "/" + getattr(route, "path", "").strip("/")
+                if not path.startswith("/"):
+                    path = "/" + path
+                for method in sorted(methods):
+                    yield method, path
+
+    yield from _walk(app.routes)
 
 
 __all__ = ["API", "create_app", "routes_of"]

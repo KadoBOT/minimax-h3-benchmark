@@ -28,6 +28,7 @@ from h3lab.domain.config import (
     DEFAULT_TURBO_STRENGTH,
     DEFAULT_UNET,
     GEN_MODES,
+    GenerationConfig,
     MAX_REF_AUDIOS,
     MAX_REF_IMAGES,
     MAX_REF_VIDEOS,
@@ -122,6 +123,76 @@ def default_turbo_lora(names: list[str]) -> str:
     return names[0] if names else DEFAULT_TURBO_LORA
 
 
+class InstalledNameError(ValueError):
+    """The run named a file ComfyUI will not load."""
+
+
+def match_installed(wanted: str, offered: list[str], *, kind: str = "checkpoint") -> str:
+    """The combo value ComfyUI will accept for this request.
+
+    Combo values carry their folder (``minimax-h3/foo.safetensors``). A stored
+    run or a fallback default often has only the basename. Match exact first,
+    then the basename, case-insensitive. Never invent a different quant.
+    """
+    name = (wanted or "").strip()
+    if not name:
+        raise InstalledNameError(f"no {kind} was named")
+    if name in offered:
+        return name
+    base = Path(name).name.lower()
+    hits = [item for item in offered if Path(item).name.lower() == base]
+    if len(hits) == 1:
+        return hits[0]
+    listed = ", ".join(offered) if offered else "(none)"
+    raise InstalledNameError(
+        f"{name} is not installed. ComfyUI's {kind} list is: {listed}"
+    )
+
+
+def resolve_run_weights(config: GenerationConfig, client: ComfyClient | None) -> GenerationConfig:
+    """Rewrite stored names onto the combo values this ComfyUI will load.
+
+    Offline, leave the config alone so a dry-run or a test fixture still builds.
+    """
+    if client is None:
+        return config
+    try:
+        unets = _comfy_unets(client)
+        loras = _comfy_loras(client) if config.turbo else []
+    except ComfyError:
+        return config
+    updates: dict[str, Any] = {}
+    if unets:
+        wanted = (config.diffusion_model or "").strip()
+        if not wanted or (wanted == DEFAULT_UNET and not any(wanted.lower() == Path(u).name.lower() for u in unets)):
+            updates["diffusion_model"] = default_model(unets)
+        else:
+            try:
+                updates["diffusion_model"] = match_installed(wanted, unets)
+            except InstalledNameError:
+                if wanted == DEFAULT_UNET or not wanted:
+                    updates["diffusion_model"] = default_model(unets)
+                else:
+                    raise
+    if config.turbo and loras:
+        wanted_lora = (config.turbo_lora or "").strip()
+        if not wanted_lora or (wanted_lora == DEFAULT_TURBO_LORA and not any(wanted_lora.lower() == Path(l).name.lower() for l in loras)):
+            updates["turbo_lora"] = default_turbo_lora(loras)
+        else:
+            try:
+                updates["turbo_lora"] = match_installed(config.turbo_lora_file, loras, kind="LoRA")
+            except InstalledNameError:
+                if wanted_lora == DEFAULT_TURBO_LORA or not wanted_lora:
+                    updates["turbo_lora"] = default_turbo_lora(loras)
+                else:
+                    raise
+    if not updates:
+        return config
+    if all(getattr(config, key) == value for key, value in updates.items()):
+        return config
+    return config.merged(**updates)
+
+
 def default_model(names: list[str]) -> str:
     if DEFAULT_UNET in names:
         return DEFAULT_UNET
@@ -205,27 +276,58 @@ class _Live(NamedTuple):
     samplers: list[str]
     aspects: list[str]
     loras: list[str]
+    unets: list[str]
 
     @property
     def usable(self) -> bool:
         return bool(self.schedulers and self.samplers)
 
 
-def _comfy_loras(client: ComfyClient) -> list[str]:
-    """What the turbo node itself will accept, which is the only list that cannot be wrong.
+def _comfy_unets(client: ComfyClient) -> list[str]:
+    """What the UNET / GGUF loaders will accept, filtered to this model."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for class_type, input_name in (
+        ("UNETLoader", "unet_name"),
+        ("UnetLoaderGGUF", "unet_name"),
+        ("UnetLoaderGGUF", "gguf_name"),
+        ("DiffusionModelLoader", "unet_name"),
+        ("DiffusionModelLoader", "model_name"),
+    ):
+        for name in client.combo_options(class_type, input_name):
+            if name in seen or not is_h3_model(name):
+                continue
+            seen.add(name)
+            names.append(name)
+    for folder in ("diffusion_models", "unet_gguf", "checkpoints", "unet"):
+        for name in client.models(folder):
+            if name in seen or not is_h3_model(name):
+                continue
+            seen.add(name)
+            names.append(name)
+    return names
 
-    It offers every LoRA in the folder, so it is filtered to this model's files the same way
-    the weights list is. A LoRA for another model in the picker is not a choice, it is a
-    failed run five minutes later.
-    """
+
+def _comfy_loras(client: ComfyClient) -> list[str]:
+    """What the turbo node itself will accept, filtered to this model."""
+    names: list[str] = []
+    seen: set[str] = set()
     for class_type, input_name in (
         ("MiniMaxH3TurboLoRA", "lora_name"),
         ("LoraLoaderModelOnly", "lora_name"),
+        ("LoraLoader", "lora_name"),
     ):
-        options = client.combo_options(class_type, input_name)
-        if options:
-            return [name for name in options if is_h3_model(name)]
-    return []
+        for name in client.combo_options(class_type, input_name):
+            if name in seen or not is_h3_model(name):
+                continue
+            seen.add(name)
+            names.append(name)
+    for name in client.models("loras"):
+        if name in seen or not is_h3_model(name):
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
 
 
 def _from_comfy(client: ComfyClient) -> _Live | None:
@@ -240,9 +342,10 @@ def _from_comfy(client: ComfyClient) -> _Live | None:
         samplers = client.combo_options("KSamplerSelect", "sampler_name")
         aspects = client.combo_options("ResolutionSelector", "aspect_ratio")
         loras = _comfy_loras(client)
+        unets = _comfy_unets(client)
     except ComfyError:
         return None
-    return _Live(schedulers, samplers, aspects or list(FALLBACK_ASPECTS), loras)
+    return _Live(schedulers, samplers, aspects or list(FALLBACK_ASPECTS), loras, unets)
 
 
 def build_catalog(settings: Settings, client: ComfyClient | None = None) -> Catalog:
@@ -255,11 +358,16 @@ def build_catalog(settings: Settings, client: ComfyClient | None = None) -> Cata
             client.close()
     loras = live.loras if live is not None else []
 
-    models = list_models(settings.diffusion_models_dir)
-    models_source = "disk"
-    if not models:
-        models = [DEFAULT_UNET, DEFAULT_GGUF_UNET]
-        models_source = "fallback"
+    live_unets = live.unets if live is not None else []
+    if live_unets:
+        models = live_unets
+        models_source = "comfy"
+    else:
+        models = list_models(settings.diffusion_models_dir)
+        models_source = "disk"
+        if not models:
+            models = [DEFAULT_UNET, DEFAULT_GGUF_UNET]
+            models_source = "fallback"
 
     loras_source = "comfy"
     if not loras:

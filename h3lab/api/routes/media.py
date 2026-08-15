@@ -55,22 +55,22 @@ def serve(directory: Path, name: str, *, cache: str = CACHE_FOREVER) -> Response
     return FileResponse(candidate, media_type=media_type, headers={"Cache-Control": cache})
 
 
-@router.get("/media/videos/{name}", response_class=FileResponse)
+@router.get("/media/videos/{name:path}", response_class=FileResponse)
 def video(settings: SettingsDep, name: str) -> Response:
     return serve(settings.videos_dir, name)
 
 
-@router.get("/media/posters/{name}", response_class=FileResponse)
+@router.get("/media/posters/{name:path}", response_class=FileResponse)
 def poster(settings: SettingsDep, name: str) -> Response:
     return serve(settings.posters_dir, name)
 
 
-@router.get("/media/strips/{name}", response_class=FileResponse)
+@router.get("/media/strips/{name:path}", response_class=FileResponse)
 def strip(settings: SettingsDep, name: str) -> Response:
     return serve(settings.strips_dir, name)
 
 
-@router.get("/media/inputs/{name}", response_class=FileResponse)
+@router.get("/media/inputs/{name:path}", response_class=FileResponse)
 def input_media(settings: SettingsDep, name: str) -> Response:
     """A file already in ComfyUI's input folder, so the form can show what was picked."""
     return serve(settings.comfy_input_dir, name, cache=CACHE_BRIEFLY)

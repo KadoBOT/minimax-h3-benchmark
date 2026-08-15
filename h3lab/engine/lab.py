@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from h3lab.comfy.catalog import Catalog, CatalogCache
 from h3lab.comfy.client import ComfyClient
 from h3lab.comfy.editor import run_provenance, to_editor_workflow
+from h3lab.comfy.catalog import InstalledNameError, resolve_run_weights
 from h3lab.comfy.graph import apply_config, describe, missing_links
 from h3lab.comfy.progress import Preview
 from h3lab.domain.arena import (
@@ -384,8 +385,12 @@ class Lab:
 
     def dry_run(self, config: GenerationConfig) -> DryRun:
         """Build the graph without submitting it, and report anything already wrong."""
-        problems = preflight(config, self.settings)
         identity = {"config_hash": config_hash(config), "recipe_hash": recipe_hash(config)}
+        try:
+            config = resolve_run_weights(config, self.client)
+        except InstalledNameError as exc:
+            return DryRun(ok=False, problems=[str(exc)], **identity)
+        problems = preflight(config, self.settings, self.client)
         try:
             workflow = self.workflows.get(config.mode)
             prompt = apply_config(workflow, config, output_tag="dry-run")

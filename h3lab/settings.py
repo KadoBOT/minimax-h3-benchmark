@@ -260,6 +260,9 @@ def classify_h3_workflow(path: Path) -> str | None:
 def resolve_workflow_path(
     directory: Path, mode: str, fallback: Path | None = None
 ) -> Path:
+    unified = directory / "minimax_h3_unified.json"
+    if unified.is_file():
+        return unified
     exact = directory / f"minimax_h3_{mode}_workflow.json"
     if exact.is_file():
         return exact

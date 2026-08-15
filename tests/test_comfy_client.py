@@ -11,7 +11,15 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from h3lab.comfy.catalog import Catalog, build_catalog, default_model, is_h3_model, list_models
+from h3lab.comfy.catalog import (
+    Catalog,
+    InstalledNameError,
+    build_catalog,
+    default_model,
+    is_h3_model,
+    list_models,
+    match_installed,
+)
 from h3lab.comfy.client import (
     ComfyClient,
     ComfyUnreachable,
@@ -458,6 +466,77 @@ def test_the_catalog_falls_back_when_comfy_is_offline(tmp_path: Path):
     assert catalog.diffusion_models_source == "fallback"
     assert catalog.defaults["diffusion_model"].endswith(".safetensors")
     assert catalog.reference_limits == {"images": 9, "videos": 3, "audios": 3}
+
+
+def test_match_installed_keeps_a_folder_prefixed_combo_value():
+    offered = ["minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors"]
+    assert (
+        match_installed("minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors", offered)
+        == offered[0]
+    )
+
+
+def test_match_installed_finds_a_bare_name_in_the_live_folder():
+    offered = ["minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors"]
+    assert (
+        match_installed("minimax_h3_fl2va_pruned_int8_convrot.safetensors", offered) == offered[0]
+    )
+
+
+def test_match_installed_refuses_a_checkpoint_comfy_does_not_have():
+    offered = ["minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors"]
+    with pytest.raises(InstalledNameError, match="nvfp4") as err:
+        match_installed("minimax_h3_fl2va_pruned_nvfp4.safetensors", offered)
+    assert "int8_convrot" in str(err.value)
+
+
+def test_the_catalog_takes_unet_names_from_the_running_server(comfy, tmp_path: Path):
+    """A models folder that exists but is empty is not a source of truth.
+
+    ComfyUI's extra_model_paths.yaml is where the weights actually live, and
+    only /object_info knows the combo values it will accept.
+    """
+    state, url = comfy
+    state.object_info["UNETLoader"] = {
+        "UNETLoader": {
+            "input": {
+                "required": {
+                    "unet_name": [
+                        [
+                            "krea2/krea2_turbo-int4_convrot.safetensors",
+                            "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors",
+                        ],
+                        {},
+                    ]
+                }
+            }
+        }
+    }
+    state.object_info["BasicScheduler"] = {
+        "BasicScheduler": {"input": {"required": {"scheduler": [["beta57"], {}]}}}
+    }
+    state.object_info["KSamplerSelect"] = {
+        "KSamplerSelect": {"input": {"required": {"sampler_name": [["euler"], {}]}}}
+    }
+    empty_models = tmp_path / "models"
+    empty_models.mkdir()
+    (tmp_path / "input").mkdir()
+    catalog = build_catalog(
+        Settings(
+            data_dir=tmp_path / "data",
+            models_dir=empty_models,
+            comfy_input_dir=tmp_path / "input",
+            comfy_url=url,
+        )
+    )
+    assert catalog.diffusion_models_source == "comfy"
+    assert catalog.diffusion_models == [
+        "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors"
+    ]
+    assert catalog.default_diffusion_model == (
+        "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors"
+    )
+    assert catalog.defaults["diffusion_model"] == catalog.default_diffusion_model
 
 
 def test_the_catalog_prefers_the_live_lists_and_scans_input_media(comfy, tmp_path: Path):
