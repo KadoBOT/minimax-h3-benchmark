@@ -45,6 +45,7 @@ def as_flags(settings: Settings) -> list[str]:
         "--data-dir", str(settings.data_dir),
         "--models-dir", str(settings.models_dir),
         "--comfy-input-dir", str(settings.comfy_input_dir),
+        "--workflow-dir", str(settings.workflow_dir),
         "--web-dist", str(settings.web_dist),
         "--comfy-url", settings.comfy_url,
     ]
@@ -145,7 +146,7 @@ def test_check_says_whether_it_still_recognises_each_template(settings: Settings
 def test_check_names_the_node_playing_each_role_when_asked(settings: Settings):
     _code, text = run_inline(*as_flags(settings), "check", "--roles")
     assert "conditioning" in text
-    assert "MiniMaxH3ImageToVideo" in text  # the flf2v conditioning node, found by class
+    assert "MiniMaxH3Studio" in text  # the unified control surface, found by class
     assert "turbo_lora" in text
     # The rule that found it is the diagnostic: a role found by "first of class" is a guess.
     assert "class" in text

@@ -568,9 +568,11 @@ def test_an_unknown_mode_has_no_template(lab_settings):
 
 def _copy_template(settings, mode: str, source: str = "flf2v") -> Path:
     """A writable template in the settings' own workflow folder."""
-    target = settings.workflow_path(mode)
+    from tests.conftest import legacy_workflow_path
+
+    target = settings.workflow_dir / f"minimax_h3_{mode}_workflow.json"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(Settings().workflow_path(source).read_text(encoding="utf-8"), "utf-8")
+    target.write_text(legacy_workflow_path(source).read_text(encoding="utf-8"), "utf-8")
     return target
 
 

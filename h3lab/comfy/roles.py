@@ -303,7 +303,12 @@ def _pick_video_out(graph: Graph, candidates: list[Node], found: dict[str, str])
 RULES: tuple[Rule, ...] = (
     Rule(
         CONDITIONING,
-        ("MiniMaxH3ImageToVideo", "MiniMaxH3ReferenceToVideo", "MiniMaxH3TextToVideo"),
+        (
+            "MiniMaxH3Studio",
+            "MiniMaxH3ImageToVideo",
+            "MiniMaxH3ReferenceToVideo",
+            "MiniMaxH3TextToVideo",
+        ),
         tags=("MS_INPUT_CONDITIONING",),
         legacy=(5,),
     ),

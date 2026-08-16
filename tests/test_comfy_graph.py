@@ -21,15 +21,15 @@ from h3lab.comfy.graph import (
 )
 from h3lab.comfy.presets import SOL, SPECTRUM, cache_problems, cache_widgets, sol_widgets
 from h3lab.comfy.workflow import is_link, read
-from h3lab.settings import Settings
 
 MODES = ("flf2v", "t2v", "r2v")
 
 
 @pytest.fixture(scope="module")
 def templates() -> dict[str, dict]:
-    settings = Settings()
-    return {mode: load_workflow(settings.workflow_path(mode)) for mode in MODES}
+    from tests.conftest import legacy_workflow_path
+
+    return {mode: load_workflow(legacy_workflow_path(mode)) for mode in MODES}
 
 
 @pytest.fixture(scope="module")

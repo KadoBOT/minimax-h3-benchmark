@@ -94,8 +94,18 @@ def test_backups_are_not_templates(tmp_path: Path):
 
 def test_settings_without_env_still_use_the_repo_fixtures():
     made = Settings()
-    assert made.workflow_dir.name != "workflows" or made.workflow_path("t2v").is_file()
-    assert made.workflow_path("t2v").name == "minimax_h3_t2v_workflow.json"
+    assert made.workflow_path("t2v").is_file()
+    assert made.workflow_path("t2v").name == "minimax_h3_unified_guided.json"
+    assert made.workflow_path("flf2v") == made.workflow_path("r2v")
+
+
+def test_guided_unified_name_is_accepted_as_the_shared_template(tmp_path: Path):
+    guided = tmp_path / "minimax_h3_unified_guided.json"
+    exact = tmp_path / "minimax_h3_t2v_workflow.json"
+    guided.write_text('{"nodes":[{"type":"MiniMaxH3Studio"}]}', encoding="utf-8")
+    exact.write_text('{"nodes":[{"type":"MiniMaxH3TextToVideo"}]}', encoding="utf-8")
+    for mode in ("t2v", "flf2v", "r2v"):
+        assert resolve_workflow_path(tmp_path, mode) == guided
 
 
 def test_with_overrides_returns_a_new_frozen_settings(tmp_path: Path):

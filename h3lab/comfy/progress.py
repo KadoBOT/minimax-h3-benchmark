@@ -55,6 +55,7 @@ CLASS_LABELS: dict[str, str] = {
     "CLIPLoaderKJ": "Text encoder",
     "CLIPLoaderGGUF": "GGUF text encoder",
     "VAELoader": "VAE",
+    "MiniMaxH3Studio": "H3 Studio",
     "MiniMaxH3ImageToVideo": "Conditioning",
     "MiniMaxH3TextToVideo": "Conditioning",
     "MiniMaxH3ReferenceToVideo": "Conditioning",

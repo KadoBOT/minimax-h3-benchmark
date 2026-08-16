@@ -330,7 +330,10 @@ async def test_the_exported_workflow_reflects_the_run_not_the_template(
     assert "FrameInterpolate" in types, "the FILM interpolator ran, so it is in the file"
     assert "RIFEInterpolation" not in types, "RIFE did not"
     assert widget_of(payload, "VHS_VideoCombine", "frame_rate") == 48
-    assert widget_of(payload, "BasicScheduler", "steps") == 33
+    if any(node["type"] == "MiniMaxH3Studio" for node in payload["nodes"]):
+        assert widget_of(payload, "MiniMaxH3Studio", "steps") == 33
+    else:
+        assert widget_of(payload, "BasicScheduler", "steps") == 33
 
 
 def widget_of(workflow: dict[str, Any], class_type: str, name: str) -> Any:

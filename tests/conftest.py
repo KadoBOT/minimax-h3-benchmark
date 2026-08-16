@@ -9,6 +9,18 @@ from typing import Any
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def legacy_workflow_path(mode: str) -> Path:
+    """The per-mode editor templates, even after a unified Studio graph is present."""
+    return REPO_ROOT / f"minimax_h3_{mode}_workflow.json"
+
+
+def unified_workflow_path() -> Path:
+    guided = REPO_ROOT / "minimax_h3_unified_guided.json"
+    if guided.is_file():
+        return guided
+    return REPO_ROOT / "minimax_h3_unified.json"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 

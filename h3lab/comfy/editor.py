@@ -184,6 +184,10 @@ def _write_widget(node: dict[str, Any], name: str, value: Any) -> None:
     is the order the node itself declares, falling back to the class table — the same order the
     reader folds by, because anything else would export a value into a different widget.
     """
+    named = node.get("widgets_values_named")
+    if isinstance(named, dict):
+        named[name] = value
+
     values = node.get("widgets_values")
 
     if isinstance(values, dict):

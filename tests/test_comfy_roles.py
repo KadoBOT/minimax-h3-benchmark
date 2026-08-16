@@ -6,15 +6,15 @@ import pytest
 
 from h3lab.comfy import roles as R
 from h3lab.comfy.workflow import load_workflow, read
-from h3lab.settings import Settings
 
 MODES = ("flf2v", "t2v", "r2v")
 
 
 @pytest.fixture(scope="module")
 def graphs():
-    settings = Settings()
-    return {mode: read(load_workflow(settings.workflow_path(mode))) for mode in MODES}
+    from tests.conftest import legacy_workflow_path
+
+    return {mode: read(load_workflow(legacy_workflow_path(mode))) for mode in MODES}
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -117,7 +117,9 @@ def test_the_duration_and_fps_primitives_are_told_apart(graphs, mode):
 
 def test_renumbering_every_node_changes_nothing(graphs):
     """The whole point: ids are not identity."""
-    workflow = load_workflow(Settings().workflow_path("flf2v"))
+    from tests.conftest import legacy_workflow_path
+
+    workflow = load_workflow(legacy_workflow_path("flf2v"))
     before = R.resolve(read(workflow))
     graph = read(_renumber(workflow, offset=5000))
     after = R.resolve(graph)

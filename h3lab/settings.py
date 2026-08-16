@@ -257,12 +257,21 @@ def classify_h3_workflow(path: Path) -> str | None:
     return _mode_from_filename(path.name) or _mode_from_graph(path)
 
 
+UNIFIED_WORKFLOW_NAMES: tuple[str, ...] = (
+    "minimax_h3_unified.json",
+    "minimax_h3_unified_guided.json",
+)
+UNIFIED_MODES: frozenset[str] = frozenset({"flf2v", "t2v", "r2v"})
+
+
 def resolve_workflow_path(
     directory: Path, mode: str, fallback: Path | None = None
 ) -> Path:
-    unified = directory / "minimax_h3_unified.json"
-    if unified.is_file():
-        return unified
+    if mode in UNIFIED_MODES:
+        for name in UNIFIED_WORKFLOW_NAMES:
+            unified = directory / name
+            if unified.is_file():
+                return unified
     exact = directory / f"minimax_h3_{mode}_workflow.json"
     if exact.is_file():
         return exact

@@ -17,6 +17,7 @@ output does not need.
 
 from __future__ import annotations
 
+import json
 from collections import deque
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -34,11 +35,11 @@ from h3lab.domain.config import (
     MAX_REF_VIDEOS,
     GenerationConfig,
     resolve_model_filename,
-    resolve_turbo_lora,
 )
 
 __all__ = [
     "Prompt",
+    "STUDIO_CLASS",
     "WorkflowError",
     "apply_config",
     "build",
@@ -89,6 +90,11 @@ _MINTED: dict[str, tuple[str, tuple[str, ...]]] = {
     "ref_video_audios": ("LoadAudio", ("AUDIO",)),
     "ref_audios": ("LoadAudio", ("AUDIO",)),
 }
+
+STUDIO_CLASS = "MiniMaxH3Studio"
+STUDIO_MODES: dict[str, str] = {"t2v": "T2V", "flf2v": "FLF2V", "r2v": "R2V"}
+STUDIO_INTERP: dict[str, str] = {"off": "none", "film": "film", "rife": "rife", "gmfss": "gmfss"}
+STUDIO_TURBO_NONE = "none"
 
 
 class WorkflowError(RuntimeError):
@@ -161,6 +167,22 @@ class _Patch:
 
     # -- writing
 
+    def is_studio(self) -> bool:
+        node = self.node(R.CONDITIONING)
+        return node is not None and node.class_type == STUDIO_CLASS
+
+    def driven_by_studio(self, node: Node | None, name: str) -> bool:
+        """True when *name* is already a link from MiniMaxH3Studio.
+
+        Studio owns those widgets. Replacing the link with a literal would disconnect
+        the engine from the API the run is supposed to speak.
+        """
+        if node is None or not self.is_studio():
+            return False
+        studio = self.need(R.CONDITIONING)
+        value = node.inputs.get(name)
+        return is_link(value) and str(value[0]) == studio.id
+
     def accepts(self, node: Node, name: str) -> bool:
         """Does this node have an input called *name*?
 
@@ -182,7 +204,7 @@ class _Patch:
 
     def set(self, node: Node | None, name: str, value: Any) -> None:
         """Write a literal, replacing whatever the editor had wired into that input."""
-        if node is None:
+        if node is None or self.driven_by_studio(node, name):
             return
         node.inputs[name] = value
 
@@ -191,6 +213,8 @@ class _Patch:
         if node is None:
             return
         for name, value in values.items():
+            if self.driven_by_studio(node, name):
+                continue
             if self.accepts(node, name):
                 node.inputs[name] = value
 
@@ -200,10 +224,14 @@ class _Patch:
             return False
         for name in names:
             if name in node.inputs:
+                if self.driven_by_studio(node, name):
+                    return True
                 node.inputs[name] = value
                 return True
         for name in names:
             if self.accepts(node, name):
+                if self.driven_by_studio(node, name):
+                    return True
                 node.inputs[name] = value
                 return True
         return False
@@ -253,6 +281,8 @@ class _Patch:
     # -- the run
 
     def build(self) -> Prompt:
+        if self.is_studio():
+            self.wire_studio()
         self.wire_scalars()
         self.wire_mode()
         self.wire_model_chain()
@@ -262,6 +292,44 @@ class _Patch:
         prompt = self.graph.prompt()
         self.schemas.fill_defaults(prompt)
         return prompt
+
+    def wire_studio(self) -> None:
+        """Write the MiniMaxH3Studio API. Engine nodes stay linked to its outputs."""
+        config = self.config
+        studio = self.need(R.CONDITIONING)
+        references = {
+            "images": list(config.ref_images),
+            "videos": list(config.ref_videos),
+            "video_audios": list(config.ref_video_audios),
+            "audios": list(config.ref_audios),
+        }
+        self.set_known(
+            studio,
+            {
+                "mode": STUDIO_MODES[config.mode],
+                "prompt": config.prompt,
+                "duration": config.duration_s,
+                "aspect_ratio": config.aspect_ratio or DEFAULT_ASPECT,
+                "megapixels": config.mp,
+                "ref_image_size": config.ref_image_size,
+                "first_frame": config.first_frame,
+                "last_frame": config.last_frame,
+                "references": json.dumps(references, separators=(",", ":")),
+                "steps": config.effective_steps,
+                "turbo": config.turbo,
+                "turbo_lora": config.turbo_lora_file or STUDIO_TURBO_NONE,
+                "scheduler": config.scheduler,
+                "sampler_name": config.sampler,
+                "cache": config.cache_active,
+                "upscale_ltx": False,
+                "upscale_rtx": config.upscaler,
+                "seed_mode": "fixed",
+                "seed": config.seed,
+                "interpolation": STUDIO_INTERP.get(config.interp, "none"),
+                "clean_vram": config.clean_vram,
+                "sol_attn": config.sol_attn,
+            },
+        )
 
     # -- scalars
 
@@ -319,6 +387,8 @@ class _Patch:
     # -- media
 
     def wire_mode(self) -> None:
+        if self.is_studio():
+            return
         if self.config.mode == "r2v":
             self.wire_references()
         elif self.config.mode == "t2v":
@@ -559,14 +629,23 @@ class _Patch:
                     "or its strength, so the lab cannot choose one"
                 )
 
-        # The optional LoRA slot is never part of a benchmark; the run passes it by.
-        self.enable(R.OPTIONAL_LORA, False)
+        # The optional LoRA slot is never part of a benchmark. Studio's remaining
+        # LoraLoaderModelOnly is the reference LoRA the engine needs, so leave it.
+        if not self.is_studio():
+            self.enable(R.OPTIONAL_LORA, False)
 
         sol = self.enable(R.SOL_ATTN, config.sol_attn)
         if config.sol_attn:
             self.set_known(sol, sol_widgets(config))
 
         wanted_cache = R.CACHE_ROLES.get(config.cache) if config.cache_active else None
+        if (
+            wanted_cache
+            and self.node(wanted_cache) is None
+            and self.is_studio()
+            and self.node(R.CACHE_SPECTRUM) is not None
+        ):
+            wanted_cache = R.CACHE_SPECTRUM
         for name, role in R.CACHE_ROLES.items():
             node = self.enable(role, role == wanted_cache)
             if role == wanted_cache:
@@ -639,11 +718,19 @@ class _Patch:
             self.wake_settings(chosen, ignore=_IMAGE_INPUTS)
             self.put_on_image_path(chosen, after=after)
             after = chosen
+        else:
+            self.skip_parked_interpolation()
 
         upscaler = self.enable(R.UPSCALER, config.upscaler)
         if upscaler is not None and config.upscaler:
             self.wake_settings(upscaler, ignore=_IMAGE_INPUTS)
             self.put_on_image_path(upscaler, after=after)
+            after = upscaler
+
+        if not self.reaches_output(after):
+            # Parked upscale / grade / interp subgraphs often lose their boundary
+            # image link when flattened. The muxer still has to see the pictures.
+            self.connect(self.need(R.VIDEO_OUT), "images", after)
 
         # Video-only output. MiniMax audio latents frequently contain NaN or +Inf, which makes
         # the ffmpeg AAC mux fail after the picture track is already written — losing the whole
@@ -658,13 +745,56 @@ class _Patch:
             return True
         return any(found.id == video.id for found in R.descendants(self.graph, node.id))
 
+    def skip_parked_interpolation(self) -> None:
+        """When no interpolator runs, do not let their switch eat the picture path.
+
+        The unified graph parks RIFE/FILM/GMFSS behind an Any Switch. Thinning those
+        nodes leaves the switch holding only the fps primitive, and everything upstream
+        — including MiniMaxH3Studio — is then pruned as unused.
+        """
+        source: Node | None = None
+        switches: list[Node] = []
+        interpolators = {
+            "RIFEInterpolation",
+            "RIFE VFI",
+            "FrameInterpolate",
+            "GMFSS Fortuna VFI",
+        }
+        for node in self.graph:
+            if node.class_type not in interpolators:
+                continue
+            for name in _IMAGE_INPUTS:
+                value = node.inputs.get(name)
+                if is_link(value):
+                    found = self.graph.get(str(value[0]))
+                    if found is not None:
+                        source = found
+                    break
+            for consumer, _name, _slot in self.graph.consumers(node.id):
+                if "Switch" in consumer.class_type:
+                    switches.append(consumer)
+        if source is None:
+            return
+        seen: set[str] = set()
+        for switch in switches:
+            if switch.id in seen:
+                continue
+            seen.add(switch.id)
+            for consumer, name, slot in self.graph.consumers(switch.id):
+                if slot == 0:
+                    consumer.inputs[name] = [source.id, 0]
+
     def put_on_image_path(self, node: Node, *, after: Node) -> None:
         """Splice *node* in immediately downstream of *after*, if it is not already in.
 
         Everything that read the pictures from *after* reads them from *node* instead. Nodes
         the template left switched off stay in the path here and are thinned out later, so
         the order the template chose survives.
+
+        Always write the picture input. Unified interpolators reach the muxer through a
+        switch but lose their subgraph image link when flattened.
         """
+        self.set_first(node, ("images", "image", "frames"), [after.id, 0])
         if self.reaches_output(node):
             return
         target: tuple[Node, str] | None = None
@@ -672,7 +802,6 @@ class _Patch:
             if slot == 0 and consumer.id != node.id and self.reaches_output(consumer):
                 target = (consumer, name)
                 break
-        self.set_first(node, ("images", "image"), [after.id, 0])
         if target is None:
             video = self.node(R.VIDEO_OUT)
             self.connect(video, "images", node)
@@ -807,11 +936,49 @@ def referenced_files(prompt: Prompt) -> list[str]:
     """Input media the prompt expects ComfyUI to already have."""
     found: list[str] = []
     for node in prompt.values():
+        inputs = node.get("inputs") or {}
         for key in _MEDIA_WIDGETS:
-            value = node["inputs"].get(key)
+            value = inputs.get(key)
             if isinstance(value, str) and value:
                 found.append(value)
+        if node.get("class_type") == STUDIO_CLASS:
+            found.extend(_studio_media_names(inputs))
     return sorted(set(found))
+
+
+def _studio_media_names(inputs: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for key in ("first_frame", "last_frame"):
+        value = inputs.get(key)
+        if isinstance(value, str) and value.strip():
+            names.append(value)
+    raw_refs = inputs.get("references")
+    if isinstance(raw_refs, str) and raw_refs.strip():
+        try:
+            payload = json.loads(raw_refs)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            for group in payload.values():
+                if isinstance(group, list):
+                    names.extend(
+                        name for name in group if isinstance(name, str) and name.strip()
+                    )
+    raw_guides = inputs.get("guides")
+    if isinstance(raw_guides, str) and raw_guides.strip():
+        try:
+            clips = json.loads(raw_guides)
+        except json.JSONDecodeError:
+            clips = None
+        if isinstance(clips, list):
+            for clip in clips:
+                if not isinstance(clip, dict):
+                    continue
+                for key in ("image", "audio"):
+                    value = clip.get(key)
+                    if isinstance(value, str) and value.strip():
+                        names.append(value)
+    return names
 
 
 def describe(prompt: Prompt) -> dict[str, Any]:

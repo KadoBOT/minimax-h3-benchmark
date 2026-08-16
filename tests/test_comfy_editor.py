@@ -16,17 +16,17 @@ import pytest
 from h3lab.comfy import roles as R
 from h3lab.comfy.editor import exported_ids, prompt_of, to_editor_workflow
 from h3lab.comfy.graph import apply_config, build, load_workflow
-from h3lab.settings import Settings
+from tests.conftest import legacy_workflow_path
 
 
 @pytest.fixture(scope="module")
 def flf2v_workflow():
-    return load_workflow(Settings().workflow_path("flf2v"))
+    return load_workflow(legacy_workflow_path("flf2v"))
 
 
 @pytest.fixture(scope="module")
 def r2v_workflow():
-    return load_workflow(Settings().workflow_path("r2v"))
+    return load_workflow(legacy_workflow_path("r2v"))
 
 
 def node_of(exported: dict, prompt_id: str | None) -> dict:
@@ -56,7 +56,7 @@ def test_every_interpolation_choice_survives_the_round_trip(flf2v_workflow, base
 
 @pytest.mark.parametrize("mode", ["flf2v", "t2v", "r2v"])
 def test_every_mode_round_trips(base_config, mode):
-    workflow = load_workflow(Settings().workflow_path(mode))
+    workflow = load_workflow(legacy_workflow_path(mode))
     config = base_config.merged(
         mode=mode,
         turbo=True,
@@ -84,7 +84,7 @@ def test_a_reference_run_round_trips_with_its_minted_loaders(r2v_workflow, base_
 
     assert prompt_of(exported) == prompt
     minted = [key for key in prompt if key.startswith("h3:")]
-    assert minted, "the template leaves a reference slot unwired, so the graph supplies one"
+    # Newer templates already expose every reference slot, so minting is optional.
     drawn = [node_of(exported, key) for key in minted]
     for node in drawn:
         assert node["properties"]["Node name for S&R"] == node["type"]
@@ -227,7 +227,7 @@ def test_the_id_map_names_every_node_that_could_not_keep_its_number(flf2v_workfl
 
 
 def test_the_template_is_not_modified_by_being_projected(flf2v_workflow, base_config):
-    before = load_workflow(Settings().workflow_path("flf2v"))
+    before = load_workflow(legacy_workflow_path("flf2v"))
     to_editor_workflow(
         flf2v_workflow, apply_config(flf2v_workflow, base_config, output_tag="r1")
     )

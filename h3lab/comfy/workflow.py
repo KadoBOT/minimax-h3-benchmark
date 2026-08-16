@@ -428,6 +428,13 @@ def _fold_widgets(
     widget_names: WidgetNames,
 ) -> None:
     """Fold positional widget values into named inputs. A link always wins."""
+    named = node.get("widgets_values_named")
+    if isinstance(named, dict):
+        for key, value in named.items():
+            if key not in {"videopreview", "h3s_ui", "control_after_generate"} and key not in inputs:
+                inputs[key] = value
+        return
+
     values = node.get("widgets_values")
     if values is None:
         return
