@@ -15,7 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from h3lab.domain.config import GenerationConfig, config_hash, derive_label, recipe_hash
 from h3lab.domain.ids import new_id
-from h3lab.domain.run import Artifact, Run, RunMetrics, RunStatus
+from h3lab.domain.run import Artifact, Run, RunMetrics, RunStatus, TERMINAL_STATUSES
+from h3lab.shared.contracts import JobSubmission, PublicJobProvenance
 from h3lab.storage.db import ConnectionFactory, scalar, session, transaction
 
 SortKey = Literal[
@@ -32,7 +33,9 @@ _COLUMNS = (
     "id, seq, label, status, mode, config_json, config_hash, recipe_hash, "
     "wall_s, sec_per_it, steps, sampler_cached, cache_cleared, prompt_id, error, "
     "video_path, poster_path, strip_path, width, height, fps, frame_count, size_bytes, "
-    "favourite, archived, notes, created_at, started_at, finished_at"
+    "favourite, archived, notes, created_at, started_at, finished_at, "
+    "shared_submission_json, shared_job_id, shared_provenance_json, shared_event_cursor, "
+    "shared_failure_kind"
 )
 
 
@@ -78,6 +81,16 @@ def _bool_col(value: bool | None) -> int | None:
 
 def row_to_run(row: sqlite3.Row, tags: tuple[str, ...] = ()) -> Run:
     config = GenerationConfig(**json.loads(row["config_json"]))
+    shared_submission = (
+        None
+        if row["shared_submission_json"] is None
+        else JobSubmission.model_validate_json(row["shared_submission_json"])
+    )
+    shared_provenance = (
+        None
+        if row["shared_provenance_json"] is None
+        else PublicJobProvenance.model_validate_json(row["shared_provenance_json"])
+    )
     return Run(
         id=row["id"],
         seq=int(row["seq"]),
@@ -104,6 +117,11 @@ def row_to_run(row: sqlite3.Row, tags: tuple[str, ...] = ()) -> Run:
             size_bytes=row["size_bytes"],
         ),
         prompt_id=row["prompt_id"],
+        shared_submission=shared_submission,
+        shared_job_id=row["shared_job_id"],
+        shared_provenance=shared_provenance,
+        shared_event_cursor=row["shared_event_cursor"],
+        shared_failure_kind=row["shared_failure_kind"],
         error=row["error"],
         favourite=bool(row["favourite"]),
         archived=bool(row["archived"]),
@@ -187,11 +205,27 @@ class RunRepository:
 
     # --- creation ----------------------------------------------------------
 
-    def create(self, config: GenerationConfig, *, status: RunStatus = "queued") -> Run:
+    def create(
+        self,
+        config: GenerationConfig,
+        *,
+        status: RunStatus = "queued",
+        run_id: str | None = None,
+        shared_submission: JobSubmission | None = None,
+    ) -> Run:
         """Allocate id, seq, and label in one transaction so a burst cannot collide."""
-        run_id = new_id()
+        run_id = run_id or new_id()
         created = utc_now()
         payload = json.dumps(config.model_dump(mode="json"), ensure_ascii=False)
+        shared_payload = (
+            None
+            if shared_submission is None
+            else json.dumps(
+                shared_submission.model_dump(mode="json", by_alias=True),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
         with session(self._connect) as conn, transaction(conn):
             next_seq = int(scalar(conn, "SELECT COALESCE(MAX(seq), 0) + 1 FROM runs") or 1)
             label = derive_label(next_seq, config)
@@ -199,8 +233,8 @@ class RunRepository:
                 """
                 INSERT INTO runs (
                     id, seq, label, status, mode, config_json, config_hash, recipe_hash,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, shared_submission_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -212,6 +246,7 @@ class RunRepository:
                     config_hash(config),
                     recipe_hash(config),
                     created,
+                    shared_payload,
                 ),
             )
         return self.require(run_id)
@@ -319,7 +354,8 @@ class RunRepository:
         started = utc_now()
         with session(self._connect) as conn, transaction(conn):
             row = conn.execute(
-                "SELECT id FROM runs WHERE status = 'queued' ORDER BY created_at ASC, seq ASC "
+                "SELECT id FROM runs WHERE status = 'queued' "
+                "AND shared_submission_json IS NULL ORDER BY created_at ASC, seq ASC "
                 "LIMIT 1"
             ).fetchone()
             if row is None:
@@ -368,7 +404,7 @@ class RunRepository:
                 "UPDATE runs SET status = 'interrupted', "
                 "error = COALESCE(NULLIF(error, ''), ?), "
                 "finished_at = COALESCE(finished_at, ?) "
-                "WHERE status = 'running'",
+                "WHERE status = 'running' AND shared_submission_json IS NULL",
                 (reason, finished),
             )
             return cursor.rowcount
@@ -402,6 +438,70 @@ class RunRepository:
 
     def set_prompt_id(self, run_id: str, prompt_id: str) -> Run:
         return self._update(run_id, {"prompt_id": prompt_id})
+
+    def set_shared_job(
+        self,
+        run_id: str,
+        job_id: str,
+        provenance: PublicJobProvenance | None,
+    ) -> Run:
+        return self._update(
+            run_id,
+            {
+                "shared_job_id": job_id,
+                "shared_provenance_json": (
+                    None
+                    if provenance is None
+                    else json.dumps(
+                        provenance.model_dump(mode="json", by_alias=True),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                ),
+                "shared_failure_kind": None,
+            },
+        )
+
+    def set_shared_event_cursor(self, run_id: str, sequence: int) -> Run:
+        if sequence < 0:
+            raise ValueError("shared event cursor cannot be negative")
+        with session(self._connect) as conn, transaction(conn):
+            cursor = conn.execute(
+                "UPDATE runs SET shared_event_cursor = MAX(COALESCE(shared_event_cursor, 0), ?) "
+                "WHERE id = ?",
+                (sequence, run_id),
+            )
+            if cursor.rowcount == 0:
+                raise RunNotFound(run_id)
+        return self.require(run_id)
+
+    def set_shared_failure(self, run_id: str, kind: str | None) -> Run:
+        if kind is not None and (
+            not kind or len(kind) > 127 or any(not (char.isalnum() or char == "_") for char in kind)
+        ):
+            raise ValueError("shared failure kind is invalid")
+        return self._update(run_id, {"shared_failure_kind": kind})
+
+    def sync_shared_status(
+        self,
+        run_id: str,
+        status: RunStatus,
+        *,
+        error: str | None = None,
+        observed_at: str | None = None,
+    ) -> Run:
+        run = self.require(run_id)
+        if run.shared_submission is None:
+            raise ValueError("cannot project shared status onto a legacy run")
+        assignments: dict[str, Any] = {"status": status, "error": error}
+        if status == "running":
+            assignments["started_at"] = run.started_at or observed_at or utc_now()
+            assignments["finished_at"] = None
+        elif status in TERMINAL_STATUSES:
+            assignments["finished_at"] = run.finished_at or observed_at or utc_now()
+        else:
+            assignments["finished_at"] = None
+        return self._update(run_id, assignments)
 
     def update_metrics(self, run_id: str, metrics: RunMetrics) -> Run:
         return self._update(

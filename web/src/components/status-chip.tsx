@@ -10,6 +10,7 @@ const TONE: Record<Run["status"], string> = {
   running: "text-signal border-signal/50",
   succeeded: "text-mint border-mint-dim/50",
   failed: "text-crimson border-crimson-dim/60",
+  collection_failed: "text-crimson border-crimson-dim/60",
   cancelled: "text-muted-foreground border-rule",
   interrupted: "text-signal border-signal-dim/60",
 }
@@ -23,7 +24,8 @@ export function StatusChip({
   showRate?: boolean
 }) {
   const { progress } = useStream()
-  const live = run.status === "running" && progress?.runId === run.id ? progress : null
+  const live =
+    run.status === "running" && progress?.runId === run.id ? progress : null
 
   const label =
     live && live.step != null && live.stepTotal
@@ -48,10 +50,12 @@ export function StatusChip({
       )}
     >
       {run.status === "running" ? (
-        <span className="bg-signal size-1.5 shrink-0 rounded-full motion-safe:animate-pulse" />
+        <span className="size-1.5 shrink-0 rounded-full bg-signal motion-safe:animate-pulse" />
       ) : null}
       {label}
-      {rate != null ? <span className="text-muted-foreground">{secPerIt(rate)}</span> : null}
+      {rate != null ? (
+        <span className="text-muted-foreground">{secPerIt(rate)}</span>
+      ) : null}
     </span>
   )
 }

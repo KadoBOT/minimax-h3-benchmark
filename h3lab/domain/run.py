@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from h3lab.domain.config import GenerationConfig
+from h3lab.shared.contracts import JobSubmission, OpaqueId, PublicJobProvenance
 
 RunStatus = Literal[
     "queued",
@@ -15,11 +16,12 @@ RunStatus = Literal[
     "failed",
     "cancelled",
     "interrupted",
+    "collection_failed",
 ]
 
 LIVE_STATUSES: frozenset[str] = frozenset({"queued", "running"})
 TERMINAL_STATUSES: frozenset[str] = frozenset(
-    {"succeeded", "failed", "cancelled", "interrupted"}
+    {"succeeded", "failed", "cancelled", "interrupted", "collection_failed"}
 )
 
 RunStage = Literal[
@@ -92,6 +94,11 @@ class Run(BaseModel):
     artifact: Artifact = Field(default_factory=Artifact)
 
     prompt_id: str | None = None
+    shared_submission: JobSubmission | None = None
+    shared_job_id: OpaqueId | None = None
+    shared_provenance: PublicJobProvenance | None = None
+    shared_event_cursor: Annotated[int, Field(ge=0)] | None = None
+    shared_failure_kind: str | None = None
     error: str | None = None
     favourite: bool = False
     archived: bool = False

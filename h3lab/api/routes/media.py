@@ -45,6 +45,8 @@ CACHE_BRIEFLY = "public, max-age=30"
 
 
 def serve(directory: Path, name: str, *, cache: str = CACHE_FOREVER) -> Response:
+    if "\\" in name:
+        return problem(400, "invalid", "that path is not allowed", name)
     root = directory.resolve()
     candidate = (root / name).resolve()
     if candidate == root or root not in candidate.parents:

@@ -11,6 +11,7 @@ from typing import Any, Mapping
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
+DEFAULT_SHARED_SERVICE_URL = "http://127.0.0.1:8189"
 DEFAULT_PORT = 8787
 DEFAULT_HOST = "0.0.0.0"
 if os.name == "nt":
@@ -34,6 +35,7 @@ _ENV_PREFIX = "H3LAB_"
 # env suffix -> (attribute, coercion)
 _ENV_FIELDS: dict[str, tuple[str, str]] = {
     "COMFY_URL": ("comfy_url", "str"),
+    "SHARED_SERVICE_URL": ("shared_service_url", "str"),
     "HOST": ("host", "str"),
     "PORT": ("port", "int"),
     "DATA_DIR": ("data_dir", "path"),
@@ -61,6 +63,7 @@ def _coerce(kind: str, raw: str) -> Any:
 @dataclass(frozen=True, slots=True)
 class Settings:
     comfy_url: str = DEFAULT_COMFY_URL
+    shared_service_url: str = DEFAULT_SHARED_SERVICE_URL
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
     data_dir: Path = REPO_ROOT / "results"
@@ -114,6 +117,10 @@ class Settings:
         return self.data_dir / "strips"
 
     @property
+    def workflows_dir(self) -> Path:
+        return self.data_dir / "workflows"
+
+    @property
     def legacy_db_path(self) -> Path:
         return self.data_dir / "benchmark.db"
 
@@ -123,7 +130,13 @@ class Settings:
 
     @property
     def media_dirs(self) -> tuple[Path, ...]:
-        return (self.data_dir, self.videos_dir, self.posters_dir, self.strips_dir)
+        return (
+            self.data_dir,
+            self.videos_dir,
+            self.posters_dir,
+            self.strips_dir,
+            self.workflows_dir,
+        )
 
     def ensure_dirs(self) -> None:
         for directory in self.media_dirs:

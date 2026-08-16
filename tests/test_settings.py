@@ -5,6 +5,7 @@ from pathlib import Path
 from h3lab.settings import (
     DEFAULT_COMFY_URL,
     DEFAULT_PORT,
+    DEFAULT_SHARED_SERVICE_URL,
     Settings,
     classify_h3_workflow,
     resolve_workflow_path,
@@ -14,14 +15,22 @@ from h3lab.settings import (
 def test_defaults_preserve_the_previous_behaviour():
     made = Settings()
     assert made.comfy_url == DEFAULT_COMFY_URL
+    assert made.shared_service_url == DEFAULT_SHARED_SERVICE_URL
     assert made.port == DEFAULT_PORT
     assert made.data_dir.name == "results"
     assert made.db_path.name == "h3lab.db"
 
 
 def test_environment_overrides_defaults():
-    made = Settings.from_env({"H3LAB_COMFY_URL": "http://box:9000", "H3LAB_PORT": "9999"})
+    made = Settings.from_env(
+        {
+            "H3LAB_COMFY_URL": "http://box:9000",
+            "H3LAB_SHARED_SERVICE_URL": "http://shared:8189",
+            "H3LAB_PORT": "9999",
+        }
+    )
     assert made.comfy_url == "http://box:9000"
+    assert made.shared_service_url == "http://shared:8189"
     assert made.port == 9999
 
 

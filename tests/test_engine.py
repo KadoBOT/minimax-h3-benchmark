@@ -990,3 +990,58 @@ def test_patching_a_run_sets_flags_notes_and_tags(lab, base_config):
     assert patched.run.label == "hero"
     assert patched.run.tags == ("night",)
     assert lab.tags() == ["night"]
+
+
+def test_a_run_saves_an_immutable_workflow_snapshot_on_execution(
+    runner_setup, base_config, stub, settings
+):
+    runner, runs, _bus = runner_setup
+    run = runs.create(base_config.merged(first_frame="frame.png", interp="film", steps=25))
+    runner.start()
+
+    assert wait_for(lambda: runs.require(run.id).status == "succeeded")
+    snapshot_path = settings.workflows_dir / f"{run.id}.json"
+    assert snapshot_path.is_file()
+
+    import json
+    saved = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert saved["extra"]["h3lab"]["run_id"] == run.id
+    assert "FrameInterpolate" in {node["type"] for node in saved["nodes"]}
+
+
+def test_workflow_for_run_returns_snapshot_even_if_template_changes_on_disk(
+    lab, base_config, tmp_path
+):
+    # Enqueue and execute a run
+    view = lab.enqueue(base_config.merged(first_frame="frame.png", steps=30))[0]
+    lab.runner.start()
+    assert wait_for(lambda: lab.get_run(view.run.id).run.status == "succeeded")
+
+    snapshot_path = lab.settings.workflows_dir / f"{view.run.id}.json"
+    assert snapshot_path.is_file()
+
+    # Verify workflow_for_run returns the snapshot
+    wf = lab.workflow_for_run(view.run.id)
+    assert wf["extra"]["h3lab"]["run_id"] == view.run.id
+
+    # Now mutate the saved snapshot file directly to simulate an old snapshot
+    import json
+    mutated = dict(wf)
+    mutated["custom_marker"] = "immutable-snapshot-v1"
+    snapshot_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+    # workflow_for_run must return the snapshot from disk, not regenerate from template
+    loaded = lab.workflow_for_run(view.run.id)
+    assert loaded.get("custom_marker") == "immutable-snapshot-v1"
+
+
+def test_deleting_a_run_removes_its_workflow_snapshot(lab, base_config):
+    view = lab.enqueue(base_config.merged(first_frame="frame.png"))[0]
+    lab.runner.start()
+    assert wait_for(lambda: lab.get_run(view.run.id).run.status == "succeeded")
+
+    snapshot_path = lab.settings.workflows_dir / f"{view.run.id}.json"
+    assert snapshot_path.is_file()
+
+    assert lab.delete_run(view.run.id) is True
+    assert not snapshot_path.exists()

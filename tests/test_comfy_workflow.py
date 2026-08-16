@@ -295,9 +295,13 @@ def test_the_turbo_lora_node_is_read_with_the_widgets_the_installed_node_has(tem
     assert "strength" in lora.inputs  # not `strength_model`, which the node no longer has
 
 
-def test_the_seed_node_outside_the_subgraph_reaches_the_noise_node_inside_it(templates):
-    graph = read(templates["t2v"])
-    noise = next(n for n in graph.nodes.values() if n.class_type == "RandomNoise")
-    source = noise.inputs["noise_seed"]
-    assert isinstance(source, list), "the seed arrives as a link, not a literal"
-    assert graph.nodes[source[0]].class_type == "Seed (rgthree)"
+def test_the_configured_seed_reaches_the_noise_node(templates, base_config):
+    from h3lab.comfy.graph import apply_config
+
+    prompt = apply_config(
+        templates["t2v"],
+        base_config.merged(mode="t2v", seed=123456),
+        output_tag="seed-check",
+    )
+    noise = next(node for node in prompt.values() if node["class_type"] == "RandomNoise")
+    assert noise["inputs"]["noise_seed"] == 123456

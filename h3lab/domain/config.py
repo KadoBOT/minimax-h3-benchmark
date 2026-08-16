@@ -8,19 +8,27 @@ import re
 from pathlib import Path
 from typing import Annotated, Any, Iterable, Literal, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 GenMode = Literal["flf2v", "t2v", "r2v"]
 CacheName = Literal["none", "spectrum", "easy", "h3"]
 PresetLevel = Literal["conservative", "moderate", "aggressive", "custom"]
 CachePreset = PresetLevel
 RefImageSize = Literal["match", "max"]
-Interp = Literal["off", "film", "rife"]
+Interp = Literal["off", "gmfss", "film", "rife"]
+AttentionMode = Literal["native", "kitchen", "sage_sol"]
+UpscalerMode = Literal["none", "rtx", "seedvr2"]
+ExecutionBackend = Literal["legacy", "shared"]
 
 GEN_MODES: tuple[GenMode, ...] = ("flf2v", "t2v", "r2v")
 CACHE_NAMES: tuple[CacheName, ...] = ("none", "spectrum", "easy", "h3")
-INTERP_MODES: tuple[Interp, ...] = ("off", "film", "rife")
-INTERP_LABELS: dict[str, str] = {"off": "Off", "film": "FILM Net", "rife": "RIFE"}
+INTERP_MODES: tuple[Interp, ...] = ("off", "gmfss", "film", "rife")
+INTERP_LABELS: dict[str, str] = {
+    "off": "Off",
+    "gmfss": "GMFSS Fortuna",
+    "film": "FILM Net",
+    "rife": "RIFE",
+}
 
 # Field names a stored config may still use. They are read and translated, never written.
 LEGACY_FIELD_ALIASES: frozenset[str] = frozenset({"rife"})
@@ -152,6 +160,7 @@ class GenerationConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     mode: GenMode = "flf2v"
+    execution_backend: ExecutionBackend = "legacy"
     diffusion_model: str = ""
     prompt: str = BASELINE_PROMPT
 
@@ -176,7 +185,14 @@ class GenerationConfig(BaseModel):
     turbo_lora_strength: Annotated[float, Field(ge=0.0, le=3.0)] = DEFAULT_TURBO_STRENGTH
     interp: Interp = "off"
     upscaler: bool = False
+    upscaler_mode: UpscalerMode | None = None
     clean_vram: bool = False
+    attention: AttentionMode | None = None
+    post_grade: bool | None = None
+    face_refine: bool | None = None
+    filename_prefix: str = ""
+    shared_workflow_revision: str = ""
+    shared_schema_revision: str = ""
 
     cache_enabled: bool = True
     cache: CacheName = "spectrum"
@@ -184,6 +200,7 @@ class GenerationConfig(BaseModel):
     sol_attn: bool = True
     sol_preset: PresetLevel = "moderate"
     widgets: dict[str, Any] = Field(default_factory=dict)
+    shared_identity: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -193,23 +210,30 @@ class GenerationConfig(BaseModel):
         Stored runs, saved presets, and the old benchmark's export all still speak it. An
         explicit `interp` wins, so a translated row can never overwrite a current one.
         """
-        if not isinstance(data, dict) or "rife" not in data:
+        if not isinstance(data, dict):
             return data
         moved = dict(data)
-        legacy = moved.pop("rife")
-        if moved.get("interp") is None:
-            moved["interp"] = "rife" if legacy else "off"
+        if "rife" in moved:
+            legacy = moved.pop("rife")
+            if moved.get("interp") is None:
+                moved["interp"] = "rife" if legacy else "off"
         return moved
 
     @field_validator("prompt")
     @classmethod
-    def _prompt_not_blank(cls, value: str) -> str:
+    def _prompt_not_blank(cls, value: str, info: ValidationInfo) -> str:
         text = str(value).strip()
-        if not text:
+        if not text and info.data.get("execution_backend") != "shared":
             raise ValueError("prompt must not be empty")
         return text
 
-    @field_validator("diffusion_model", "turbo_lora", "first_frame", "last_frame")
+    @field_validator(
+        "diffusion_model",
+        "turbo_lora",
+        "first_frame",
+        "last_frame",
+        "filename_prefix",
+    )
     @classmethod
     def _to_basename(cls, value: str) -> str:
         text = str(value or "").strip()
@@ -271,8 +295,12 @@ class GenerationConfig(BaseModel):
         if self.mode != "r2v":
             for field in ("ref_images", "ref_videos", "ref_video_audios", "ref_audios"):
                 object.__setattr__(self, field, ())
-        elif not (self.ref_images or self.ref_videos or self.ref_audios):
+        elif not (
+            self.ref_images or self.ref_videos or self.ref_video_audios or self.ref_audios
+        ):
             raise ValueError("mode 'r2v' needs at least one reference image, video, or audio")
+        if self.upscaler_mode is not None:
+            object.__setattr__(self, "upscaler", self.upscaler_mode != "none")
         return self
 
     @property
@@ -324,6 +352,9 @@ class GenerationConfig(BaseModel):
 # regardless of how the model happens to be declared.
 HASHED_FIELDS: tuple[str, ...] = (
     "mode",
+    "execution_backend",
+    "shared_workflow_revision",
+    "shared_schema_revision",
     "diffusion_model",
     "prompt",
     "first_frame",
@@ -345,6 +376,11 @@ HASHED_FIELDS: tuple[str, ...] = (
     "turbo_lora_strength",
     "interp",
     "upscaler",
+    "upscaler_mode",
+    "attention",
+    "post_grade",
+    "face_refine",
+    "filename_prefix",
     "clean_vram",
     "cache_enabled",
     "cache",
@@ -373,11 +409,24 @@ def _jsonable(value: Any) -> Any:
 def canonical_form(cfg: GenerationConfig, *, exclude: Iterable[str] = ()) -> str:
     """Deterministic JSON over the sampling-relevant fields only."""
     skip = set(exclude)
-    payload = {
-        field: _jsonable(getattr(cfg, field))
-        for field in HASHED_FIELDS
-        if field not in skip
-    }
+    payload = {}
+    for field in HASHED_FIELDS:
+        if field in skip:
+            continue
+        value = getattr(cfg, field)
+        if field == "execution_backend" and value == "legacy":
+            continue
+        if field in {
+            "shared_workflow_revision",
+            "shared_schema_revision",
+            "upscaler_mode",
+            "attention",
+            "post_grade",
+            "face_refine",
+            "filename_prefix",
+        } and value in {None, ""}:
+            continue
+        payload[field] = _jsonable(value)
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -404,6 +453,9 @@ class FieldDiff(BaseModel):
 
 FIELD_LABELS: dict[str, str] = {
     "mode": "Mode",
+    "execution_backend": "Execution backend",
+    "shared_workflow_revision": "Workflow revision",
+    "shared_schema_revision": "Schema revision",
     "diffusion_model": "Weights",
     "prompt": "Prompt",
     "first_frame": "First frame",
@@ -425,6 +477,11 @@ FIELD_LABELS: dict[str, str] = {
     "turbo_lora_strength": "Turbo strength",
     "interp": "Interpolation",
     "upscaler": "Upscaler",
+    "upscaler_mode": "Upscaler mode",
+    "attention": "Attention",
+    "post_grade": "Post grade",
+    "face_refine": "Face refine",
+    "filename_prefix": "Filename prefix",
     "clean_vram": "Clean VRAM",
     "cache_enabled": "Cache on",
     "cache": "Cache",
@@ -462,7 +519,7 @@ MODE_NEEDS: tuple[ModeNeeds, ...] = (
     ModeNeeds(
         mode="r2v",
         label="References",
-        requires_any=("ref_images", "ref_videos", "ref_audios"),
+        requires_any=("ref_images", "ref_videos", "ref_video_audios", "ref_audios"),
         accepts=("ref_images", "ref_videos", "ref_video_audios", "ref_audios", "ref_image_size"),
     ),
 )

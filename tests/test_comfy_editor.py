@@ -74,13 +74,27 @@ def test_a_reference_run_round_trips_with_its_minted_loaders(r2v_workflow, base_
     A node the template never held has no layout to copy, which is the case most likely to
     project badly — and the one an exported reference run depends on.
     """
+    import copy
+
+    trimmed = copy.deepcopy(r2v_workflow)
+    for definition in (trimmed.get("definitions") or {}).get("subgraphs") or []:
+        for node in definition.get("nodes") or []:
+            if node.get("type") == "MiniMaxH3ReferenceToVideo":
+                node["inputs"] = [
+                    slot
+                    for slot in node.get("inputs") or []
+                    if not (
+                        str(slot.get("name", "")).startswith("ref_images.ref_image_")
+                        and str(slot["name"]).rsplit("_", 1)[1] != "0"
+                    )
+                ]
     config = base_config.merged(
         mode="r2v",
-        ref_images=tuple(f"ref{index}.png" for index in range(9)),
+        ref_images=("ref0.png", "ref1.png"),
         ref_videos=("clip.mp4",),
     )
-    prompt = apply_config(r2v_workflow, config, output_tag="r2")
-    exported = to_editor_workflow(r2v_workflow, prompt)
+    prompt = apply_config(trimmed, config, output_tag="r2")
+    exported = to_editor_workflow(trimmed, prompt)
 
     assert prompt_of(exported) == prompt
     minted = [key for key in prompt if key.startswith("h3:")]

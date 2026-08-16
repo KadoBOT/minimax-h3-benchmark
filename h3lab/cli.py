@@ -27,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Benchmark, judge, and compare MiniMax H3 video generations.",
     )
     parser.add_argument("--comfy-url", help="ComfyUI base URL")
+    parser.add_argument("--shared-service-url", help="shared ComfyUI SDUI service base URL")
     parser.add_argument("--data-dir", type=Path, help="where runs, videos, and the database live")
     parser.add_argument("--models-dir", type=Path, help="diffusion model folder to scan")
     parser.add_argument("--comfy-input-dir", type=Path, help="ComfyUI input folder")
@@ -63,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
 def settings_from(args: argparse.Namespace) -> Settings:
     return Settings.from_env(
         comfy_url=getattr(args, "comfy_url", None),
+        shared_service_url=getattr(args, "shared_service_url", None),
         host=getattr(args, "host", None),
         port=getattr(args, "port", None),
         data_dir=getattr(args, "data_dir", None),
@@ -346,6 +348,7 @@ def command_serve(settings: Settings, args: argparse.Namespace, out: TextIO) -> 
         import os
 
         os.environ.setdefault("H3LAB_COMFY_URL", settings.comfy_url)
+        os.environ.setdefault("H3LAB_SHARED_SERVICE_URL", settings.shared_service_url)
         os.environ.setdefault("H3LAB_DATA_DIR", str(settings.data_dir))
         uvicorn.run(
             "h3lab.api.factory:app",

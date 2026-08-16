@@ -26,16 +26,20 @@ import { toast } from "sonner"
 import { routes } from "@/api/routes"
 import {
   useClearRating,
+  useCancelRun,
   useDeleteRun,
   useMeta,
   usePatchRun,
   useRate,
   useRerun,
+  useRetryCollection,
   useRun,
   useSavePreset,
   useSetBaseline,
+  useSharedJobView,
 } from "@/api/hooks"
 import type { RunView } from "@/api/schema"
+import { useStream } from "@/api/events"
 import { Filmstrip } from "@/components/filmstrip"
 import { Failure, PageHeader, Section, Spinner, Stat } from "@/components/page"
 import { CriteriaRating, StarRating } from "@/components/stars"
@@ -43,26 +47,57 @@ import { StatusChip } from "@/components/status-chip"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { DocumentError } from "@/sdui/document-error"
+import { SduiJobView } from "@/sdui/job-view"
 import { useBench } from "@/lib/bench"
 import { display, label as fieldLabel } from "@/lib/config"
-import { ago, bytes, elo, moment, seconds, secPerIt, shortHash } from "@/lib/format"
+import {
+  ago,
+  bytes,
+  elo,
+  moment,
+  seconds,
+  secPerIt,
+  shortHash,
+} from "@/lib/format"
 
 export function RunPage() {
   const { runId } = useParams<{ runId: string }>()
   const query = useRun(runId)
   const meta = useMeta()
+  const sharedView = useSharedJobView(
+    query.data?.run.shared_job_id && runId ? runId : undefined
+  )
 
   if (query.isLoading) return <Spinner label="Opening the run" />
   if (query.isError || !query.data) {
     return (
-      <Failure error={query.error} what="open that run" onRetry={() => query.refetch()} />
+      <Failure
+        error={query.error}
+        what="open that run"
+        onRetry={() => query.refetch()}
+      />
     )
   }
 
-  return <RunDetail view={query.data} labels={(field: string) => fieldLabel(meta.data, field)} />
+  return (
+    <RunDetail
+      view={query.data}
+      labels={(field: string) => fieldLabel(meta.data, field)}
+      sharedView={sharedView}
+    />
+  )
 }
 
-function RunDetail({ view, labels }: { view: RunView; labels: (field: string) => string }) {
+function RunDetail({
+  view,
+  labels,
+  sharedView,
+}: {
+  view: RunView
+  labels: (field: string) => string
+  sharedView: ReturnType<typeof useSharedJobView>
+}) {
   const { run } = view
   const navigate = useNavigate()
   const bench = useBench()
@@ -70,9 +105,12 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
   const clearRating = useClearRating()
   const patch = usePatchRun()
   const rerun = useRerun()
+  const cancel = useCancelRun()
+  const retryCollection = useRetryCollection()
   const remove = useDeleteRun()
   const savePreset = useSavePreset()
   const baseline = useSetBaseline()
+  const stream = useStream()
 
   const [notes, setNotes] = useState(run.notes ?? "")
   const [tag, setTag] = useState("")
@@ -81,6 +119,8 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
   const staged = bench.has(run.id)
   const dirty = notes !== (run.notes ?? "")
   const stamp = moment(run)
+  const shownConfig = run.shared_submission?.input ?? run.config
+  const live = stream.progress?.runId === run.id ? stream.progress : null
 
   return (
     <>
@@ -105,18 +145,60 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
 
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_23rem]">
         <div className="min-w-0 space-y-4">
+          {run.shared_job_id ? (
+            <Section
+              title="Shared job"
+              hint="Live status and actions are described by the shared workflow service."
+            >
+              {sharedView.isPending ? (
+                <Spinner label="Loading shared job feedback" />
+              ) : sharedView.error || !sharedView.data ? (
+                <DocumentError
+                  title="The shared job view could not be used"
+                  detail={
+                    sharedView.error instanceof Error
+                      ? sharedView.error.message
+                      : "No shared job document was returned."
+                  }
+                  onRetry={() => void sharedView.refetch()}
+                  retrying={sharedView.isFetching}
+                />
+              ) : (
+                <SduiJobView
+                  document={sharedView.data.document}
+                  localRunId={run.id}
+                  diagnostics={sharedView.data.diagnostics}
+                  live={
+                    live
+                      ? {
+                          step: live.step,
+                          stepTotal: live.stepTotal,
+                          previewSeq: live.previewSeq,
+                        }
+                      : null
+                  }
+                  busy={cancel.isPending || retryCollection.isPending}
+                  onCancel={() => cancel.mutate(run.id)}
+                  onRetryCollection={() => retryCollection.mutate(run.id)}
+                />
+              )}
+            </Section>
+          ) : null}
+
           <div className="panel overflow-hidden p-0">
             {run.artifact?.video_path ? (
               <video
                 key={run.artifact.video_path}
                 src={routes.video(run.artifact.video_path)}
                 poster={
-                  run.artifact.poster_path ? routes.poster(run.artifact.poster_path) : undefined
+                  run.artifact.poster_path
+                    ? routes.poster(run.artifact.poster_path)
+                    : undefined
                 }
                 controls
                 loop
                 playsInline
-                className="bg-ink max-h-[55vh] sm:max-h-[65vh] w-full object-contain mx-auto"
+                className="mx-auto max-h-[55vh] w-full bg-ink object-contain sm:max-h-[65vh]"
                 style={{
                   aspectRatio:
                     run.artifact?.width && run.artifact?.height
@@ -125,26 +207,38 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
                 }}
               />
             ) : (
-              <div className="text-muted-foreground flex aspect-video items-center justify-center text-sm">
-                {run.status === "failed" ? "This run produced nothing." : "No video yet."}
+              <div className="flex aspect-video items-center justify-center text-sm text-muted-foreground">
+                {run.status === "failed"
+                  ? "This run produced nothing."
+                  : "No video yet."}
               </div>
             )}
             {run.artifact?.video_path ? (
               // The player is directly above; the strip's job here is scrubbing, not replaying.
-              <Filmstrip run={run} scrub preview={false} className="border-rule border-t min-h-[44px] sm:min-h-0" />
+              <Filmstrip
+                run={run}
+                scrub
+                preview={false}
+                className="min-h-[44px] border-t border-rule sm:min-h-0"
+              />
             ) : null}
           </div>
 
           {run.error ? (
-            <div className="border-crimson-dim/50 bg-crimson/5 rounded-lg border p-4">
-              <div className="text-crimson mb-1 text-sm font-medium">It failed</div>
-              <p className="text-muted-foreground font-mono text-xs break-words whitespace-pre-wrap">
+            <div className="rounded-lg border border-crimson-dim/50 bg-crimson/5 p-4">
+              <div className="mb-1 text-sm font-medium text-crimson">
+                It failed
+              </div>
+              <p className="font-mono text-xs break-words whitespace-pre-wrap text-muted-foreground">
                 {run.error}
               </p>
             </div>
           ) : null}
 
-          <Section title="Rating" hint="Stars are the fast judgement; the criteria are the argument.">
+          <Section
+            title="Rating"
+            hint="Stars are the fast judgement; the criteria are the argument."
+          >
             <div className="flex flex-wrap items-center gap-4">
               <StarRating
                 value={view.stars}
@@ -152,7 +246,11 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
                 onClear={() => clearRating.mutate(run.id)}
               />
               {view.stars != null ? (
-                <Button variant="ghost" size="sm" onClick={() => clearRating.mutate(run.id)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => clearRating.mutate(run.id)}
+                >
                   Clear
                 </Button>
               ) : null}
@@ -171,40 +269,63 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
             title="The config that made it"
             hint="The workflow download is the same settings as a graph ComfyUI opens."
           >
-            <dl className="grid gap-x-6 gap-y-2 grid-cols-1 sm:grid-cols-2">
-              {Object.entries(run.config)
-                .filter(([, value]) => value !== null && value !== "" && !isEmptyList(value))
+            <dl className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
+              {Object.entries(shownConfig)
+                .filter(
+                  ([, value]) =>
+                    value !== null && value !== "" && !isEmptyList(value)
+                )
                 .map(([field, value]) => (
-                  <div key={field} className="flex items-baseline justify-between gap-2 sm:gap-3 text-sm">
-                    <dt className="text-muted-foreground truncate shrink-0 max-w-[55%]">{labels(field)}</dt>
-                    <dd className="text-bone truncate text-right font-mono text-xs">
+                  <div
+                    key={field}
+                    className="flex items-baseline justify-between gap-2 text-sm sm:gap-3"
+                  >
+                    <dt className="max-w-[55%] shrink-0 truncate text-muted-foreground">
+                      {labels(field)}
+                    </dt>
+                    <dd className="truncate text-right font-mono text-xs text-bone">
                       {display(value)}
                     </dd>
                   </div>
                 ))}
             </dl>
-            <div className="border-rule mt-4 flex flex-wrap items-center gap-2 border-t pt-3">
-              <Input
-                value={presetName}
-                onChange={(event) => setPresetName(event.target.value)}
-                placeholder="save this config as…"
-                className="w-full sm:w-auto sm:min-w-40 flex-1"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!presetName.trim()}
-                onClick={() => savePreset.mutate({ name: presetName.trim(), run_id: run.id })}
-              >
-                <Save data-icon="inline-start" className="size-3.5" />
-                Save preset
-              </Button>
+            <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-rule pt-3">
+              {!run.shared_submission ? (
+                <>
+                  <Input
+                    value={presetName}
+                    onChange={(event) => setPresetName(event.target.value)}
+                    placeholder="save this config as…"
+                    className="w-full flex-1 sm:w-auto sm:min-w-40"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!presetName.trim()}
+                    onClick={() =>
+                      savePreset.mutate({
+                        name: presetName.trim(),
+                        run_id: run.id,
+                      })
+                    }
+                  >
+                    <Save data-icon="inline-start" className="size-3.5" />
+                    Save preset
+                  </Button>
+                </>
+              ) : null}
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  void navigator.clipboard?.writeText(JSON.stringify(run.config, null, 2))
-                  toast.success("Config copied as JSON")
+                  void navigator.clipboard?.writeText(
+                    JSON.stringify(shownConfig, null, 2)
+                  )
+                  toast.success(
+                    run.shared_submission
+                      ? "Shared input copied as JSON"
+                      : "Config copied as JSON"
+                  )
                 }}
               >
                 <Copy data-icon="inline-start" className="size-3.5" />
@@ -229,7 +350,11 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
         <div className="space-y-4">
           <Section title="What it cost">
             <div className="grid grid-cols-2 gap-3 sm:gap-4">
-              <Stat label="Seconds / step" value={secPerIt(run.metrics?.sec_per_it)} tone="signal" />
+              <Stat
+                label="Seconds / step"
+                value={secPerIt(run.metrics?.sec_per_it)}
+                tone="signal"
+              />
               <Stat label="Wall clock" value={seconds(run.metrics?.wall_s)} />
               <Stat
                 label="Steps"
@@ -239,7 +364,11 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
               <Stat
                 label="Elo"
                 value={elo(view.elo)}
-                hint={view.elo_games ? `${view.elo_games} comparisons` : "never compared"}
+                hint={
+                  view.elo_games
+                    ? `${view.elo_games} comparisons`
+                    : "never compared"
+                }
               />
               {run.artifact?.width && run.artifact.height ? (
                 <Stat
@@ -253,20 +382,27 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
                   label="Frames"
                   value={run.artifact.frame_count}
                   tone="muted"
-                  hint={run.artifact.fps ? `${run.artifact.fps} fps` : undefined}
+                  hint={
+                    run.artifact.fps ? `${run.artifact.fps} fps` : undefined
+                  }
                 />
               ) : null}
               {run.artifact?.size_bytes ? (
-                <Stat label="Size" value={bytes(run.artifact.size_bytes)} tone="muted" />
+                <Stat
+                  label="Size"
+                  value={bytes(run.artifact.size_bytes)}
+                  tone="muted"
+                />
               ) : null}
               {run.metrics?.cache_cleared ? (
                 <Stat label="VRAM" value="cleared first" tone="muted" />
               ) : null}
             </div>
-            <div className="border-rule mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-rule pt-3">
               <StatusChip run={run} showRate={false} />
-              <span className="edge-code text-muted-foreground text-xs">
-                cfg {shortHash(run.config_hash)} · rcp {shortHash(run.recipe_hash)}
+              <span className="edge-code text-xs text-muted-foreground">
+                cfg {shortHash(run.config_hash)} · rcp{" "}
+                {shortHash(run.recipe_hash)}
               </span>
             </div>
           </Section>
@@ -276,7 +412,9 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
               <Button
                 variant={run.favourite ? "secondary" : "outline"}
                 size="sm"
-                onClick={() => patch.mutate({ id: run.id, favourite: !run.favourite })}
+                onClick={() =>
+                  patch.mutate({ id: run.id, favourite: !run.favourite })
+                }
               >
                 <Heart
                   data-icon="inline-start"
@@ -285,14 +423,20 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
                 />
                 Favourite
               </Button>
-              <Button variant="outline" size="sm" onClick={() => baseline.mutate(run.id)}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => baseline.mutate(run.id)}
+              >
                 <Pin data-icon="inline-start" className="size-3.5" />
                 Pin as baseline
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => patch.mutate({ id: run.id, archived: !run.archived })}
+                onClick={() =>
+                  patch.mutate({ id: run.id, archived: !run.archived })
+                }
               >
                 {run.archived ? "Unarchive" : "Archive"}
               </Button>
@@ -315,7 +459,7 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
               {(run.tags ?? []).map((name) => (
                 <span
                   key={name}
-                  className="border-rule text-bone inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 font-mono text-xs"
+                  className="inline-flex items-center gap-1 rounded-sm border border-rule px-1.5 py-0.5 font-mono text-xs text-bone"
                 >
                   {name}
                   <button
@@ -333,7 +477,9 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
                 </span>
               ))}
               {(run.tags ?? []).length === 0 ? (
-                <span className="text-muted-foreground text-xs">No tags yet.</span>
+                <span className="text-xs text-muted-foreground">
+                  No tags yet.
+                </span>
               ) : null}
             </div>
             <form
@@ -342,7 +488,10 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
                 event.preventDefault()
                 const name = tag.trim()
                 if (!name) return
-                patch.mutate({ id: run.id, tags: [...new Set([...(run.tags ?? []), name])] })
+                patch.mutate({
+                  id: run.id,
+                  tags: [...new Set([...(run.tags ?? []), name])],
+                })
                 setTag("")
               }}
             >
@@ -352,13 +501,21 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
                 placeholder="add a tag"
                 className="flex-1"
               />
-              <Button type="submit" variant="outline" size="icon" aria-label="Add tag">
+              <Button
+                type="submit"
+                variant="outline"
+                size="icon"
+                aria-label="Add tag"
+              >
                 <TagIcon className="size-3.5" />
               </Button>
             </form>
           </Section>
 
-          <Section title="Notes" hint="What you noticed. Searchable from the runs list.">
+          <Section
+            title="Notes"
+            hint="What you noticed. Searchable from the runs list."
+          >
             <Textarea
               value={notes}
               onChange={(event) => setNotes(event.target.value)}
@@ -368,10 +525,17 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
             />
             {dirty ? (
               <div className="mt-2 flex gap-1.5">
-                <Button size="sm" onClick={() => patch.mutate({ id: run.id, notes })}>
+                <Button
+                  size="sm"
+                  onClick={() => patch.mutate({ id: run.id, notes })}
+                >
                   Save note
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => setNotes(run.notes ?? "")}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setNotes(run.notes ?? "")}
+                >
                   Discard
                 </Button>
               </div>
@@ -380,14 +544,17 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
 
           {run.config.prompt ? (
             <Section title="Prompt">
-              <p className="text-muted-foreground font-mono text-xs leading-relaxed whitespace-pre-wrap">
+              <p className="font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
                 {run.config.prompt}
               </p>
             </Section>
           ) : null}
 
-          <p className="text-muted-foreground text-center text-xs">
-            <Link to={`/runs?query=${encodeURIComponent(run.recipe_hash.slice(0, 8))}`} className="hover:text-bone">
+          <p className="text-center text-xs text-muted-foreground">
+            <Link
+              to={`/runs?query=${encodeURIComponent(run.recipe_hash.slice(0, 8))}`}
+              className="hover:text-bone"
+            >
               Find the other runs of this recipe
             </Link>
           </p>

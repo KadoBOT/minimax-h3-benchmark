@@ -8,15 +8,24 @@ Every refusal here becomes a `Problem`: a short `error` to show, a `detail` to e
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from h3lab.api.schemas import Problem, ProblemKind
+from h3lab.api.schemas import Problem, ProblemFieldError, ProblemKind
 from h3lab.comfy.client import ComfyError, ComfyUnreachable
 from h3lab.comfy.graph import WorkflowError
+from h3lab.engine.shared_runner import SharedRequestConflict
 from h3lab.settings import Settings
+from h3lab.shared.client import (
+    SharedProtocolError,
+    SharedServiceError,
+    SharedServiceUnavailable,
+    SharedSubmissionUncertain,
+)
 from h3lab.storage.library import PresetNameTaken
 from h3lab.storage.runs import RunNotFound
 
@@ -41,10 +50,22 @@ def problem(
     kind: ProblemKind,
     error: str,
     detail: str = "",
+    code: str | None = None,
+    retryable: bool | None = None,
+    errors: list[ProblemFieldError] | None = None,
+    field_map: Mapping[str, str] | None = None,
     **fields: str,
 ) -> JSONResponse:
-    body = Problem(error=error, detail=detail or error, kind=kind, fields=fields)
-    return JSONResponse(status_code=status, content=body.model_dump())
+    body = Problem(
+        error=error,
+        detail=detail or error,
+        kind=kind,
+        fields={**(field_map or {}), **fields},
+        code=code,
+        retryable=retryable,
+        errors=errors,
+    )
+    return JSONResponse(status_code=status, content=body.model_dump(exclude_none=True))
 
 
 def _field_path(location: object) -> str:
@@ -64,7 +85,7 @@ def _from_validation(exc: ValidationError | RequestValidationError) -> JSONRespo
         "invalid",
         first.get("msg", "the request is not valid"),
         f"{where or 'request'}: {first.get('msg', 'invalid')}",
-        **fields,
+        field_map=fields,
     )
 
 
@@ -101,6 +122,63 @@ def install(app: FastAPI, settings: Settings) -> None:
     async def _comfy_failed(_request: Request, exc: ComfyError) -> JSONResponse:
         return problem(502, "invalid", "ComfyUI refused the request", str(exc))
 
+    @app.exception_handler(SharedServiceUnavailable)
+    async def _shared_down(_request: Request, exc: SharedServiceUnavailable) -> JSONResponse:
+        return problem(
+            503,
+            "shared_unavailable",
+            "The shared generation service is not reachable",
+            str(exc),
+            code="shared_service_unavailable",
+            retryable=True,
+        )
+
+    @app.exception_handler(SharedSubmissionUncertain)
+    async def _shared_uncertain(_request: Request, exc: SharedSubmissionUncertain) -> JSONResponse:
+        return problem(
+            503,
+            "shared_uncertain",
+            "The shared submission outcome is uncertain",
+            str(exc),
+            code="shared_submission_uncertain",
+            retryable=True,
+        )
+
+    @app.exception_handler(SharedServiceError)
+    async def _shared_refused(_request: Request, exc: SharedServiceError) -> JSONResponse:
+        upstream = exc.problem
+        field_errors = [
+            ProblemFieldError(field=item.field, code=item.code, detail=item.detail)
+            for item in upstream.errors or []
+        ]
+        return problem(
+            upstream.status,
+            (
+                "shared_unavailable"
+                if upstream.status == 503 and upstream.retryable
+                else "conflict"
+                if upstream.status == 409
+                else "invalid"
+            ),
+            upstream.title,
+            upstream.detail or upstream.title,
+            code=upstream.code,
+            retryable=upstream.retryable,
+            errors=field_errors,
+            **{item.field: item.detail for item in field_errors},
+        )
+
+    @app.exception_handler(SharedProtocolError)
+    async def _shared_protocol(_request: Request, exc: SharedProtocolError) -> JSONResponse:
+        return problem(
+            502,
+            "shared_protocol",
+            "The shared service returned an incompatible response",
+            str(exc),
+            code="shared_protocol_error",
+            retryable=False,
+        )
+
     @app.exception_handler(RequestValidationError)
     async def _bad_request(_request: Request, exc: RequestValidationError) -> JSONResponse:
         return _from_validation(exc)
@@ -112,6 +190,10 @@ def install(app: FastAPI, settings: Settings) -> None:
     @app.exception_handler(FileNotFoundError)
     async def _file_missing(_request: Request, exc: FileNotFoundError) -> JSONResponse:
         return problem(404, "not_found", "that file is not on disk", str(exc))
+
+    @app.exception_handler(SharedRequestConflict)
+    async def _shared_conflict(_request: Request, exc: SharedRequestConflict) -> JSONResponse:
+        return problem(409, "conflict", "Idempotency key conflict", str(exc))
 
     @app.exception_handler(ValueError)
     async def _bad_value(_request: Request, exc: ValueError) -> JSONResponse:

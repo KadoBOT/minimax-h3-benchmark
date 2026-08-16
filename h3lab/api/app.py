@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+from collections.abc import AsyncIterator, Iterable, Iterator
 from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import AsyncIterator, Iterator
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +22,7 @@ from h3lab.api.deps import resolve_lab
 from h3lab.api.routes import ROUTERS
 from h3lab.engine.lab import Lab
 from h3lab.settings import Settings
+from h3lab.shared.client import SharedServiceClient
 
 API = "/api"
 
@@ -30,7 +31,11 @@ API = "/api"
 LOCAL_ORIGINS = r"http://(127\.0\.0\.1|localhost|\[::1\]|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?"
 
 
-def create_app(lab: Lab | None = None, settings: Settings | None = None) -> FastAPI:
+def create_app(
+    lab: Lab | None = None,
+    settings: Settings | None = None,
+    shared_client: SharedServiceClient | None = None,
+) -> FastAPI:
     resolved = settings or (lab.settings if lab else Settings.from_env())
 
     @asynccontextmanager
@@ -46,6 +51,10 @@ def create_app(lab: Lab | None = None, settings: Settings | None = None) -> Fast
                 await asyncio.to_thread(lab_to_close.close)
             if getattr(app.state, "owns_lab", False):
                 app.state.lab = None
+            shared_to_close = getattr(app.state, "shared_client", None)
+            if shared_to_close is not None and getattr(app.state, "owns_shared_client", False):
+                await asyncio.to_thread(shared_to_close.close)
+                app.state.shared_client = None
 
     app = FastAPI(
         title="H3 Lab",
@@ -60,6 +69,8 @@ def create_app(lab: Lab | None = None, settings: Settings | None = None) -> Fast
     app.state.settings = resolved
     app.state.lab = lab
     app.state.owns_lab = lab is None
+    app.state.shared_client = shared_client
+    app.state.owns_shared_client = shared_client is None
 
     app.add_middleware(
         CORSMiddleware,

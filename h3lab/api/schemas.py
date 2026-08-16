@@ -11,6 +11,11 @@ from h3lab.domain.rating import CRITERIA, STARS_MAX, STARS_MIN
 from h3lab.domain.run import RunStatus
 from h3lab.domain.scoring import ScoreWeights
 from h3lab.domain.sweeps import SeedStrategy, SweepAxis, SweepSpec
+from h3lab.domain.shared_sweeps import (
+    SharedSweepAxis,
+    SharedSweepSpec,
+)
+from h3lab.shared.contracts import JobSubmission
 from h3lab.storage.runs import RunFilter, SortKey
 
 
@@ -19,6 +24,9 @@ class EnqueueRequest(BaseModel):
 
     config: GenerationConfig
     count: Annotated[int, Field(ge=1, le=64)] = 1
+
+
+CreateRunRequest = JobSubmission | EnqueueRequest
 
 
 class RerunRequest(BaseModel):
@@ -105,6 +113,34 @@ class SweepRequest(BaseModel):
         )
 
 
+class SharedSweepAxisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    binding: str
+    values: list[Any]
+
+
+class SharedSweepRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base: JobSubmission
+    axes: list[SharedSweepAxisRequest] = Field(default_factory=list)
+    repeats: Annotated[int, Field(ge=1, le=32)] = 1
+    seed_strategy: SeedStrategy = "fixed"
+    skip_duplicates: bool = True
+
+    def to_spec(self) -> SharedSweepSpec:
+        return SharedSweepSpec(
+            base=self.base,
+            axes=tuple(
+                SharedSweepAxis(binding=axis.binding, values=tuple(axis.values))
+                for axis in self.axes
+            ),
+            repeats=self.repeats,
+            seed_strategy=self.seed_strategy,
+        )
+
+
 class RunQuery(BaseModel):
     """Parsed list filters. Kept as a model so the same parsing serves every caller."""
 
@@ -166,9 +202,20 @@ ProblemKind = Literal[
     "invalid",
     "conflict",
     "comfy_unreachable",
+    "shared_unavailable",
+    "shared_protocol",
+    "shared_uncertain",
     "workflow",
     "internal",
 ]
+
+
+class ProblemFieldError(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    field: str
+    code: str
+    detail: str
 
 
 class Problem(BaseModel):
@@ -180,6 +227,9 @@ class Problem(BaseModel):
     detail: str
     kind: ProblemKind = "invalid"
     fields: dict[str, str] = Field(default_factory=dict)
+    code: str | None = None
+    retryable: bool | None = None
+    errors: list[ProblemFieldError] | None = None
 
 
 class Ok(BaseModel):

@@ -8,6 +8,7 @@ previous tool ended up with runs stuck in `running` forever.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 import traceback
@@ -363,6 +364,7 @@ class Runner:
             workflow, config, output_tag=run.id, schemas=self._schemas.get()
         )
         editor = to_editor_workflow(workflow, prompt, provenance=run_provenance(run))
+        self._save_workflow_snapshot(run.id, editor)
 
         if self._clear_cache:
             # Without this, ComfyUI can replay the previous identical graph's outputs in
@@ -466,3 +468,11 @@ class Runner:
         self._last_error = message
         self._events.publish("run.finished", run_id=run_id, status="failed", error=message)
         self._events.publish("queue.changed")
+
+    def _save_workflow_snapshot(self, run_id: str, workflow: dict[str, Any]) -> None:
+        destination = self._settings.workflows_dir / f"{run_id}.json"
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(json.dumps(workflow, indent=2), encoding="utf-8")
+        except OSError:
+            pass
