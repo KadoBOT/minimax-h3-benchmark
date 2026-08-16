@@ -15,6 +15,8 @@ import {
 } from "@tanstack/react-query"
 import { toast } from "sonner"
 
+import { parseGenerationDocument, parseJobDocument } from "@/sdui/contracts"
+
 import { api, ApiError } from "./client"
 import { derivedKeys, keys } from "./keys"
 import { routes } from "./routes"
@@ -27,6 +29,7 @@ import type {
   Comparison,
   DryRun,
   GenerationConfig,
+  JobSubmission,
   LabStatus,
   Leaderboard,
   Meta,
@@ -38,6 +41,7 @@ import type {
   Run,
   RunPage,
   RunView,
+  SharedSweepRequest,
   SweepPreview,
   SweepRequest,
   Upload,
@@ -87,7 +91,11 @@ export function useStatus() {
 export function useCatalog(refresh = false) {
   return useQuery({
     queryKey: keys.catalog,
-    queryFn: () => api.get<Catalog>(routes.catalog(), refresh ? { refresh: true } : undefined),
+    queryFn: () =>
+      api.get<Catalog>(
+        routes.catalog(),
+        refresh ? { refresh: true } : undefined
+      ),
     staleTime: 60_000,
   })
 }
@@ -99,7 +107,32 @@ export function useQueue() {
   })
 }
 
-export function useRuns(params: RunListParams, options?: Partial<UseQueryOptions<RunPage>>) {
+export function useSharedGeneration() {
+  return useQuery({
+    queryKey: keys.sharedGeneration,
+    queryFn: async () =>
+      parseGenerationDocument(
+        await api.get<unknown>(routes.sharedGeneration())
+      ),
+  })
+}
+
+export function useSharedJobView(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.sharedJobView(id ?? ""),
+    queryFn: async () =>
+      parseJobDocument(
+        await api.get<unknown>(routes.sharedJobView(id as string))
+      ),
+    enabled: Boolean(id),
+    refetchInterval: 15_000,
+  })
+}
+
+export function useRuns(
+  params: RunListParams,
+  options?: Partial<UseQueryOptions<RunPage>>
+) {
   return useQuery({
     queryKey: keys.runs(params),
     queryFn: () => api.get<RunPage>(routes.runs(), params as never),
@@ -126,7 +159,8 @@ export function useComparison(ids: string[]) {
 export function useLeaderboard(quality: number, speed: number, limit = 50) {
   return useQuery({
     queryKey: keys.leaderboard(quality, speed, limit),
-    queryFn: () => api.get<Leaderboard>(routes.leaderboard(), { quality, speed, limit }),
+    queryFn: () =>
+      api.get<Leaderboard>(routes.leaderboard(), { quality, speed, limit }),
   })
 }
 
@@ -173,7 +207,10 @@ export function useTags() {
  * different question rather than a refetch of the same one — the skipped clip cannot come back
  * from the cache.
  */
-export function useArenaMatchup(exclude: string[] = [], minStars: number | null = 7) {
+export function useArenaMatchup(
+  exclude: string[] = [],
+  minStars: number | null = 7
+) {
   return useQuery({
     queryKey: keys.arenaMatchup(exclude, minStars),
     queryFn: () =>
@@ -192,7 +229,9 @@ export function useArenaStandings(minStars: number | null = 7) {
   return useQuery({
     queryKey: keys.arenaStandings(minStars),
     queryFn: () =>
-      api.get<ArenaStandings>(routes.arenaStandings(), { min_stars: minStars ?? 0 }),
+      api.get<ArenaStandings>(routes.arenaStandings(), {
+        min_stars: minStars ?? 0,
+      }),
   })
 }
 
@@ -206,7 +245,8 @@ export function useVotes() {
 // --- writes ----------------------------------------------------------------
 
 function invalidateRunWorld(client: QueryClient) {
-  for (const key of derivedKeys) void client.invalidateQueries({ queryKey: key })
+  for (const key of derivedKeys)
+    void client.invalidateQueries({ queryKey: key })
 }
 
 /** One place where a failed write becomes something readable on screen. */
@@ -215,7 +255,9 @@ function complain(error: unknown, fallback: string) {
     toast.error(error.message || fallback, { description: error.detail })
     return
   }
-  toast.error(fallback, { description: error instanceof Error ? error.message : String(error) })
+  toast.error(fallback, {
+    description: error instanceof Error ? error.message : String(error),
+  })
 }
 
 export function useEnqueue() {
@@ -227,16 +269,53 @@ export function useEnqueue() {
       invalidateRunWorld(client)
       const first = created[0]
       toast.success(
-        created.length === 1 ? `Queued ${first?.run.label ?? "run"}` : `Queued ${created.length} runs`
+        created.length === 1
+          ? `Queued ${first?.run.label ?? "run"}`
+          : `Queued ${created.length} runs`
       )
     },
     onError: (error) => complain(error, "could not queue that run"),
   })
 }
 
+export function useEnqueueShared() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: {
+      submission: JobSubmission
+      count?: number
+      requestKey?: string
+    }) => {
+      const count = Math.max(1, Math.min(16, Math.trunc(input.count ?? 1)))
+      const base = input.requestKey ?? requestKey()
+      const created: RunView[] = []
+      for (let index = 0; index < count; index += 1) {
+        const batch = await api.post<RunView[]>(
+          routes.runs(),
+          input.submission,
+          undefined,
+          { "Idempotency-Key": count === 1 ? base : `${base}:${index}` }
+        )
+        created.push(...batch)
+      }
+      return created
+    },
+    onSuccess: (created) => {
+      invalidateRunWorld(client)
+      toast.success(
+        created.length === 1
+          ? `Queued ${created[0]?.run.label ?? "run"}`
+          : `Queued ${created.length} runs`
+      )
+    },
+    onError: (error) => complain(error, "could not queue that shared run"),
+  })
+}
+
 export function useDryRun() {
   return useMutation({
-    mutationFn: (config: GenerationConfig) => api.post<DryRun>(routes.dryRun(), { config }),
+    mutationFn: (config: GenerationConfig) =>
+      api.post<DryRun>(routes.dryRun(), { config }),
     onError: (error) => complain(error, "could not check that config"),
   })
 }
@@ -245,7 +324,12 @@ export function useRerun() {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (input: { id: string; overrides?: Record<string, unknown> }) =>
-      api.post<RunView>(routes.runRerun(input.id), { overrides: input.overrides ?? {} }),
+      api.post<RunView>(
+        routes.runRerun(input.id),
+        { overrides: input.overrides ?? {} },
+        undefined,
+        { "Idempotency-Key": requestKey() }
+      ),
     onSuccess: (view) => {
       invalidateRunWorld(client)
       toast.success(`Queued ${view.run.label} again`)
@@ -272,7 +356,11 @@ export function usePatchRun() {
 export function useRate() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (input: { id: string; stars: number; criteria?: Record<string, number> }) =>
+    mutationFn: (input: {
+      id: string
+      stars: number
+      criteria?: Record<string, number>
+    }) =>
       api.put<RunView>(routes.runRating(input.id), {
         stars: input.stars,
         criteria: input.criteria ?? {},
@@ -300,8 +388,12 @@ export function useClearRating() {
 export function useVote() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (input: { run_a: string; run_b: string; winner: string | null; axis?: string }) =>
-      api.post<Vote>(routes.votes(), input),
+    mutationFn: (input: {
+      run_a: string
+      run_b: string
+      winner: string | null
+      axis?: string
+    }) => api.post<Vote>(routes.votes(), input),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: keys.elo })
       void client.invalidateQueries({ queryKey: keys.votes })
@@ -320,6 +412,20 @@ export function useCancelRun() {
       toast[result.ok ? "success" : "message"](result.detail || "cancelled")
     },
     onError: (error) => complain(error, "could not cancel that run"),
+  })
+}
+
+export function useRetryCollection() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<RunView>(routes.runRetryCollection(id)),
+    onSuccess: (view) => {
+      client.setQueryData(keys.run(view.run.id), view)
+      invalidateRunWorld(client)
+      toast.success("Artifact collection restarted")
+    },
+    onError: (error) => complain(error, "could not retry artifact collection"),
   })
 }
 
@@ -350,7 +456,8 @@ export function useQueueControl() {
     resume: useMutation({
       mutationFn: () => api.post<Ok>(routes.queueResume()),
       onSuccess: after("Queue resumed"),
-      onError: (error: unknown) => complain(error, "could not resume the queue"),
+      onError: (error: unknown) =>
+        complain(error, "could not resume the queue"),
     }),
     clear: useMutation({
       mutationFn: () => api.post<Ok>(routes.queueClear()),
@@ -365,7 +472,8 @@ export function useQueueControl() {
 
 export function useSweepPreview() {
   return useMutation({
-    mutationFn: (body: SweepRequest) => api.post<SweepPreview>(routes.sweepPreview(), body),
+    mutationFn: (body: SweepRequest | SharedSweepRequest) =>
+      api.post<SweepPreview>(routes.sweepPreview(), body),
     onError: (error) => complain(error, "could not work out that sweep"),
   })
 }
@@ -373,10 +481,15 @@ export function useSweepPreview() {
 export function useRunSweep() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (body: SweepRequest) => api.post<RunView[]>(routes.sweeps(), body),
+    mutationFn: (body: SweepRequest | SharedSweepRequest) =>
+      api.post<RunView[]>(routes.sweeps(), body, undefined, {
+        "Idempotency-Key": requestKey(),
+      }),
     onSuccess: (created) => {
       invalidateRunWorld(client)
-      toast.success(`Queued ${created.length} run${created.length === 1 ? "" : "s"}`)
+      toast.success(
+        `Queued ${created.length} run${created.length === 1 ? "" : "s"}`
+      )
     },
     onError: (error) => complain(error, "could not start that sweep"),
   })
@@ -414,7 +527,8 @@ export function useDeletePreset() {
 export function useSetBaseline() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (runId: string | null) => api.put<Ok>(routes.baseline(), { run_id: runId }),
+    mutationFn: (runId: string | null) =>
+      api.put<Ok>(routes.baseline(), { run_id: runId }),
     onSuccess: (_result, runId) => {
       invalidateRunWorld(client)
       toast.success(runId ? "Baseline pinned" : "Baseline cleared")
@@ -437,4 +551,11 @@ export function useUpload() {
     },
     onError: (error) => complain(error, "could not upload that file"),
   })
+}
+
+function requestKey(): string {
+  return (
+    globalThis.crypto?.randomUUID?.() ??
+    `request-${Date.now()}-${Math.random()}`
+  )
 }

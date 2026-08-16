@@ -27,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Benchmark, judge, and compare MiniMax H3 video generations.",
     )
     parser.add_argument("--comfy-url", help="ComfyUI base URL")
+    parser.add_argument("--shared-service-url", help="shared ComfyUI SDUI service base URL")
     parser.add_argument("--data-dir", type=Path, help="where runs, videos, and the database live")
     parser.add_argument("--models-dir", type=Path, help="diffusion model folder to scan")
     parser.add_argument("--comfy-input-dir", type=Path, help="ComfyUI input folder")
@@ -63,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
 def settings_from(args: argparse.Namespace) -> Settings:
     return Settings.from_env(
         comfy_url=getattr(args, "comfy_url", None),
+        shared_service_url=getattr(args, "shared_service_url", None),
         host=getattr(args, "host", None),
         port=getattr(args, "port", None),
         data_dir=getattr(args, "data_dir", None),
@@ -73,7 +75,7 @@ def settings_from(args: argparse.Namespace) -> Settings:
     )
 
 
-def _probe_config(mode: str):
+def _probe_config(mode: str, diffusion_model: str = "", turbo_lora: str = ""):
     """A config that satisfies a mode's input requirements without touching the disk.
 
     Two of the three modes refuse to exist without an input file, so the placeholder names
@@ -83,6 +85,10 @@ def _probe_config(mode: str):
 
     needs = next((n for n in MODE_NEEDS if n.mode == mode), None)
     fields: dict[str, object] = {"mode": mode}
+    if diffusion_model:
+        fields["diffusion_model"] = diffusion_model
+    if turbo_lora:
+        fields["turbo_lora"] = turbo_lora
     wanted = list(getattr(needs, "requires_all", ()) or ())
     any_of = list(getattr(needs, "requires_any", ()) or ())
     if any_of:
@@ -129,6 +135,7 @@ def _role_detail(rows: list[dict[str, object]]) -> tuple[bool, str]:
 def _checks(settings: Settings) -> Report:
     """Each check answers one question a user would otherwise answer by trial and error."""
     from h3lab.comfy import roles as R
+    from h3lab.comfy.catalog import _comfy_loras, _comfy_unets
     from h3lab.comfy.client import ComfyClient, ComfyError
     from h3lab.comfy.graph import build, load_workflow, missing_links
     from h3lab.comfy.schema import Schemas
@@ -146,12 +153,16 @@ def _checks(settings: Settings) -> Report:
     # schemas in hand, a widget a node pack renamed is reported here instead of at run time.
     client = ComfyClient(settings.comfy_url, connect_timeout_s=1.5, request_timeout_s=5.0)
     schemas = Schemas()
+    unets: list[str] = []
+    loras: list[str] = []
     try:
         stats = client.system_stats()
         devices = stats.get("devices") or []
         name = devices[0].get("name", "unknown") if devices else "unknown"
         record("comfyui", True, f"{settings.comfy_url} — {name}")
         schemas = Schemas.from_client(client)
+        unets = _comfy_unets(client)
+        loras = _comfy_loras(client)
         record(
             "node schemas",
             bool(schemas),
@@ -161,6 +172,9 @@ def _checks(settings: Settings) -> Report:
         record("comfyui", False, f"{settings.comfy_url} — {exc}")
     finally:
         client.close()
+
+    probe_unet = unets[0] if unets else ""
+    probe_lora = loras[0] if loras else ""
 
     for mode in GEN_MODES:
         path = settings.workflow_path(mode)
@@ -180,7 +194,7 @@ def _checks(settings: Settings) -> Report:
             record(f"roles {mode}", False, f"{type(exc).__name__}: {exc}")
         try:
             prompt, _graph, _roles = build(
-                template, _probe_config(mode), output_tag="check", schemas=schemas
+                template, _probe_config(mode, probe_unet, probe_lora), output_tag="check", schemas=schemas
             )
             trouble = missing_links(prompt) + schemas.problems(prompt)
             record(
@@ -334,6 +348,7 @@ def command_serve(settings: Settings, args: argparse.Namespace, out: TextIO) -> 
         import os
 
         os.environ.setdefault("H3LAB_COMFY_URL", settings.comfy_url)
+        os.environ.setdefault("H3LAB_SHARED_SERVICE_URL", settings.shared_service_url)
         os.environ.setdefault("H3LAB_DATA_DIR", str(settings.data_dir))
         uvicorn.run(
             "h3lab.api.factory:app",

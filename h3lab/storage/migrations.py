@@ -154,6 +154,25 @@ def _rehash_configs(conn: sqlite3.Connection) -> None:
                 )
 
 
+def _add_shared_run_linkage(conn: sqlite3.Connection) -> None:
+    """Add restart-safe shared-service linkage without rewriting historical identity."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+    columns = {
+        "shared_submission_json": "TEXT",
+        "shared_job_id": "TEXT",
+        "shared_provenance_json": "TEXT",
+        "shared_event_cursor": "INTEGER",
+        "shared_failure_kind": "TEXT",
+    }
+    for name, kind in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {kind}")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_shared_job "
+        "ON runs(shared_job_id) WHERE shared_job_id IS NOT NULL"
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(version=1, name="initial", sql=_V1),
     Migration(version=2, name="rename-rife-to-interp", fn=_rehash_configs),
@@ -168,6 +187,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     # the current model corrects the value and both digests in place, which is what lets a
     # queue full of turbo runs be repaired instead of thrown away.
     Migration(version=4, name="turbo-steps-follow-the-lora", fn=_rehash_configs),
+    Migration(version=5, name="shared-service-run-linkage", fn=_add_shared_run_linkage),
 )
 
 LATEST_VERSION = max(migration.version for migration in MIGRATIONS)

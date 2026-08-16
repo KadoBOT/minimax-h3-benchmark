@@ -31,7 +31,10 @@ export class ApiError extends Error {
   }
 }
 
-export type Params = Record<string, string | number | boolean | null | undefined | string[]>
+export type Params = Record<
+  string,
+  string | number | boolean | null | undefined | string[]
+>
 
 export function withParams(path: string, params?: Params): string {
   if (!params) return path
@@ -54,19 +57,28 @@ type RequestOptions = {
   body?: unknown
   params?: Params
   signal?: AbortSignal
+  headers?: HeadersInit
 }
 
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = "GET", body, params, signal } = options
+export async function request<T>(
+  path: string,
+  options: RequestOptions = {}
+): Promise<T> {
+  const { method = "GET", body, params, signal, headers } = options
   const isForm = body instanceof FormData
 
   let response: Response
   try {
+    const requestHeaders = new Headers(headers)
+    if (body !== undefined && !isForm && !requestHeaders.has("Content-Type")) {
+      requestHeaders.set("Content-Type", "application/json")
+    }
     response = await fetch(withParams(path, params), {
       method,
       signal,
-      headers: body !== undefined && !isForm ? { "Content-Type": "application/json" } : undefined,
-      body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
+      headers: requestHeaders,
+      body:
+        body === undefined ? undefined : isForm ? body : JSON.stringify(body),
     })
   } catch (cause) {
     // A dead server produces a TypeError with no useful message; name the real cause.
@@ -86,7 +98,10 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   const payload = text ? safeJson(text) : null
 
   if (!response.ok) {
-    throw new ApiError(response.status, asProblem(payload, response, method, path))
+    throw new ApiError(
+      response.status,
+      asProblem(payload, response, method, path)
+    )
   }
   return payload as T
 }
@@ -99,11 +114,19 @@ function safeJson(text: string): unknown {
   }
 }
 
-function asProblem(payload: unknown, response: Response, method: string, path: string): Problem {
+function asProblem(
+  payload: unknown,
+  response: Response,
+  method: string,
+  path: string
+): Problem {
   if (isProblem(payload)) return payload
   return {
     error: `${response.status} from ${method} ${path}`,
-    detail: typeof payload === "string" ? payload : response.statusText || "unexpected response",
+    detail:
+      typeof payload === "string"
+        ? payload
+        : response.statusText || "unexpected response",
     kind: response.status === 404 ? "not_found" : "internal",
   }
 }
@@ -120,9 +143,15 @@ function isProblem(value: unknown): value is Problem {
 export const api = {
   get: <T>(path: string, params?: Params, signal?: AbortSignal) =>
     request<T>(path, { params, signal }),
-  post: <T>(path: string, body?: unknown, params?: Params) =>
-    request<T>(path, { method: "POST", body, params }),
-  put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
-  patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body }),
+  post: <T>(
+    path: string,
+    body?: unknown,
+    params?: Params,
+    headers?: HeadersInit
+  ) => request<T>(path, { method: "POST", body, params, headers }),
+  put: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "PUT", body }),
+  patch: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "PATCH", body }),
   del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 }

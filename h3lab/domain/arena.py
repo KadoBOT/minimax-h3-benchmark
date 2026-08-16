@@ -65,6 +65,9 @@ from h3lab.domain.rating import Vote, replay_pairwise
 HELD_FIELDS: frozenset[str] = frozenset(
     {
         "mode",
+            "execution_backend",
+            "shared_workflow_revision",
+            "shared_schema_revision",
         "prompt",
         "first_frame",
         "last_frame",
@@ -78,6 +81,9 @@ HELD_FIELDS: frozenset[str] = frozenset(
         "duration_s",
         "interp",
         "upscaler",
+            "upscaler_mode",
+            "post_grade",
+            "face_refine",
         "widgets",
     }
 )
@@ -98,11 +104,12 @@ CONTESTED_FIELDS: frozenset[str] = frozenset(
         "cache_preset",
         "sol_attn",
         "sol_preset",
+            "attention",
     }
 )
 
 # Noise, and housekeeping that cannot reach the pixels.
-IGNORED_FIELDS: frozenset[str] = frozenset({"seed", "clean_vram"})
+IGNORED_FIELDS: frozenset[str] = frozenset({"seed", "clean_vram", "filename_prefix"})
 
 _UNCLASSIFIED = set(HASHED_FIELDS) - HELD_FIELDS - CONTESTED_FIELDS - IGNORED_FIELDS
 if _UNCLASSIFIED:  # pragma: no cover - a partition bug is not a runtime condition

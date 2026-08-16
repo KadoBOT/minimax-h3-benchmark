@@ -18,8 +18,14 @@ export const routes = {
   runRating: (id: string) => `/api/runs/${id}/rating`,
   runRerun: (id: string) => `/api/runs/${id}/rerun`,
   runCancel: (id: string) => `/api/runs/${id}/cancel`,
+  runRetryCollection: (id: string) => `/api/runs/${id}/retry-collection`,
   runWorkflow: (id: string) => `/api/runs/${id}/workflow`,
   runPreview: (id: string) => `/api/runs/${id}/preview`,
+  sharedJob: (id: string) => `/api/runs/${id}/shared`,
+  sharedJobView: (id: string) => `/api/runs/${id}/shared-view`,
+  sharedJobEvents: (id: string) => `/api/runs/${id}/shared-events`,
+  sharedJobPreview: (id: string) => `/api/runs/${id}/shared-preview`,
+  sharedJobVideo: (id: string) => `/api/runs/${id}/shared-video`,
   dryRun: () => `/api/runs/dry-run`,
 
   queue: () => `/api/queue`,
@@ -46,6 +52,9 @@ export const routes = {
   baseline: () => `/api/baseline`,
   tags: () => `/api/tags`,
   uploads: () => `/api/uploads`,
+  sharedGeneration: () => `/api/shared/generation`,
+  sharedAssets: () => `/api/shared/assets`,
+  sharedAssetContent: (id: string) => `/api/shared/assets/${id}/content`,
 
   events: () => `/api/events`,
 

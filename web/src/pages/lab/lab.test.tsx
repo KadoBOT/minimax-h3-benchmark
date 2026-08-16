@@ -1,12 +1,11 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 
 import { LabPage } from "@/pages/lab"
+import { generationDocument } from "@/sdui/test-fixtures"
 import {
   BASELINE_ROUTES,
-  CATALOG,
-  CONFIG,
   EMPTY_QUEUE,
   fakeApi,
   makeView,
@@ -14,478 +13,320 @@ import {
 } from "@/test/harness"
 import { FakeEventSource } from "@/test/setup"
 
-const DRY_RUN = {
-  ok: true,
-  problems: [],
-  graph: { nodes: 42, classes: [], missing_links: [], files: [] },
-  config_hash: "abcdef1234567890",
-  recipe_hash: "fedcba0987654321",
-  duplicate_of: null,
-}
+const GENERATION_PATH = "/api/shared/generation"
 
-describe("the lab", () => {
-  it("builds a form from the API's own vocabulary rather than a hardcoded list", async () => {
-    fakeApi({ ...BASELINE_ROUTES })
-    renderApp(<LabPage />)
+describe("the shared SDUI lab", () => {
+  beforeEach(() => localStorage.clear())
 
-    // Modes come from `meta.modes`; samplers from the catalog.
-    expect(await screen.findByRole("button", { name: "Text" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Frames" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Reference" })).toBeInTheDocument()
-  })
-
-  it("checks a config without queueing it, and reports the graph it built", async () => {
-    const { calls } = fakeApi({ ...BASELINE_ROUTES, "POST /api/runs/dry-run": DRY_RUN })
-
-    renderApp(<LabPage />)
-    await userEvent.click(await screen.findByRole("button", { name: /^check$/i }))
-
-    expect(await screen.findByText(/builds cleanly — 42 nodes/i)).toBeInTheDocument()
-    expect(screen.getByText("abcdef12")).toBeInTheDocument()
-    expect(calls.some((call) => call.path === "/api/runs")).toBe(false)
-  })
-
-  it("names the problems when a config could not build", async () => {
-    fakeApi({
-      ...BASELINE_ROUTES,
-      "POST /api/runs/dry-run": {
-        ...DRY_RUN,
-        ok: false,
-        graph: null,
-        problems: ["LoadImage.image points at a file ComfyUI does not have"],
-      },
+  it("renders the server's labels, options, defaults, and visibility rules", async () => {
+    const document = generationDocument({
+      title: "Server-owned H3 form",
+      components: generationDocument().components.map((component) =>
+        component.kind === "select" && component.binding === "mode"
+          ? {
+              ...component,
+              label: "Source strategy",
+              options: [
+                { value: "words", label: "Only words" },
+                { value: "frame", label: "Start frame" },
+              ],
+              defaultValue: "words",
+            }
+          : component.kind === "asset"
+            ? {
+                ...component,
+                visibleWhen: [
+                  { field: "mode", operator: "equals", value: "frame" },
+                ],
+              }
+            : component
+      ),
     })
+    fakeApi({ ...BASELINE_ROUTES, [GENERATION_PATH]: document })
 
     renderApp(<LabPage />)
-    await userEvent.click(await screen.findByRole("button", { name: /^check$/i }))
 
     expect(
-      await screen.findByText(/points at a file ComfyUI does not have/i)
+      await screen.findByRole("heading", { name: "Server-owned H3 form" })
     ).toBeInTheDocument()
+    expect(
+      screen.getByRole("combobox", { name: "Source strategy" })
+    ).toHaveTextContent("Only words")
+    expect(
+      screen.queryByLabelText("Upload First frame")
+    ).not.toBeInTheDocument()
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Source strategy" }),
+      screen.getByRole("option", { name: "Start frame" })
+    )
+    expect(screen.getByLabelText("Upload First frame")).toBeInTheDocument()
+    expect(screen.queryByLabelText(/diffusion model/i)).not.toBeInTheDocument()
   })
 
-  it("points at the earlier run when this exact config has been run before", async () => {
-    fakeApi({
+  it("submits the exact pinned raw binding map with an idempotency key", async () => {
+    let key: string | null = null
+    const { calls } = fakeApi({
       ...BASELINE_ROUTES,
-      "POST /api/runs/dry-run": { ...DRY_RUN, duplicate_of: "run7" },
+      [GENERATION_PATH]: generationDocument(),
+      "POST /api/runs": (_url: URL, init: RequestInit | undefined) => {
+        key = new Headers(init?.headers).get("Idempotency-Key")
+        return [makeView()]
+      },
     })
-
     renderApp(<LabPage />)
-    await userEvent.click(await screen.findByRole("button", { name: /^check$/i }))
 
-    const link = await screen.findByRole("link", { name: /open that run/i })
-    expect(link).toHaveAttribute("href", "/runs/run7")
-  })
-
-  it("queues the config the form is showing", async () => {
-    const { calls } = fakeApi({ ...BASELINE_ROUTES, "POST /api/runs": [makeView()] })
-
-    renderApp(<LabPage />)
-    const prompt = await screen.findByLabelText(/prompt/i)
+    const prompt = await screen.findByRole("textbox", { name: "Prompt" })
     await userEvent.clear(prompt)
-    await userEvent.type(prompt, "a kestrel over a motorway")
-    await userEvent.click(screen.getByRole("button", { name: /queue run/i }))
+    await userEvent.type(prompt, "A paper boat in a storm")
+    await userEvent.click(screen.getByRole("button", { name: "Queue run" }))
 
-    await waitFor(() => {
-      const queued = calls.find((call) => call.method === "POST" && call.path === "/api/runs")
-      expect(queued).toBeDefined()
-      expect((queued?.body as { config: { prompt: string } }).config.prompt).toBe(
-        "a kestrel over a motorway"
-      )
-    })
-  })
-
-  it("offers all three frame interpolation choices and queues the one picked", async () => {
-    const { calls } = fakeApi({ ...BASELINE_ROUTES, "POST /api/runs": [makeView()] })
-
-    renderApp(<LabPage />)
-    expect(await screen.findByRole("button", { name: "Off" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "RIFE" })).toBeInTheDocument()
-
-    await userEvent.click(screen.getByRole("button", { name: "FILM Net" }))
-    await userEvent.click(screen.getByRole("button", { name: /queue run/i }))
-
-    await waitFor(() => {
-      const queued = calls.find((call) => call.method === "POST" && call.path === "/api/runs")
-      expect((queued?.body as { config: { interp: string } }).config.interp).toBe("film")
-    })
-  })
-
-  it("names what each interpolation choice does to the frame rate", async () => {
-    fakeApi({ ...BASELINE_ROUTES })
-    renderApp(<LabPage />)
-    expect(await screen.findByText(/48/)).toBeInTheDocument()
-  })
-
-  // --- the turbo LoRA -------------------------------------------------------
-
-  it("asks which LoRA only once turbo is on", async () => {
-    fakeApi({ ...BASELINE_ROUTES })
-    renderApp(<LabPage />)
-
-    expect(await screen.findByRole("switch", { name: /turbo/i })).toBeInTheDocument()
-    expect(screen.queryByRole("combobox", { name: /turbo lora/i })).not.toBeInTheDocument()
-
-    await userEvent.click(screen.getByRole("switch", { name: /turbo/i }))
-
-    expect(await screen.findByRole("combobox", { name: /turbo lora/i })).toHaveTextContent(
-      "4step"
-    )
-  })
-
-  it("queues the LoRA that was picked, not the one the template ships with", async () => {
-    const { calls } = fakeApi({ ...BASELINE_ROUTES, "POST /api/runs": [makeView()] })
-
-    renderApp(<LabPage />)
-    await userEvent.click(await screen.findByRole("switch", { name: /turbo/i }))
-    await userEvent.click(screen.getByRole("combobox", { name: /turbo lora/i }))
-    await userEvent.click(await screen.findByRole("option", { name: "8step" }))
-    await userEvent.click(screen.getByRole("button", { name: /queue run/i }))
-
-    await waitFor(() => {
-      const queued = calls.find((call) => call.method === "POST" && call.path === "/api/runs")
-      const config = (queued?.body as { config: Record<string, unknown> })?.config
-      expect(config?.turbo_lora).toBe("minimax_h3_turbo_8step.safetensors")
-      expect(config?.turbo).toBe(true)
-    })
-  })
-
-  it("says which schedule the picked LoRA samples at", async () => {
-    /** A 4-step LoRA and an 8-step one are not the same experiment, and the form has to say so. */
-    fakeApi({ ...BASELINE_ROUTES })
-    renderApp(<LabPage />)
-
-    await userEvent.click(await screen.findByRole("switch", { name: /turbo/i }))
-    expect(await screen.findByText(/this lora samples at 4 steps/i)).toBeInTheDocument()
-    expect(screen.getByRole("spinbutton", { name: /steps/i })).toBeDisabled()
-
-    await userEvent.click(screen.getByRole("combobox", { name: /turbo lora/i }))
-    await userEvent.click(await screen.findByRole("option", { name: "8step" }))
-
-    expect(await screen.findByText(/this lora samples at 8 steps/i)).toBeInTheDocument()
-  })
-
-  it("shows the schedule in the steps field, and gives the typed count back", async () => {
-    /**
-     * The number in the box is what anybody reads. Leaving the ignored count on screen while
-     * the hint said otherwise made the form claim a 20-step run that would sample at four.
-     */
-    fakeApi({ ...BASELINE_ROUTES })
-    renderApp(<LabPage />)
-
-    const steps = await screen.findByRole("spinbutton", { name: /steps/i })
-    // `fireEvent` rather than typing: jsdom refuses a selection range on a number input, so
-    // `userEvent` can only ever append to the 20 that is already there.
-    fireEvent.change(steps, { target: { value: "28" } })
-    expect(steps).toHaveValue(28)
-
-    await userEvent.click(screen.getByRole("switch", { name: /turbo/i }))
-    expect(steps).toHaveValue(4)
-
-    await userEvent.click(screen.getByRole("combobox", { name: /turbo lora/i }))
-    await userEvent.click(await screen.findByRole("option", { name: "8step" }))
-    expect(steps).toHaveValue(8)
-
-    // Turbo off returns the run to the count that was typed, not to the LoRA's.
-    await userEvent.click(screen.getByRole("switch", { name: /turbo/i }))
-    expect(steps).toHaveValue(28)
-    expect(steps).toBeEnabled()
-  })
-
-  it("comes back to the lab's own step count when a turbo config had none to give back", async () => {
-    /**
-     * A stored turbo run carries the schedule its LoRA was distilled for — the server writes it
-     * there — so a draft that arrives with turbo on has no memory of a normal step count. Handing
-     * back the LoRA's four is how a bench whose normal is twenty quietly starts running at four.
-     */
-    window.localStorage.setItem(
-      "h3lab.draft",
-      JSON.stringify({
-        ...CONFIG,
-        turbo: true,
-        turbo_lora: "minimax_h3_turbo_4step.safetensors",
-        steps: 4,
-      })
-    )
-    fakeApi({ ...BASELINE_ROUTES })
-    renderApp(<LabPage />)
-
-    const steps = await screen.findByRole("spinbutton", { name: /steps/i })
-    expect(steps).toHaveValue(4)
-
-    await userEvent.click(screen.getByRole("switch", { name: /turbo/i }))
-    expect(steps).toHaveValue(20)
-    expect(steps).toBeEnabled()
-  })
-
-  it("shows the frame ComfyUI is drawing while a run is in flight", async () => {
-    /** A benchmark that takes four minutes a run is a blank panel until something is on it. */
-    const active = makeView({ run: { id: "r-live", label: "#9 r2v · 4st", status: "running" } })
-    fakeApi({
-      ...BASELINE_ROUTES,
-      "/api/queue": { ...EMPTY_QUEUE, active_run_id: "r-live", active, queued: [], total: 0 },
-    })
-    renderApp(<LabPage />)
-    await screen.findByText("#9 r2v · 4st")
-
-    // Nothing to show until ComfyUI says it has drawn something.
-    expect(screen.queryByRole("img", { name: /preview frame/i })).not.toBeInTheDocument()
-
-    const source = FakeEventSource.instances.at(-1)!
-    act(() => {
-      source.emit({ seq: 1, kind: "run.started", run_id: "r-live", data: {} })
-      source.emit({
-        seq: 2,
-        kind: "run.progress",
-        run_id: "r-live",
-        data: { step: 2, step_total: 4, preview_seq: 3, preview_mime: "image/jpeg" },
-      })
-    })
-
-    const frame = await screen.findByRole("img", { name: /preview frame 3/i })
-    expect(frame).toHaveAttribute("src", "/api/runs/r-live/preview?f=3")
-  })
-
-  it("plays the preview when the frame is a clip rather than a picture", async () => {
-    /**
-     * The templates hand the whole clip to the preview node, so a step comes back as a short
-     * MP4 of the latent so far. Motion is what a video benchmark is judging; an `img` would
-     * show a broken frame and say nothing.
-     */
-    const active = makeView({ run: { id: "r-live", label: "#9 r2v · 4st", status: "running" } })
-    fakeApi({
-      ...BASELINE_ROUTES,
-      "/api/queue": { ...EMPTY_QUEUE, active_run_id: "r-live", active, queued: [], total: 0 },
-    })
-    renderApp(<LabPage />)
-    await screen.findByText("#9 r2v · 4st")
-
-    const source = FakeEventSource.instances.at(-1)!
-    act(() => {
-      source.emit({ seq: 1, kind: "run.started", run_id: "r-live", data: {} })
-      source.emit({
-        seq: 2,
-        kind: "run.progress",
-        run_id: "r-live",
-        data: { step: 1, step_total: 4, preview_seq: 1, preview_mime: "video/mp4" },
-      })
-    })
-
-    const clip = await screen.findByLabelText(/preview frame 1/i)
-    expect(clip.tagName).toBe("VIDEO")
-    expect(clip).toHaveAttribute("src", "/api/runs/r-live/preview?f=1")
-    expect((clip as HTMLVideoElement).muted).toBe(true)
-    expect(clip).toHaveAttribute("loop")
-  })
-
-  it("drops a frame it cannot show without giving up on the ones after it", async () => {
-    /** A frame can be gone by the time it is asked for; the next one is a fresh chance. */
-    const active = makeView({ run: { id: "r-live", label: "#9 r2v · 4st", status: "running" } })
-    fakeApi({
-      ...BASELINE_ROUTES,
-      "/api/queue": { ...EMPTY_QUEUE, active_run_id: "r-live", active, queued: [], total: 0 },
-    })
-    renderApp(<LabPage />)
-    await screen.findByText("#9 r2v · 4st")
-
-    const source = FakeEventSource.instances.at(-1)!
-    const progress = (seq: number) => ({
-      seq,
-      kind: "run.progress" as const,
-      run_id: "r-live",
-      data: { step: seq, step_total: 4, preview_seq: seq, preview_mime: "image/jpeg" },
-    })
-
-    act(() => {
-      source.emit({ seq: 0, kind: "run.started", run_id: "r-live", data: {} })
-      source.emit(progress(1))
-    })
-    fireEvent.error(await screen.findByAltText(/preview frame 1/i))
-    expect(screen.queryByAltText(/preview frame/i)).not.toBeInTheDocument()
-
-    act(() => {
-      source.emit(progress(2))
-    })
-    expect(await screen.findByAltText(/preview frame 2/i)).toBeInTheDocument()
-  })
-
-  it("queues a strength the keyboard moved", async () => {
-    const { calls } = fakeApi({ ...BASELINE_ROUTES, "POST /api/runs": [makeView()] })
-
-    renderApp(<LabPage />)
-    await userEvent.click(await screen.findByRole("switch", { name: /turbo/i }))
-
-    // By label rather than by role: base-ui reveals the thumb after measuring the track, which
-    // never happens in jsdom, and a hidden element has no computed accessible name to match on.
-    const strength = await screen.findByLabelText("Turbo strength")
-    expect(strength).toHaveAttribute("type", "range")
-    expect(strength).toHaveAttribute("aria-valuenow", "1")
-    strength.focus()
-    await userEvent.keyboard("{ArrowLeft}")
-    await userEvent.click(screen.getByRole("button", { name: /queue run/i }))
-
-    await waitFor(() => {
-      const queued = calls.find((call) => call.method === "POST" && call.path === "/api/runs")
-      const config = (queued?.body as { config: Record<string, number> })?.config
-      expect(config?.turbo_lora_strength).toBeLessThan(1)
-    })
-  })
-
-  it("keeps a LoRA a preset named even when this machine does not have it", async () => {
-    fakeApi({ ...BASELINE_ROUTES })
-    window.localStorage.setItem(
-      "h3lab.draft",
-      JSON.stringify({ ...CONFIG, turbo: true, turbo_lora: "borrowed_from_the_other_box.safetensors" })
-    )
-
-    renderApp(<LabPage />)
-    expect(await screen.findByRole("combobox", { name: /turbo lora/i })).toHaveTextContent(
-      "borrowed_from_the_other_box"
-    )
-  })
-
-  it("offers the turbo LoRA as a sweep axis over the files ComfyUI has", async () => {
-    fakeApi({ ...BASELINE_ROUTES })
-    renderApp(<LabPage />)
-
-    await userEvent.click(await screen.findByRole("combobox", { name: "Add a sweep axis" }))
-    await userEvent.click(await screen.findByRole("option", { name: "Turbo LoRA" }))
-
-    expect(await screen.findByRole("button", { name: "4step" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "8step" })).toBeInTheDocument()
-  })
-
-  it("warns that a LoRA sweep with turbo off is one run repeated", async () => {
-    fakeApi({ ...BASELINE_ROUTES })
-    renderApp(<LabPage />)
-
-    await userEvent.click(await screen.findByRole("combobox", { name: "Add a sweep axis" }))
-    await userEvent.click(await screen.findByRole("option", { name: "Turbo LoRA" }))
-
-    expect(await screen.findByText(/turbo is off/i)).toBeInTheDocument()
-  })
-
-  // A machine with none of the baseline media in ComfyUI's input folder. There is nothing to
-  // pre-fill with, so the gap the mode opens stays open — which is what these two check.
-  const NO_DEFAULTS = { ...CATALOG, default_first_frame: "", default_ref_images: [] }
-
-  it("refuses to queue a mode whose required input is missing, and says which", async () => {
-    fakeApi({ ...BASELINE_ROUTES, "/api/catalog": NO_DEFAULTS })
-
-    renderApp(<LabPage />)
-    await userEvent.click(await screen.findByRole("button", { name: "Frames" }))
-
-    expect(await screen.findByText(/^still needs/i)).toHaveTextContent(/first frame/i)
-    expect(screen.getByRole("button", { name: /queue run/i })).toBeDisabled()
-  })
-
-  it("will not sweep a base config that is still missing an input", async () => {
-    fakeApi({ ...BASELINE_ROUTES, "/api/catalog": NO_DEFAULTS })
-
-    renderApp(<LabPage />)
-    await userEvent.click(await screen.findByRole("button", { name: "Frames" }))
-    await userEvent.click(screen.getByRole("combobox", { name: "Add a sweep axis" }))
-    await userEvent.click(screen.getAllByRole("option")[0])
-
-    // Every run in a matrix inherits the base, so one invalid base is a matrix of failures.
-    expect(await screen.findByText(/nothing to sweep until that is set/i)).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Preview" })).toBeDisabled()
-    expect(screen.getByRole("button", { name: /^Queue \d+ runs?$/ })).toBeDisabled()
-  })
-
-  it("starts a frame mode with a frame already picked, and shows it", async () => {
-    fakeApi({ ...BASELINE_ROUTES })
-
-    renderApp(<LabPage />)
-    await userEvent.click(await screen.findByRole("button", { name: "Frames" }))
-
-    const thumb = await screen.findByTestId("thumb")
-    expect(thumb).toHaveAttribute("data-name", "courier.png")
-    expect(thumb).toHaveAttribute("src", "/api/media/inputs/courier.png")
-    expect(screen.queryByText(/^still needs/i)).not.toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /queue run/i })).not.toBeDisabled()
-  })
-
-  it("starts a reference mode with the whole reference set, each one visible", async () => {
-    fakeApi({ ...BASELINE_ROUTES })
-
-    renderApp(<LabPage />)
-    await userEvent.click(await screen.findByRole("button", { name: "Reference" }))
-
-    const names = (await screen.findAllByTestId("thumb")).map((node) =>
-      node.getAttribute("data-name")
-    )
-    expect(names).toEqual(["ref-one.png", "ref-two.png"])
-  })
-
-  it("does not replace a frame that was chosen by hand", async () => {
-    // Switching modes to look at something and switching back must not edit the experiment.
-    fakeApi({ ...BASELINE_ROUTES })
-
-    renderApp(<LabPage />)
-    await userEvent.click(await screen.findByRole("button", { name: "Frames" }))
-    await userEvent.click(screen.getByRole("combobox", { name: "First frame" }))
-    await userEvent.click(await screen.findByRole("option", { name: "b.png" }))
-    expect(await screen.findByTestId("thumb")).toHaveAttribute("data-name", "b.png")
-
-    await userEvent.click(screen.getByRole("button", { name: "Text" }))
-    await userEvent.click(screen.getByRole("button", { name: "Frames" }))
-
-    expect(await screen.findByTestId("thumb")).toHaveAttribute("data-name", "b.png")
-  })
-
-  it("says so when a picked file is not in the input folder", async () => {
-    /**
-     * A stored draft outlives the folder it named. Without this the form shows a plausible
-     * filename and a blank space, and the run fails at preflight for a reason the form knew.
-     */
-    fakeApi({ ...BASELINE_ROUTES })
-    window.localStorage.setItem(
-      "h3lab.draft",
-      JSON.stringify({ ...CONFIG, mode: "flf2v", first_frame: "deleted-yesterday.png" })
-    )
-
-    renderApp(<LabPage />)
-    const thumb = await screen.findByTestId("thumb")
-    fireEvent.error(thumb)
-
-    expect(await screen.findByTestId("thumb-missing")).toHaveTextContent(/not in input/i)
-  })
-
-  it("takes the machine's own defaults over the model's empty ones", async () => {
-    fakeApi({
-      ...BASELINE_ROUTES,
-      "/api/catalog": { ...CATALOG, defaults: { mode: "flf2v", first_frame: "a.png" } },
-    })
-
-    renderApp(<LabPage />)
-    expect(await screen.findByTestId("thumb")).toHaveAttribute("data-name", "a.png")
-  })
-
-  it("warns when ComfyUI is unreachable but still lets runs be queued", async () => {
-    fakeApi({
-      ...BASELINE_ROUTES,
-      "/api/catalog": { ...CATALOG, comfy_online: false },
-    })
-
-    renderApp(<LabPage />)
-    expect(await screen.findByText(/comfyui is not answering/i)).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /queue run/i })).not.toBeDisabled()
-  })
-
-  it("keeps the draft across a reload", async () => {
-    fakeApi({ ...BASELINE_ROUTES })
-
-    const first = renderApp(<LabPage />)
-    const prompt = await screen.findByLabelText(/prompt/i)
-    await userEvent.clear(prompt)
-    await userEvent.type(prompt, "held across a reload")
     await waitFor(() =>
-      expect(window.localStorage.getItem("h3lab.draft")).toContain("held across a reload")
+      expect(calls.filter((call) => call.path === "/api/runs")).toHaveLength(1)
+    )
+    const request = calls.find((call) => call.path === "/api/runs")
+    expect(request?.body).toMatchObject({
+      workflowRevision: generationDocument().workflowRevision,
+      schemaRevision: "h3-v1",
+      input: {
+        mode: "text_to_video",
+        prompt: "A paper boat in a storm",
+        steps: 20,
+        seed: 42,
+        postGrade: false,
+        firstFrame: [],
+      },
+    })
+    expect(key).toMatch(/\S+/)
+  })
+
+  it("queues multiple copies with distinct idempotency keys", async () => {
+    const keys: string[] = []
+    const { calls } = fakeApi({
+      ...BASELINE_ROUTES,
+      [GENERATION_PATH]: generationDocument(),
+      "POST /api/runs": (_url: URL, init: RequestInit | undefined) => {
+        keys.push(new Headers(init?.headers).get("Idempotency-Key") ?? "")
+        return [makeView()]
+      },
+    })
+    renderApp(<LabPage />)
+
+    const copies = await screen.findByRole("spinbutton", { name: "Run copies" })
+    await userEvent.clear(copies)
+    await userEvent.type(copies, "3")
+    await userEvent.click(screen.getByRole("button", { name: "Queue run" }))
+
+    await waitFor(() =>
+      expect(calls.filter((call) => call.path === "/api/runs")).toHaveLength(3)
+    )
+    expect(new Set(keys).size).toBe(3)
+  })
+
+  it("shows server availability and refuses submission while disabled", async () => {
+    fakeApi({
+      ...BASELINE_ROUTES,
+      [GENERATION_PATH]: generationDocument({
+        availability: {
+          state: "disabled",
+          observedAt: "2026-08-15T08:00:00Z",
+          reason: {
+            code: "comfy_unreachable",
+            detail: "ComfyUI is not answering; generation is disabled.",
+            retryable: true,
+          },
+        },
+      }),
+    })
+    renderApp(<LabPage />)
+
+    expect(
+      await screen.findByText(/comfyui is not answering/i)
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Queue run" })).toBeDisabled()
+  })
+
+  it("projects upstream field errors back onto their bound controls", async () => {
+    fakeApi({
+      ...BASELINE_ROUTES,
+      [GENERATION_PATH]: generationDocument(),
+      "POST /api/runs": new Response(
+        JSON.stringify({
+          error: "Input rejected",
+          detail: "Fix the prompt.",
+          kind: "invalid",
+          fields: {
+            prompt: "The prompt was rejected by the workflow package.",
+          },
+        }),
+        { status: 422, headers: { "Content-Type": "application/json" } }
+      ),
+    })
+    renderApp(<LabPage />)
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Queue run" })
+    )
+    expect(await screen.findByText(/prompt was rejected/i)).toBeInTheDocument()
+    expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveAttribute(
+      "aria-invalid",
+      "true"
+    )
+  })
+
+  it("fails closed on a malformed or unsupported document", async () => {
+    fakeApi({
+      ...BASELINE_ROUTES,
+      [GENERATION_PATH]: {
+        ...generationDocument(),
+        protocolVersion: "99.0",
+      },
+    })
+    renderApp(<LabPage />)
+
+    expect(
+      await screen.findByRole("alert", {
+        name: /generation document could not be used/i,
+      })
+    ).toHaveTextContent(/protocol/i)
+    expect(
+      screen.queryByRole("button", { name: "Queue run" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("restores a draft after the page is remounted", async () => {
+    fakeApi({ ...BASELINE_ROUTES, [GENERATION_PATH]: generationDocument() })
+    const first = renderApp(<LabPage />)
+    const prompt = await screen.findByRole("textbox", { name: "Prompt" })
+    await userEvent.clear(prompt)
+    await userEvent.type(prompt, "A durable browser draft")
+    await waitFor(() =>
+      expect(
+        Object.values(localStorage).some((value) =>
+          value.includes("A durable browser draft")
+        )
+      ).toBe(true)
     )
     first.unmount()
 
     renderApp(<LabPage />)
-    expect(await screen.findByLabelText(/prompt/i)).toHaveValue("held across a reload")
+    expect(await screen.findByRole("textbox", { name: "Prompt" })).toHaveValue(
+      "A durable browser draft"
+    )
+  })
+
+  it("saves and reapplies a pinned raw preset", async () => {
+    fakeApi({ ...BASELINE_ROUTES, [GENERATION_PATH]: generationDocument() })
+    renderApp(<LabPage />)
+    const prompt = await screen.findByRole("textbox", { name: "Prompt" })
+    await userEvent.clear(prompt)
+    await userEvent.type(prompt, "Preset prompt")
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "New preset name" }),
+      "Rain"
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    await userEvent.clear(prompt)
+    await userEvent.type(prompt, "Temporary prompt")
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }))
+    expect(prompt).toHaveValue("Preset prompt")
+  })
+
+  it("previews and queues one server-expanded typed sweep", async () => {
+    const keys: string[] = []
+    const bodies: unknown[] = []
+    fakeApi({
+      ...BASELINE_ROUTES,
+      [GENERATION_PATH]: generationDocument(),
+      "POST /api/sweeps/preview": {
+        count: 4,
+        combinations: 2,
+        repeats: 2,
+        new_count: 4,
+        duplicate_count: 0,
+        items: [],
+      },
+      "POST /api/sweeps": (_url: URL, init: RequestInit | undefined) => {
+        keys.push(new Headers(init?.headers).get("Idempotency-Key") ?? "")
+        bodies.push(JSON.parse(String(init?.body)))
+        return [makeView()]
+      },
+    })
+    renderApp(<LabPage />)
+    await screen.findByRole("textbox", { name: "Prompt" })
+
+    await userEvent.click(screen.getByRole("button", { name: "Add axis" }))
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Sweep axis 1" }),
+      "steps"
+    )
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove Steps value 20" })
+    )
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove Steps value 21" })
+    )
+    const value = screen.getByRole("spinbutton", {
+      name: "Add Steps value",
+    })
+    await userEvent.type(value, "12")
+    await userEvent.click(screen.getByRole("button", { name: "Add value" }))
+    await userEvent.type(value, "18")
+    await userEvent.click(screen.getByRole("button", { name: "Add value" }))
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Sweep repeats" }),
+      "2"
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Preview sweep" }))
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Queue 4 new runs" })
+    )
+
+    await waitFor(() => expect(bodies).toHaveLength(1))
+    expect(bodies[0]).toMatchObject({
+      axes: [{ binding: "steps", values: [12, 18] }],
+      repeats: 2,
+      skip_duplicates: true,
+    })
+    expect(keys[0]).toMatch(/\S+/)
+  })
+
+  it("keeps the existing queue and transient preview workflow", async () => {
+    const active = makeView({
+      run: {
+        id: "active",
+        seq: 9,
+        label: "shared H3 run",
+        status: "running",
+        artifact: undefined,
+        metrics: undefined,
+      },
+    })
+    fakeApi({
+      ...BASELINE_ROUTES,
+      [GENERATION_PATH]: generationDocument(),
+      "/api/queue": {
+        ...EMPTY_QUEUE,
+        active_run_id: active.run.id,
+        active,
+        total: 1,
+      },
+    })
+    renderApp(<LabPage />)
+    await screen.findByText("shared H3 run")
+
+    act(() => {
+      FakeEventSource.instances.at(-1)?.emit({
+        seq: 20,
+        kind: "run.progress",
+        run_id: "active",
+        at: new Date().toISOString(),
+        data: { preview_seq: 3, preview_mime: "video/mp4" },
+      })
+    })
+    const preview = await screen.findByLabelText(/preview frame 3/i)
+    expect(preview.tagName).toBe("VIDEO")
+    fireEvent.error(preview)
+    expect(screen.queryByLabelText(/preview frame 3/i)).not.toBeInTheDocument()
   })
 })

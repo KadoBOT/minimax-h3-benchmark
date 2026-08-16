@@ -68,7 +68,7 @@ def test_presentation_is_held_and_sampling_is_contested():
     for field in ("turbo", "turbo_lora", "turbo_lora_strength"):
         assert field in CONTESTED_FIELDS
     # Noise is not a setting, and clearing VRAM cannot change a pixel.
-    assert IGNORED_FIELDS == {"seed", "clean_vram"}
+    assert IGNORED_FIELDS == {"seed", "clean_vram", "filename_prefix"}
 
 
 # --- pools ------------------------------------------------------------------

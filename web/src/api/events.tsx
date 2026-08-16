@@ -7,7 +7,14 @@
  * replayed on reconnect so a dropped socket cannot leave a stale page behind.
  */
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react"
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 
@@ -45,11 +52,20 @@ type Stream = {
   last: LabEvent | null
 }
 
-const StreamContext = createContext<Stream>({ live: false, seq: 0, progress: null, last: null })
+const StreamContext = createContext<Stream>({
+  live: false,
+  seq: 0,
+  progress: null,
+  last: null,
+})
 
 const RETRY_MS = 2_000
 
-export function EventStreamProvider({ children }: { children: React.ReactNode }) {
+export function EventStreamProvider({
+  children,
+}: {
+  children: React.ReactNode
+}) {
   const client = useQueryClient()
   const [live, setLive] = useState(false)
   const [seq, setSeq] = useState(0)
@@ -104,15 +120,23 @@ export function EventStreamProvider({ children }: { children: React.ReactNode })
     }
   }, [client])
 
-  const value = useMemo<Stream>(() => ({ live, seq, progress, last }), [live, seq, progress, last])
-  return <StreamContext.Provider value={value}>{children}</StreamContext.Provider>
+  const value = useMemo<Stream>(
+    () => ({ live, seq, progress, last }),
+    [live, seq, progress, last]
+  )
+  return (
+    <StreamContext.Provider value={value}>{children}</StreamContext.Provider>
+  )
 }
 
 export function useStream(): Stream {
   return useContext(StreamContext)
 }
 
-function nextProgress(current: Progress | null, event: LabEvent): Progress | null {
+function nextProgress(
+  current: Progress | null,
+  event: LabEvent
+): Progress | null {
   const data = (event.data ?? {}) as Record<string, unknown>
   if (event.kind === "run.progress" && event.run_id) {
     return {
@@ -120,14 +144,29 @@ function nextProgress(current: Progress | null, event: LabEvent): Progress | nul
       step: number(data.step),
       stepTotal: number(data.step_total),
       // A rate is only published once one is trustworthy; keep the last known one meanwhile.
-      secPerIt: number(data.sec_per_it) ?? (current?.runId === event.run_id ? current.secPerIt : null),
+      secPerIt:
+        number(data.sec_per_it) ??
+        (current?.runId === event.run_id ? current.secPerIt : null),
       node: text(data.node_label) ?? text(data.node),
       // Progress ticks and preview frames arrive on the same channel but not together, so the
       // last count seen stands until a newer one does.
       previewSeq:
-        number(data.preview_seq) ?? (current?.runId === event.run_id ? current.previewSeq : null),
+        number(data.preview_seq) ??
+        (current?.runId === event.run_id ? current.previewSeq : null),
       previewMime:
-        text(data.preview_mime) ?? (current?.runId === event.run_id ? current.previewMime : null),
+        text(data.preview_mime) ??
+        (current?.runId === event.run_id ? current.previewMime : null),
+    }
+  }
+  if (event.kind === "run.preview" && event.run_id) {
+    return {
+      runId: event.run_id,
+      step: current?.runId === event.run_id ? current.step : null,
+      stepTotal: current?.runId === event.run_id ? current.stepTotal : null,
+      secPerIt: current?.runId === event.run_id ? current.secPerIt : null,
+      node: current?.runId === event.run_id ? current.node : null,
+      previewSeq: number(data.sequence),
+      previewMime: current?.runId === event.run_id ? current.previewMime : null,
     }
   }
   if (event.kind === "run.started" && event.run_id) {
@@ -141,7 +180,8 @@ function nextProgress(current: Progress | null, event: LabEvent): Progress | nul
       previewMime: null,
     }
   }
-  if (event.kind === "run.finished" && current?.runId === event.run_id) return null
+  if (event.kind === "run.finished" && current?.runId === event.run_id)
+    return null
   return current
 }
 
@@ -167,6 +207,12 @@ function apply(client: QueryClient, event: LabEvent) {
     case "run.progress":
       return
 
+    case "run.log":
+    case "run.preview":
+      if (runId)
+        void client.invalidateQueries({ queryKey: keys.sharedJobView(runId) })
+      return
+
     case "run.created":
     case "run.deleted":
     case "queue.changed":
@@ -178,7 +224,10 @@ function apply(client: QueryClient, event: LabEvent) {
     case "run.started":
       void client.invalidateQueries({ queryKey: keys.queue })
       void client.invalidateQueries({ queryKey: keys.status })
-      if (runId) void client.invalidateQueries({ queryKey: keys.run(runId) })
+      if (runId) {
+        void client.invalidateQueries({ queryKey: keys.run(runId) })
+        void client.invalidateQueries({ queryKey: keys.sharedJobView(runId) })
+      }
       return
 
     case "run.finished":
@@ -190,12 +239,18 @@ function apply(client: QueryClient, event: LabEvent) {
       void client.invalidateQueries({ queryKey: ["compare"] })
       void client.invalidateQueries({ queryKey: keys.queue })
       void client.invalidateQueries({ queryKey: keys.status })
-      if (runId) void client.invalidateQueries({ queryKey: keys.run(runId) })
+      if (runId) {
+        void client.invalidateQueries({ queryKey: keys.run(runId) })
+        void client.invalidateQueries({ queryKey: keys.sharedJobView(runId) })
+      }
       return
 
     case "run.updated":
       void client.invalidateQueries({ queryKey: ["runs"] })
-      if (runId) void client.invalidateQueries({ queryKey: keys.run(runId) })
+      if (runId) {
+        void client.invalidateQueries({ queryKey: keys.run(runId) })
+        void client.invalidateQueries({ queryKey: keys.sharedJobView(runId) })
+      }
       return
 
     case "rating.changed":

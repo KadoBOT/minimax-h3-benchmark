@@ -14,8 +14,9 @@ from starlette.applications import Starlette
 
 from h3lab.engine.lab import Lab
 from h3lab.settings import Settings
+from h3lab.shared.client import SharedServiceClient
 
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()
 
 
 def resolve_lab(app: Starlette) -> Lab:
@@ -27,7 +28,10 @@ def resolve_lab(app: Starlette) -> Lab:
     with _LOCK:
         existing = getattr(app.state, "lab", None)
         if existing is None:
-            existing = Lab(app.state.settings)
+            existing = Lab(
+                app.state.settings,
+                shared_client=resolve_shared_client(app),
+            )
             app.state.lab = existing
             app.state.owns_lab = True
         return existing
@@ -42,7 +46,31 @@ def get_settings(request: Request) -> Settings:
     return settings
 
 
+def resolve_shared_client(app: Starlette) -> SharedServiceClient:
+    with _LOCK:
+        existing = getattr(app.state, "shared_client", None)
+        if existing is None:
+            existing = SharedServiceClient(app.state.settings.shared_service_url)
+            app.state.shared_client = existing
+            app.state.owns_shared_client = True
+        return existing
+
+
+def get_shared_client(request: Request) -> SharedServiceClient:
+    return resolve_shared_client(request.app)
+
+
 LabDep = Annotated[Lab, Depends(get_lab)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+SharedClientDep = Annotated[SharedServiceClient, Depends(get_shared_client)]
 
-__all__ = ["LabDep", "SettingsDep", "get_lab", "get_settings", "resolve_lab"]
+__all__ = [
+    "LabDep",
+    "SettingsDep",
+    "SharedClientDep",
+    "get_lab",
+    "get_settings",
+    "get_shared_client",
+    "resolve_lab",
+    "resolve_shared_client",
+]

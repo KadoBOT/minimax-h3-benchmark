@@ -153,7 +153,12 @@ async def test_meta_states_what_each_mode_needs(client: httpx.AsyncClient):
     """The form has to know first_frame is mandatory for flf2v before it submits."""
     modes = {entry["mode"]: entry for entry in (await client.get(f"{API}/meta")).json()["modes"]}
     assert modes["flf2v"]["requires_all"] == ["first_frame"]
-    assert modes["r2v"]["requires_any"] == ["ref_images", "ref_videos", "ref_audios"]
+    assert modes["r2v"]["requires_any"] == [
+        "ref_images",
+        "ref_videos",
+        "ref_video_audios",
+        "ref_audios",
+    ]
     assert modes["t2v"]["requires_all"] == [] and modes["t2v"]["requires_any"] == []
 
 

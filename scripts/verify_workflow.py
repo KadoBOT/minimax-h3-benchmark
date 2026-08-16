@@ -43,6 +43,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from h3lab.api.app import create_app  # noqa: E402
 from h3lab.comfy import roles as R  # noqa: E402
+from h3lab.comfy.catalog import resolve_run_weights  # noqa: E402
 from h3lab.comfy.client import ComfyClient  # noqa: E402
 from h3lab.comfy.editor import prompt_of  # noqa: E402
 from h3lab.comfy.graph import build, load_workflow  # noqa: E402
@@ -293,18 +294,19 @@ def main(argv: list[str] | None = None) -> int:
         # A last look with the live schemas: what the installed ComfyUI would object to.
         comfy = ComfyClient(settings.comfy_url)
         schemas = Schemas.from_client(comfy)
-        comfy.close()
         for mode in modes:
             template = load_workflow(templates / f"minimax_h3_{mode}_workflow.json")
             config = {**BASE, "mode": mode, "steps": args.steps, **MODE_MEDIA[mode]}
+            gen_cfg = resolve_run_weights(GenerationConfig(**config), comfy)
             prompt, _graph, _roles = build(
-                template, GenerationConfig(**config), output_tag="verify", schemas=schemas
+                template, gen_cfg, output_tag="verify", schemas=schemas
             )
             checks.that(
                 not schemas.problems(prompt),
                 f"object_info {mode}",
                 "; ".join(schemas.problems(prompt)) or f"{len(prompt)} nodes, nothing objected to",
             )
+        comfy.close()
 
     print()
     for line in checks.failures:

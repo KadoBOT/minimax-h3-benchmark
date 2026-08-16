@@ -42,11 +42,20 @@ def run_inline(*args: str) -> tuple[int, str]:
 
 def as_flags(settings: Settings) -> list[str]:
     return [
-        "--data-dir", str(settings.data_dir),
-        "--models-dir", str(settings.models_dir),
-        "--comfy-input-dir", str(settings.comfy_input_dir),
-        "--web-dist", str(settings.web_dist),
-        "--comfy-url", settings.comfy_url,
+        "--data-dir",
+        str(settings.data_dir),
+        "--models-dir",
+        str(settings.models_dir),
+        "--comfy-input-dir",
+        str(settings.comfy_input_dir),
+        "--workflow-dir",
+        str(settings.workflow_dir),
+        "--web-dist",
+        str(settings.web_dist),
+        "--comfy-url",
+        settings.comfy_url,
+        "--shared-service-url",
+        settings.shared_service_url,
     ]
 
 
@@ -312,8 +321,8 @@ def test_serve_starts_the_worker_unless_told_otherwise(
     assert seen == [worker]
 
 
-@pytest.mark.parametrize("flag", ["--comfy-url", "--data-dir"])
+@pytest.mark.parametrize("flag", ["--comfy-url", "--shared-service-url", "--data-dir"])
 def test_global_flags_are_accepted_before_the_subcommand(settings: Settings, flag: str):
-    value = "http://127.0.0.1:9" if flag == "--comfy-url" else str(settings.data_dir)
+    value = "http://127.0.0.1:9" if flag.endswith("-url") else str(settings.data_dir)
     code, _text = run_inline(flag, value, "routes")
     assert code == 0

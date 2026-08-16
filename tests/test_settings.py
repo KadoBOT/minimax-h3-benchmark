@@ -5,6 +5,7 @@ from pathlib import Path
 from h3lab.settings import (
     DEFAULT_COMFY_URL,
     DEFAULT_PORT,
+    DEFAULT_SHARED_SERVICE_URL,
     Settings,
     classify_h3_workflow,
     resolve_workflow_path,
@@ -14,14 +15,22 @@ from h3lab.settings import (
 def test_defaults_preserve_the_previous_behaviour():
     made = Settings()
     assert made.comfy_url == DEFAULT_COMFY_URL
+    assert made.shared_service_url == DEFAULT_SHARED_SERVICE_URL
     assert made.port == DEFAULT_PORT
     assert made.data_dir.name == "results"
     assert made.db_path.name == "h3lab.db"
 
 
 def test_environment_overrides_defaults():
-    made = Settings.from_env({"H3LAB_COMFY_URL": "http://box:9000", "H3LAB_PORT": "9999"})
+    made = Settings.from_env(
+        {
+            "H3LAB_COMFY_URL": "http://box:9000",
+            "H3LAB_SHARED_SERVICE_URL": "http://shared:8189",
+            "H3LAB_PORT": "9999",
+        }
+    )
     assert made.comfy_url == "http://box:9000"
+    assert made.shared_service_url == "http://shared:8189"
     assert made.port == 9999
 
 
@@ -52,6 +61,17 @@ def test_ensure_dirs_creates_every_media_directory(tmp_path: Path):
     made.ensure_dirs()
     for directory in made.media_dirs:
         assert directory.is_dir()
+
+
+def test_unified_graph_is_the_exact_name_for_every_mode(tmp_path: Path):
+    unified = tmp_path / "minimax_h3_unified.json"
+    t2v = tmp_path / "minimax_h3_t2v_workflow.json"
+    graded = tmp_path / "minimax_h3_r2v_graded.v5.json"
+    unified.write_text('{"nodes":[{"type":"MiniMaxH3ImageToVideo"}]}', encoding="utf-8")
+    t2v.write_text('{"nodes":[{"type":"MiniMaxH3TextToVideo"}]}', encoding="utf-8")
+    graded.write_text('{"nodes":[{"type":"MiniMaxH3ReferenceToVideo"}]}', encoding="utf-8")
+    for mode in ("t2v", "flf2v", "r2v"):
+        assert resolve_workflow_path(tmp_path, mode) == unified
 
 
 def test_exact_lab_names_win_over_a_newer_classified_file(tmp_path: Path):

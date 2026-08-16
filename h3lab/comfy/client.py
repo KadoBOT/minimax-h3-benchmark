@@ -202,6 +202,16 @@ class ComfyClient:
             return parse_combo(entries[input_name])
         return []
 
+    def models(self, folder: str) -> list[str]:
+        """List model names available under a folder in ComfyUI (/models/{folder})."""
+        try:
+            data = self._call("GET", f"/models/{folder}")
+            if isinstance(data, list):
+                return [str(item) for item in data if item is not None]
+        except ComfyError:
+            pass
+        return []
+
     # --- control -----------------------------------------------------------
 
     def interrupt(self) -> None:

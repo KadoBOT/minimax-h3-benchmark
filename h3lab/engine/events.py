@@ -20,6 +20,8 @@ EventKind = Literal[
     "run.created",
     "run.started",
     "run.progress",
+    "run.log",
+    "run.preview",
     "run.finished",
     "run.updated",
     "run.deleted",

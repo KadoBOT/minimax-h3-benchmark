@@ -6,6 +6,7 @@ means the same operations are usable from a script or a test without starting a 
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -14,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from h3lab.comfy.catalog import Catalog, CatalogCache
 from h3lab.comfy.client import ComfyClient
 from h3lab.comfy.editor import run_provenance, to_editor_workflow
+from h3lab.comfy.catalog import InstalledNameError, resolve_run_weights
 from h3lab.comfy.graph import apply_config, describe, missing_links
 from h3lab.comfy.progress import Preview
 from h3lab.domain.arena import (
@@ -42,10 +44,24 @@ from h3lab.domain.insights import (
 from h3lab.domain.rating import CRITERIA, EloEntry, Rating, Vote
 from h3lab.domain.run import Run
 from h3lab.domain.scoring import ScoreInput, ScoredRun, ScoreWeights, score_runs
-from h3lab.domain.sweeps import SweepPreview, SweepSpec, expand, preview
+from h3lab.domain.shared_sweeps import (
+    SharedSweepSpec,
+    expand_shared_sweep,
+)
+from h3lab.domain.sweeps import (
+    SweepPreview,
+    SweepPreviewItem,
+    SweepSpec,
+    expand,
+    preview,
+)
 from h3lab.engine.events import EventBus
 from h3lab.engine.runner import Runner, WorkflowCache, preflight
+from h3lab.engine.shared_runner import SharedRunner
 from h3lab.settings import Settings
+from h3lab.shared.client import SharedServiceClient
+from h3lab.shared.contracts import GenerationDocument, JobSubmission
+from h3lab.shared.projection import project_h3_submission, submission_from_config
 from h3lab.storage import open_store
 from h3lab.storage.judgement import RatingRepository, VoteRepository
 from h3lab.storage.legacy import ImportReport, import_legacy
@@ -193,8 +209,11 @@ class Lab:
         settings: Settings | None = None,
         *,
         client: ComfyClient | None = None,
+        shared_client: SharedServiceClient | None = None,
         start_worker: bool = True,
     ) -> None:
+        if client is not None and shared_client is not None:
+            raise ValueError("choose either legacy or shared execution, not both")
         self.settings = settings or Settings.from_env()
         self.settings.ensure_dirs()
         self.store = open_store(self.settings.db_path)
@@ -208,22 +227,38 @@ class Lab:
         self.events = EventBus()
         self.catalog_cache = CatalogCache(self.settings)
         self.workflows = WorkflowCache(self.settings, events=self.events)
-        self.client = client or ComfyClient(
-            self.settings.comfy_url, run_timeout_s=self.settings.comfy_timeout_s
-        )
-        self.runner = Runner(
-            runs=self.runs,
-            settings=self.settings,
-            events=self.events,
-            client=self.client,
-            workflows=self.workflows,
-        )
+        self.legacy_execution_enabled = client is not None
+        self.client = client
+        self.shared_client = shared_client
+        self._owns_shared_client = False
+        if self.legacy_execution_enabled:
+            assert self.client is not None
+            self.runner: Runner | SharedRunner = Runner(
+                runs=self.runs,
+                settings=self.settings,
+                events=self.events,
+                client=self.client,
+                workflows=self.workflows,
+            )
+        else:
+            if self.shared_client is None:
+                self.shared_client = SharedServiceClient(self.settings.shared_service_url)
+                self._owns_shared_client = True
+            self.runner = SharedRunner(
+                runs=self.runs,
+                events=self.events,
+                client=self.shared_client,
+                settings=self.settings,
+            )
         if start_worker:
             self.runner.start()
 
     def close(self) -> None:
         self.runner.stop()
-        self.client.close()
+        if self.client is not None:
+            self.client.close()
+        if self._owns_shared_client and self.shared_client is not None:
+            self.shared_client.close()
         self.events.close()
 
     # --- catalog and status ------------------------------------------------
@@ -358,14 +393,67 @@ class Lab:
         return self._views(created)
 
     def enqueue(self, config: GenerationConfig, *, count: int = 1) -> list[RunView]:
+        if not self.legacy_execution_enabled:
+            raise RuntimeError("new production runs require a shared SDUI submission")
         return self._announce([self.runs.create(config) for _ in range(max(1, count))])
 
+    def shared_generation_document(self) -> GenerationDocument:
+        if self.shared_client is None:
+            raise RuntimeError("shared execution is not configured")
+        return self.shared_client.get_generation_document()
+
+    def enqueue_shared(
+        self,
+        document: GenerationDocument,
+        submission: JobSubmission,
+        *,
+        request_key: str,
+        count: int = 1,
+    ) -> list[RunView]:
+        if not isinstance(self.runner, SharedRunner):
+            raise RuntimeError("this diagnostic Lab uses legacy direct execution")
+        return self._views(
+            self.runner.enqueue(
+                document,
+                submission,
+                request_key=request_key,
+                count=count,
+            )
+        )
+
     def enqueue_many(self, configs: Iterable[GenerationConfig]) -> list[RunView]:
+        if not self.legacy_execution_enabled:
+            raise RuntimeError("new production runs require shared SDUI submissions")
         return self._announce([self.runs.create(config) for config in configs])
 
-    def rerun(self, run_id: str, *, overrides: dict[str, Any] | None = None) -> RunView:
+    def rerun(
+        self,
+        run_id: str,
+        *,
+        overrides: dict[str, Any] | None = None,
+        request_key: str | None = None,
+    ) -> RunView:
         """Queue the same experiment again, optionally with a change. The origin is kept."""
         source = self.runs.require(run_id)
+        if source.shared_submission is not None:
+            if request_key is None:
+                raise ValueError("Idempotency-Key is required to rerun a shared job")
+            exact = source.shared_submission.model_copy(
+                update={
+                    "input": {
+                        **source.shared_submission.input,
+                        **(overrides or {}),
+                    }
+                }
+            )
+            created = self.enqueue_shared(
+                self.shared_generation_document(),
+                exact,
+                request_key=request_key,
+            )[0]
+            note = f"reran from {source.label}" if not overrides else f"variant of {source.label}"
+            self.runs.patch_flags(created.run.id, notes=note)
+            return self.get_run(created.run.id)
         config = source.config.merged(**(overrides or {}))
         created = self.enqueue(config)[0]
         note = f"reran from {source.label}" if not overrides else f"variant of {source.label}"
@@ -375,40 +463,161 @@ class Lab:
     def preview_sweep(self, spec: SweepSpec) -> SweepPreview:
         return preview(spec, existing=self.runs.hashes())
 
-    def run_sweep(self, spec: SweepSpec, *, skip_duplicates: bool = True) -> list[RunView]:
+    def preview_shared_sweep(
+        self,
+        document: GenerationDocument,
+        spec: SharedSweepSpec,
+    ) -> SweepPreview:
+        known = self.runs.hashes()
+        submissions = expand_shared_sweep(document, spec)
+        items: list[SweepPreviewItem] = []
+        for submission in submissions:
+            config = project_h3_submission(submission)
+            digest = config_hash(config)
+            run_id = known.get(digest)
+            items.append(
+                SweepPreviewItem(
+                    config=config,
+                    config_hash=digest,
+                    already_ran=run_id is not None,
+                    existing_run_id=run_id,
+                )
+            )
+        duplicates = sum(1 for item in items if item.already_ran)
+        combinations = 1
+        for axis in spec.axes:
+            combinations *= len(axis.values)
+        return SweepPreview(
+            count=len(items),
+            combinations=combinations,
+            repeats=spec.repeats,
+            new_count=len(items) - duplicates,
+            duplicate_count=duplicates,
+            items=items,
+        )
+
+    def run_shared_sweep(
+        self,
+        document: GenerationDocument,
+        spec: SharedSweepSpec,
+        *,
+        skip_duplicates: bool = True,
+        request_key: str | None = None,
+    ) -> list[RunView]:
+        if request_key is None or not request_key.strip():
+            raise ValueError("Idempotency-Key is required to submit a shared sweep")
+        submissions = expand_shared_sweep(document, spec)
+        known = self.runs.hashes() if skip_duplicates else {}
+        wanted = [
+            submission
+            for submission in submissions
+            if config_hash(project_h3_submission(submission)) not in known
+        ]
+        created: list[RunView] = []
+        for index, submission in enumerate(wanted):
+            created.extend(
+                self.enqueue_shared(
+                    document,
+                    submission,
+                    request_key=f"{request_key}:{index}",
+                )
+            )
+        return created
+
+    def run_sweep(
+        self,
+        spec: SweepSpec,
+        *,
+        skip_duplicates: bool = True,
+        request_key: str | None = None,
+    ) -> list[RunView]:
         known = self.runs.hashes() if skip_duplicates else {}
         wanted = [
             config for config in expand(spec) if config_hash(config) not in known
         ]
+        if not self.legacy_execution_enabled:
+            if request_key is None:
+                raise ValueError("Idempotency-Key is required to submit a shared sweep")
+            document = self.shared_generation_document()
+            created: list[RunView] = []
+            for index, config in enumerate(wanted):
+                created.extend(
+                    self.enqueue_shared(
+                        document,
+                        submission_from_config(config),
+                        request_key=f"{request_key}:{index}",
+                    )
+                )
+            return created
         return self.enqueue_many(wanted)
 
     def dry_run(self, config: GenerationConfig) -> DryRun:
         """Build the graph without submitting it, and report anything already wrong."""
-        problems = preflight(config, self.settings)
-        identity = {"config_hash": config_hash(config), "recipe_hash": recipe_hash(config)}
+        current_config_hash = config_hash(config)
+        current_recipe_hash = recipe_hash(config)
+        if self.client is None:
+            return DryRun(
+                ok=False,
+                problems=["direct workflow compilation is unavailable in shared execution mode"],
+                config_hash=current_config_hash,
+                recipe_hash=current_recipe_hash,
+            )
+        try:
+            config = resolve_run_weights(config, self.client)
+        except InstalledNameError as exc:
+            return DryRun(
+                ok=False,
+                problems=[str(exc)],
+                config_hash=current_config_hash,
+                recipe_hash=current_recipe_hash,
+            )
+        problems = preflight(config, self.settings, self.client)
         try:
             workflow = self.workflows.get(config.mode)
             prompt = apply_config(workflow, config, output_tag="dry-run")
         except Exception as exc:  # noqa: BLE001 - a broken template is a reportable answer
-            return DryRun(ok=False, problems=[*problems, str(exc)], **identity)
+            return DryRun(
+                ok=False,
+                problems=[*problems, str(exc)],
+                config_hash=current_config_hash,
+                recipe_hash=current_recipe_hash,
+            )
         dangling = missing_links(prompt)
         return DryRun(
             ok=not problems and not dangling,
             problems=[*problems, *(f"dangling link {item}" for item in dangling)],
             graph=GraphSummary(**describe(prompt)),
             duplicate_of=self.runs.hashes().get(config_hash(config)),
-            **identity,
+            config_hash=current_config_hash,
+            recipe_hash=current_recipe_hash,
         )
 
     def workflow_for_run(self, run_id: str) -> dict[str, Any]:
         """The run's graph as a ComfyUI editor workflow, ready to open.
 
-        Built from the template as it is on disk now rather than stored per run: a run is its
-        config, and the config is what the export applies. If the template has since changed,
-        the export follows it — which is the same graph the lab would submit if the run were
-        queued again today, and so the honest answer to "give me this run's workflow".
+        Each run holds an immutable snapshot of its workflow graph saved when the run was
+        executed. If no snapshot exists (e.g. for legacy runs or a queued run before execution),
+        this falls back to generating it from the template on disk with the run's config applied.
         """
         run = self.runs.require(run_id)
+        snapshot_path = self.settings.workflows_dir / f"{run.id}.json"
+        if snapshot_path.is_file():
+            try:
+                return json.loads(snapshot_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                pass
+        if run.shared_submission is not None:
+            return {
+                "format": "h3lab.shared-run-receipt/v1",
+                "run_id": run.id,
+                "shared_job_id": run.shared_job_id,
+                "submission": run.shared_submission.model_dump(mode="json", by_alias=True),
+                "provenance": (
+                    None
+                    if run.shared_provenance is None
+                    else run.shared_provenance.model_dump(mode="json", by_alias=True)
+                ),
+            }
         workflow = self.workflows.get(run.config.mode)
         prompt = apply_config(workflow, run.config, output_tag=run.id)
         return to_editor_workflow(workflow, prompt, provenance=run_provenance(run))
@@ -422,6 +631,11 @@ class Lab:
 
     def cancel_all(self) -> int:
         return self.runner.cancel_all()
+
+    def retry_collection(self, run_id: str) -> bool:
+        if not isinstance(self.runner, SharedRunner):
+            return False
+        return self.runner.retry_collection(run_id)
 
     def pause(self) -> None:
         self.runner.pause()
@@ -497,6 +711,7 @@ class Lab:
             paths.append(self.settings.posters_dir / run.artifact.poster_path)
         if run.artifact.strip_path:
             paths.append(self.settings.strips_dir / run.artifact.strip_path)
+        paths.append(self.settings.workflows_dir / f"{run.id}.json")
         return paths
 
     def set_baseline(self, run_id: str | None) -> str | None:
@@ -668,6 +883,8 @@ class Lab:
         return report
 
     def reconcile(self) -> int:
+        if isinstance(self.runner, SharedRunner):
+            return self.runner.reconcile()
         recovered = self.runs.reconcile()
         if recovered:
             self.events.publish("queue.changed")

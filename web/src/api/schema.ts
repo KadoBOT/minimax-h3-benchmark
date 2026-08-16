@@ -1,4 +1,3 @@
-/* eslint-disable */
 /**
  * Generated from the API's OpenAPI schema by `python scripts/gen_types.py`.
  * Do not edit by hand — `tests/test_contract.py` regenerates this file and fails on drift.
@@ -71,6 +70,31 @@ export interface Artifact {
   size_bytes?: number | null;
 }
 
+export interface AssetComponent {
+  id: string;
+  optional?: boolean;
+  binding: string;
+  label: string;
+  description?: string | null;
+  required: boolean;
+  visibleWhen?: Predicate[] | null;
+  kind: "asset";
+  accept: ("image" | "video" | "audio")[];
+  minimumItems?: number;
+  maximumItems: number;
+}
+
+export interface AvailabilityReason {
+  code: string;
+  detail: string;
+  retryable: boolean;
+}
+
+export interface Available {
+  state: "available";
+  observedAt: string;
+}
+
 export interface AxisDef {
   field: string;
   label: string;
@@ -96,6 +120,24 @@ export interface BaselineRequest {
 
 export interface BodyUploadApiUploadsPost {
   file: string;
+}
+
+export interface BodyUploadAssetApiSharedAssetsPost {
+  file: string;
+}
+
+export interface CancelAction {
+  id: string;
+  label: string;
+  endpoint: string;
+  optional?: boolean;
+  kind: "cancel";
+  method: "POST";
+}
+
+export interface Capabilities {
+  required: string[];
+  optional: string[];
 }
 
 /** Everything a run form needs to render, with the provenance of each list. */
@@ -131,6 +173,20 @@ export interface Comparison {
   shared: Record<string, string>;
 }
 
+export interface CompilerIdentity {
+  id: string;
+  version: string;
+}
+
+export interface DeleteAction {
+  id: string;
+  label: string;
+  endpoint: string;
+  optional?: boolean;
+  kind: "delete";
+  method: "DELETE";
+}
+
 /** A paired difference with the evidence behind it. */
 export interface DeltaStat {
   n: number;
@@ -140,6 +196,15 @@ export interface DeltaStat {
   better_b?: number;
   ties?: number;
   conclusive: boolean;
+}
+
+export interface DownloadComponent {
+  id: string;
+  optional?: boolean;
+  kind: "download";
+  href: string;
+  filename: string;
+  label: string;
 }
 
 /** The answer to "would this run work?" without spending GPU time finding out. */
@@ -163,7 +228,7 @@ export interface EnqueueRequest {
 
 export interface Event {
   seq?: number;
-  kind: "run.created" | "run.started" | "run.progress" | "run.finished" | "run.updated" | "run.deleted" | "queue.changed" | "rating.changed" | "vote.added" | "comfy.status" | "lab.message" | "heartbeat";
+  kind: "run.created" | "run.started" | "run.progress" | "run.log" | "run.preview" | "run.finished" | "run.updated" | "run.deleted" | "queue.changed" | "rating.changed" | "vote.added" | "comfy.status" | "lab.message" | "heartbeat";
   at?: number;
   run_id?: string | null;
   data?: Record<string, unknown>;
@@ -178,6 +243,7 @@ export interface FieldDiff {
 /** Everything that determines a generated video. Immutable once a run starts. */
 export interface GenerationConfig {
   mode?: "flf2v" | "t2v" | "r2v";
+  execution_backend?: "legacy" | "shared";
   diffusion_model?: string;
   prompt?: string;
   first_frame?: string;
@@ -197,15 +263,38 @@ export interface GenerationConfig {
   turbo?: boolean;
   turbo_lora?: string;
   turbo_lora_strength?: number;
-  interp?: "off" | "film" | "rife";
+  interp?: "off" | "gmfss" | "film" | "rife";
   upscaler?: boolean;
+  upscaler_mode?: "none" | "rtx" | "seedvr2" | null;
   clean_vram?: boolean;
+  attention?: "native" | "kitchen" | "sage_sol" | null;
+  post_grade?: boolean | null;
+  face_refine?: boolean | null;
+  filename_prefix?: string;
+  shared_workflow_revision?: string;
+  shared_schema_revision?: string;
   cache_enabled?: boolean;
   cache?: "none" | "spectrum" | "easy" | "h3";
   cache_preset?: "conservative" | "moderate" | "aggressive" | "custom";
   sol_attn?: boolean;
   sol_preset?: "conservative" | "moderate" | "aggressive" | "custom";
   widgets?: Record<string, unknown>;
+  shared_identity?: Record<string, unknown>;
+}
+
+export interface GenerationDocument {
+  protocolVersion: "1.0";
+  documentId: string;
+  schemaRevision: string;
+  workflowId: string;
+  workflowRevision: string;
+  title: string;
+  description?: string | null;
+  availability: Available | Unavailable;
+  capabilities: Capabilities;
+  kind?: "generation";
+  components: (SectionComponent | TextComponent | TextareaComponent | NumberComponent | SelectComponent | ToggleComponent | AssetComponent | SeedComponent)[];
+  actions: SubmitAction[];
 }
 
 /** What the patched ComfyUI graph turned out to be. */
@@ -230,6 +319,30 @@ export interface ImportReport {
   already_present?: number;
   skipped?: string[];
 }
+
+export interface JobDocument {
+  protocolVersion: "1.0";
+  documentId: string;
+  schemaRevision: string;
+  workflowId: string;
+  workflowRevision: string;
+  title: string;
+  description?: string | null;
+  availability: Available | Unavailable;
+  capabilities: Capabilities;
+  kind: "job";
+  jobId: string;
+  components: (SectionComponent | StatusComponent | ProgressComponent | LogComponent | PreviewComponent | VideoComponent | DownloadComponent)[];
+  actions: (CancelAction | DeleteAction | RetryCollectionAction)[];
+}
+
+export interface JobSubmission {
+  workflowRevision: string;
+  schemaRevision: string;
+  input: Record<string, JsonValue>;
+}
+
+export type JsonValue = unknown;
 
 /** One poll answers everything the shell shows: worker, queue, and totals. */
 export interface LabStatus {
@@ -263,6 +376,20 @@ export interface LeaderboardEntry {
   speed: number | null;
   quality_source: string;
   unrated: boolean;
+}
+
+export interface LogComponent {
+  id: string;
+  optional?: boolean;
+  kind: "log";
+  entries: LogEntry[];
+}
+
+export interface LogEntry {
+  sequence: number;
+  at: string;
+  level: "debug" | "info" | "warning" | "error";
+  message: string;
 }
 
 export interface MarginalCell {
@@ -317,6 +444,23 @@ export interface ModeNeeds {
   accepts?: string[];
 }
 
+export interface NumberComponent {
+  id: string;
+  optional?: boolean;
+  binding: string;
+  label: string;
+  description?: string | null;
+  required: boolean;
+  visibleWhen?: Predicate[] | null;
+  kind: "number";
+  minimum?: number | null;
+  maximum?: number | null;
+  step?: number | null;
+  integer?: boolean;
+  defaultValue?: number | null;
+  unit?: string | null;
+}
+
 export interface Ok {
   ok?: boolean;
   detail?: string;
@@ -342,6 +486,12 @@ export interface PatchRunRequest {
   tags?: string[] | null;
 }
 
+export interface Predicate {
+  field: string;
+  operator: "equals" | "not_equals" | "in";
+  value: string | number | boolean | (string | number | boolean | null)[] | null;
+}
+
 export interface Preset {
   id: string;
   name: string;
@@ -357,12 +507,97 @@ export interface PresetRequest {
   replace?: boolean;
 }
 
+export interface PreviewComponent {
+  id: string;
+  optional?: boolean;
+  kind: "preview";
+  src: string;
+  mime: string;
+  sequence: number;
+}
+
 /** A refusal the UI can render. One shape for every failure. */
 export interface Problem {
   error: string;
   detail: string;
-  kind?: "not_found" | "invalid" | "conflict" | "comfy_unreachable" | "workflow" | "internal";
+  kind?: "not_found" | "invalid" | "conflict" | "comfy_unreachable" | "shared_unavailable" | "shared_protocol" | "shared_uncertain" | "workflow" | "internal";
   fields?: Record<string, string>;
+  code?: string | null;
+  retryable?: boolean | null;
+  errors?: ProblemFieldError[] | null;
+}
+
+export interface ProblemFieldError {
+  field: string;
+  code: string;
+  detail: string;
+}
+
+export interface ProgressComponent {
+  id: string;
+  optional?: boolean;
+  kind: "progress";
+  value: number;
+  label?: string | null;
+  current?: number | null;
+  total?: number | null;
+}
+
+export interface PublicJob {
+  id: string;
+  workflowId: string;
+  workflowRevision: string;
+  schemaRevision: string;
+  state: "accepted" | "queued" | "running" | "cancelling" | "collecting" | "succeeded" | "failed" | "cancelled" | "interrupted" | "collection_failed";
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  provenance?: PublicJobProvenance | null;
+  failure?: PublicJobFailure | null;
+  artifact?: PublicJobArtifact | null;
+  links: PublicJobLinks;
+}
+
+export interface PublicJobArtifact {
+  id: string;
+  mime: string;
+  size: number;
+  filename: string;
+  contentUrl: string;
+}
+
+export interface PublicJobFailure {
+  code: string;
+  detail: string;
+  retryable: boolean;
+}
+
+export interface PublicJobLinks {
+  self: string;
+  view: string;
+  events: string;
+  preview?: string | null;
+  cancel?: string | null;
+  retryCollection?: string | null;
+}
+
+export interface PublicJobProvenance {
+  manifestDigest?: string | null;
+  compiler?: CompilerIdentity | null;
+  catalogRevision?: string | null;
+  inputDigest?: string | null;
+  resolvedSeed?: number | null;
+}
+
+export interface PublicMediaMetadata {
+  id: string;
+  kind: "asset" | "artifact";
+  mediaKind: "image" | "video" | "audio";
+  mime: string;
+  size: number;
+  digest: string;
+  filename: string;
+  contentUrl: string;
 }
 
 export interface QueueState {
@@ -395,18 +630,32 @@ export interface RerunRequest {
   overrides?: Record<string, unknown>;
 }
 
+export interface RetryCollectionAction {
+  id: string;
+  label: string;
+  endpoint: string;
+  optional?: boolean;
+  kind: "retry_collection";
+  method: "POST";
+}
+
 /** A run's config snapshot is a value: it is never edited after creation. */
 export interface Run {
   id: string;
   seq: number;
   label: string;
-  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted" | "collection_failed";
   config: GenerationConfig;
   config_hash: string;
   recipe_hash: string;
   metrics?: RunMetrics;
   artifact?: Artifact;
   prompt_id?: string | null;
+  shared_submission?: JobSubmission | null;
+  shared_job_id?: string | null;
+  shared_provenance?: PublicJobProvenance | null;
+  shared_event_cursor?: number | null;
+  shared_failure_kind?: string | null;
   error?: string | null;
   favourite?: boolean;
   archived?: boolean;
@@ -452,9 +701,83 @@ export interface ScoreWeights {
   speed?: number;
 }
 
+export interface SectionComponent {
+  id: string;
+  optional?: boolean;
+  kind: "section";
+  title: string;
+  description?: string | null;
+}
+
+export interface SeedComponent {
+  id: string;
+  optional?: boolean;
+  binding: string;
+  label: string;
+  description?: string | null;
+  required: boolean;
+  visibleWhen?: Predicate[] | null;
+  kind: "seed";
+  allowRandom: boolean;
+  minimum: number;
+  maximum: number;
+  defaultValue: number | null;
+}
+
+export interface SelectComponent {
+  id: string;
+  optional?: boolean;
+  binding: string;
+  label: string;
+  description?: string | null;
+  required: boolean;
+  visibleWhen?: Predicate[] | null;
+  kind: "select";
+  options: SelectOption[];
+  defaultValue?: string | number | boolean | null;
+}
+
+export interface SelectOption {
+  value: string | number | boolean;
+  label: string;
+  description?: string | null;
+  disabled?: boolean;
+}
+
+export interface SharedSweepAxisRequest {
+  binding: string;
+  values: unknown[];
+}
+
+export interface SharedSweepRequest {
+  base: JobSubmission;
+  axes?: SharedSweepAxisRequest[];
+  repeats?: number;
+  seed_strategy?: "fixed" | "increment" | "random";
+  skip_duplicates?: boolean;
+}
+
 export interface StarRange {
   min: number;
   max: number;
+}
+
+export interface StatusComponent {
+  id: string;
+  optional?: boolean;
+  kind: "status";
+  state: "accepted" | "queued" | "running" | "cancelling" | "collecting" | "succeeded" | "failed" | "cancelled" | "interrupted" | "collection_failed";
+  label: string;
+  detail?: string | null;
+}
+
+export interface SubmitAction {
+  id: string;
+  label: string;
+  endpoint: string;
+  optional?: boolean;
+  kind: "submit";
+  method: "POST";
 }
 
 export interface SweepAxisRequest {
@@ -486,6 +809,55 @@ export interface SweepRequest {
   skip_duplicates?: boolean;
 }
 
+export interface TextComponent {
+  id: string;
+  optional?: boolean;
+  binding: string;
+  label: string;
+  description?: string | null;
+  required: boolean;
+  visibleWhen?: Predicate[] | null;
+  kind: "text";
+  defaultValue?: string | null;
+  placeholder?: string | null;
+  minLength?: number | null;
+  maxLength?: number | null;
+}
+
+export interface TextareaComponent {
+  id: string;
+  optional?: boolean;
+  binding: string;
+  label: string;
+  description?: string | null;
+  required: boolean;
+  visibleWhen?: Predicate[] | null;
+  kind: "textarea";
+  defaultValue?: string | null;
+  placeholder?: string | null;
+  minLength?: number | null;
+  maxLength?: number | null;
+  rows?: number | null;
+}
+
+export interface ToggleComponent {
+  id: string;
+  optional?: boolean;
+  binding: string;
+  label: string;
+  description?: string | null;
+  required: boolean;
+  visibleWhen?: Predicate[] | null;
+  kind: "toggle";
+  defaultValue: boolean;
+}
+
+export interface Unavailable {
+  state: "disabled" | "incompatible";
+  observedAt: string;
+  reason: AvailabilityReason;
+}
+
 /** Where the file landed. `name` is what a config field should be set to. */
 export interface Upload {
   name: string;
@@ -502,6 +874,15 @@ export interface Verdict {
   pair_groups?: number;
   matched_on?: "seed" | "recipe" | null;
   reason: string;
+}
+
+export interface VideoComponent {
+  id: string;
+  optional?: boolean;
+  kind: "video";
+  src: string;
+  mime: string;
+  poster?: string | null;
 }
 
 /** A relative judgement. ``winner is None`` means the pair was a tie. */
@@ -555,7 +936,16 @@ export const API_PATHS = [
   "/api/runs/{run_id}/preview",
   "/api/runs/{run_id}/rating",
   "/api/runs/{run_id}/rerun",
+  "/api/runs/{run_id}/retry-collection",
+  "/api/runs/{run_id}/shared",
+  "/api/runs/{run_id}/shared-events",
+  "/api/runs/{run_id}/shared-preview",
+  "/api/runs/{run_id}/shared-video",
+  "/api/runs/{run_id}/shared-view",
   "/api/runs/{run_id}/workflow",
+  "/api/shared/assets",
+  "/api/shared/assets/{asset_id}/content",
+  "/api/shared/generation",
   "/api/status",
   "/api/sweeps",
   "/api/sweeps/preview",

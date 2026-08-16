@@ -87,6 +87,15 @@ class StubComfy:
         self.object_info_reads += 1
         return {}
 
+    def combo_options(self, class_type: str, input_name: str) -> list[str]:
+        return []
+
+    def models(self, folder: str) -> list[str]:
+        return []
+
+    def is_up(self) -> bool:
+        return True
+
     def execute(
         self, prompt, *, track: bool = True, on_live=None, workflow=None, tracker=None
     ) -> Outcome:

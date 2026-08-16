@@ -10,7 +10,13 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Keyboard, Search, X } from "lucide-react"
 import { useNavigate } from "react-router"
 
-import { useClearRating, usePatchRun, useRate, useRuns, useTags } from "@/api/hooks"
+import {
+  useClearRating,
+  usePatchRun,
+  useRate,
+  useRuns,
+  useTags,
+} from "@/api/hooks"
 import type { Run } from "@/api/schema"
 import { Failure, PageHeader, Section, StripSkeleton } from "@/components/page"
 import { RunCard } from "@/components/run-card"
@@ -19,7 +25,7 @@ import { Input } from "@/components/ui/input"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useBench } from "@/lib/bench"
 import { plural } from "@/lib/format"
-import { Choice } from "@/pages/lab/config-form"
+import { Choice } from "@/components/choice"
 import type { RunListParams } from "@/api/hooks"
 
 const SORTS: Record<string, string> = {
@@ -67,18 +73,15 @@ export function RunsPage() {
   const items = runs.data?.items ?? []
   const current = items[Math.min(cursor, Math.max(0, items.length - 1))]
 
-  // Keep the cursor inside the list when a filter shortens it.
-  useEffect(() => {
-    if (cursor > items.length - 1) setCursor(Math.max(0, items.length - 1))
-  }, [items.length, cursor])
-
   const searchBox = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
       const typing =
-        target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable
       if (typing) {
         if (event.key === "Escape") target?.blur()
         return
@@ -88,7 +91,9 @@ export function RunsPage() {
       const run = current?.run
       const move = (delta: number) => {
         event.preventDefault()
-        setCursor((index) => Math.min(items.length - 1, Math.max(0, index + delta)))
+        setCursor((index) =>
+          Math.min(items.length - 1, Math.max(0, index + delta))
+        )
       }
 
       switch (event.key) {
@@ -141,7 +146,10 @@ export function RunsPage() {
   }, [current])
 
   const active =
-    statuses.length + (onlyFavourites ? 1 : 0) + (onlyRated !== undefined ? 1 : 0) + (tag ? 1 : 0)
+    statuses.length +
+    (onlyFavourites ? 1 : 0) +
+    (onlyRated !== undefined ? 1 : 0) +
+    (tag ? 1 : 0)
 
   return (
     <>
@@ -153,9 +161,9 @@ export function RunsPage() {
         <KeyboardHint />
       </PageHeader>
 
-      <div className="mb-4 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
-        <div className="relative w-full sm:w-auto sm:min-w-52 flex-1">
-          <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
+      <div className="mb-4 flex flex-col flex-wrap items-stretch gap-2 sm:flex-row sm:items-center">
+        <div className="relative w-full flex-1 sm:w-auto sm:min-w-52">
+          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             ref={searchBox}
             value={query}
@@ -177,7 +185,7 @@ export function RunsPage() {
           ) : null}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <Choice
             value={sort ?? "recent"}
             options={Object.keys(SORTS)}
@@ -185,7 +193,7 @@ export function RunsPage() {
             onChange={(value) => setSort(value as RunListParams["sort"])}
             label="Sort runs by"
             size="sm"
-            className="w-full sm:w-36 shrink-0"
+            className="w-full shrink-0 sm:w-36"
           />
 
           {tags.data && tags.data.length > 0 ? (
@@ -197,12 +205,12 @@ export function RunsPage() {
               emptyLabel="Any tag"
               placeholder="Any tag"
               size="sm"
-              className="w-full sm:w-32 shrink-0"
+              className="w-full shrink-0 sm:w-32"
             />
           ) : null}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 overflow-x-auto max-w-full py-0.5">
+        <div className="flex max-w-full flex-wrap items-center gap-2 overflow-x-auto py-0.5">
           <ToggleGroup
             size="sm"
             value={statuses}
@@ -210,7 +218,11 @@ export function RunsPage() {
             className="flex-wrap sm:flex-nowrap"
           >
             {STATUSES.map((status) => (
-              <ToggleGroupItem key={status} value={status} className="capitalize text-xs px-2 sm:px-2.5">
+              <ToggleGroupItem
+                key={status}
+                value={status}
+                className="px-2 text-xs capitalize sm:px-2.5"
+              >
                 {status}
               </ToggleGroupItem>
             ))}
@@ -227,15 +239,35 @@ export function RunsPage() {
             onValueChange={(value) => {
               const picked = new Set(value as string[])
               setOnlyFavourites(picked.has("favourite"))
-              setOnlyRated(picked.has("rated") ? true : picked.has("unrated") ? false : undefined)
+              setOnlyRated(
+                picked.has("rated")
+                  ? true
+                  : picked.has("unrated")
+                    ? false
+                    : undefined
+              )
               setShowArchived(picked.has("archived"))
             }}
             className="flex-wrap sm:flex-nowrap"
           >
-            <ToggleGroupItem value="favourite" className="text-xs px-2 sm:px-2.5">Favourites</ToggleGroupItem>
-            <ToggleGroupItem value="unrated" className="text-xs px-2 sm:px-2.5">Unrated</ToggleGroupItem>
-            <ToggleGroupItem value="rated" className="text-xs px-2 sm:px-2.5">Rated</ToggleGroupItem>
-            <ToggleGroupItem value="archived" className="text-xs px-2 sm:px-2.5">Archived</ToggleGroupItem>
+            <ToggleGroupItem
+              value="favourite"
+              className="px-2 text-xs sm:px-2.5"
+            >
+              Favourites
+            </ToggleGroupItem>
+            <ToggleGroupItem value="unrated" className="px-2 text-xs sm:px-2.5">
+              Unrated
+            </ToggleGroupItem>
+            <ToggleGroupItem value="rated" className="px-2 text-xs sm:px-2.5">
+              Rated
+            </ToggleGroupItem>
+            <ToggleGroupItem
+              value="archived"
+              className="px-2 text-xs sm:px-2.5"
+            >
+              Archived
+            </ToggleGroupItem>
           </ToggleGroup>
 
           {active > 0 ? (
@@ -258,7 +290,11 @@ export function RunsPage() {
       </div>
 
       {runs.isError ? (
-        <Failure error={runs.error} what="list the runs" onRetry={() => runs.refetch()} />
+        <Failure
+          error={runs.error}
+          what="list the runs"
+          onRetry={() => runs.refetch()}
+        />
       ) : runs.isLoading ? (
         <StripSkeleton rows={6} />
       ) : items.length === 0 ? (
@@ -277,8 +313,9 @@ export function RunsPage() {
       )}
 
       {runs.data && runs.data.total > items.length ? (
-        <p className="text-muted-foreground mt-4 text-center text-sm">
-          Showing {items.length} of {runs.data.total}. Narrow the filters to see the rest.
+        <p className="mt-4 text-center text-sm text-muted-foreground">
+          Showing {items.length} of {runs.data.total}. Narrow the filters to see
+          the rest.
         </p>
       ) : null}
     </>
@@ -288,7 +325,7 @@ export function RunsPage() {
 function EmptyRuns({ filtered }: { filtered: boolean }) {
   return (
     <Section title={filtered ? "Nothing matches" : "No runs yet"}>
-      <p className="text-muted-foreground text-sm">
+      <p className="text-sm text-muted-foreground">
         {filtered
           ? "Loosen a filter, or clear them all. Archived runs are hidden unless you ask for them."
           : "Queue something on the Lab page. One config with three repeats is enough to start comparing."}
@@ -308,10 +345,13 @@ function KeyboardHint() {
     ["↵", "open"],
   ]
   return (
-    <div className="border-rule bg-panel/60 hidden items-center gap-3 rounded-md border px-3 py-1.5 lg:flex">
-      <Keyboard className="text-muted-foreground size-3.5 shrink-0" />
+    <div className="hidden items-center gap-3 rounded-md border border-rule bg-panel/60 px-3 py-1.5 lg:flex">
+      <Keyboard className="size-3.5 shrink-0 text-muted-foreground" />
       {keys.map(([key, what]) => (
-        <span key={key} className="edge-code text-muted-foreground whitespace-nowrap">
+        <span
+          key={key}
+          className="edge-code whitespace-nowrap text-muted-foreground"
+        >
           <kbd className="text-bone/80">{key}</kbd> {what}
         </span>
       ))}
