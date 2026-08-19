@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from h3lab.api.routes import analysis, arena, events, judge, lab, library, media, runs
+from h3lab.api.routes import analysis, arena, events, judge, lab, library, media, runs, studio
 
 ROUTERS: tuple[APIRouter, ...] = (
     lab.router,
@@ -15,6 +15,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     library.router,
     media.router,
     events.router,
+    studio.router,
 )
 
 __all__ = ["ROUTERS"]

@@ -238,6 +238,9 @@ def to_editor_workflow(
         if spec is not None:
             node["id"] = ids.of(flat_id)
             node["type"] = spec.get("class_type") or node.get("type")
+            title = (spec.get("_meta") or {}).get("title")
+            if title is not None:
+                node["title"] = title
             # A node in the prompt is a node that ran; the template may have it bypassed.
             node["mode"] = 0
             _reset_slots(node)
@@ -252,6 +255,9 @@ def to_editor_workflow(
         if flat_id in by_prompt_id:
             continue
         node = _synthesised(ids.of(flat_id), str(spec.get("class_type") or ""), synthesised)
+        title = (spec.get("_meta") or {}).get("title")
+        if title is not None:
+            node["title"] = title
         nodes.append(node)
         by_prompt_id[flat_id] = node
         synthesised += 1
@@ -328,8 +334,11 @@ def prompt_of(exported: Workflow) -> Prompt:
             )
             for name, value in spec["inputs"].items()
         }
-        out[original.get(node_id, node_id)] = {
+        restored = {
             "class_type": spec["class_type"],
             "inputs": inputs,
         }
+        if spec.get("_meta"):
+            restored["_meta"] = dict(spec["_meta"])
+        out[original.get(node_id, node_id)] = restored
     return out

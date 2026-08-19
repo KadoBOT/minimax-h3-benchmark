@@ -21,7 +21,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { useBench } from "@/lib/bench"
+import { useBench } from "@/lib/bench-context"
 import { percent, plural, secPerIt, shortHash } from "@/lib/format"
 import { cn } from "@/lib/utils"
 

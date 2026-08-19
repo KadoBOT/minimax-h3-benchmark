@@ -241,6 +241,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--headed", action="store_true", help="watch it happen")
     parser.add_argument("--keep", action="store_true", help="leave the seeded data behind")
+    parser.add_argument(
+        "--comfy-url",
+        default="http://127.0.0.1:8188",
+        help="ComfyUI instance providing the read-only Studio v1 contract",
+    )
     args = parser.parse_args(argv)
 
     dist = REPO_ROOT / "web" / "dist" / "index.html"
@@ -256,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         # Its own folder, not the install's: this seeds files, and the real LoRA folder is
         # not somewhere a smoke test gets to write.
         loras_dir=SMOKE_DIR / "loras",
-        comfy_url="http://127.0.0.1:9",
+        comfy_url=args.comfy_url,
         web_dist=REPO_ROOT / "web" / "dist",
     )
     settings.ensure_dirs()

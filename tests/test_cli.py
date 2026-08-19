@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from h3lab import cli
+from h3lab.comfy.client import ComfyClient
 from h3lab.settings import Settings
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -110,7 +111,21 @@ def test_check_reports_each_subsystem_in_plain_text(settings: Settings):
     assert "checks passed" in text
 
 
-def test_check_builds_each_workflow_and_finds_no_dangling_links(settings: Settings):
+def test_check_builds_each_workflow_and_finds_no_dangling_links(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        ComfyClient,
+        "prepare_studio",
+        lambda _client, workflow, inputs: {
+            "contract_version": 1,
+            "workflow": workflow,
+            "inputs": inputs,
+            "capabilities": {},
+            "warnings": [],
+        },
+    )
+    monkeypatch.setattr(ComfyClient, "object_info_all", lambda _client: {})
     _code, text = run_inline(*as_flags(settings), "check")
     for mode in ("t2v", "flf2v", "r2v"):
         line = check_row(text, f"workflow {mode}")
@@ -134,33 +149,22 @@ def test_check_emits_machine_readable_json(settings: Settings):
     assert all({"check", "ok", "detail"} <= set(item) for item in payload["checks"])
 
 
-def test_check_says_whether_it_still_recognises_each_template(settings: Settings):
-    """After editing a workflow, the question is whether the lab can still find its parts."""
+def test_check_requires_only_a_readable_workflow_and_one_studio(settings: Settings):
     _code, text = run_inline(*as_flags(settings), "check")
     for mode in ("t2v", "flf2v", "r2v"):
-        line = check_row(text, f"roles {mode}")
-        assert line.startswith("ok  "), line
-        assert "roles" in line
+        assert check_row(text, f"workflow {mode}").startswith("ok  ")
+        studio = check_row(text, f"studio {mode}")
+        assert studio.startswith("ok  "), studio
+        assert "node " in studio
 
 
-def test_check_names_the_node_playing_each_role_when_asked(settings: Settings):
-    _code, text = run_inline(*as_flags(settings), "check", "--roles")
-    assert "conditioning" in text
-    assert "MiniMaxH3Studio" in text  # the unified control surface, found by class
-    assert "turbo_lora" in text
-    # The rule that found it is the diagnostic: a role found by "first of class" is a guess.
-    assert "class" in text
-
-
-def test_the_role_report_travels_in_the_json_too(settings: Settings):
-    _code, text = run_inline(*as_flags(settings), "check", "--roles", "--json")
+def test_json_check_has_no_graph_role_contract(settings: Settings):
+    _code, text = run_inline(*as_flags(settings), "check", "--json")
     payload = json.loads(text)
-    assert set(payload["roles"]) == {"t2v", "flf2v", "r2v"}
-    rows = payload["roles"]["flf2v"]
-    sampler = next(row for row in rows if row["role"] == "sampler")
-    assert sampler["class_type"] == "SamplerCustomAdvanced"
-    assert sampler["node"]
-    assert sampler["how"]
+    assert "roles" not in payload
+    names = {item["check"] for item in payload["checks"]}
+    for mode in ("t2v", "flf2v", "r2v"):
+        assert {f"workflow {mode}", f"studio {mode}"} <= names
 
 
 def test_check_notices_a_built_front_end(settings: Settings):

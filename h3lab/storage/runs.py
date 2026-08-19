@@ -32,7 +32,7 @@ _COLUMNS = (
     "id, seq, label, status, mode, config_json, config_hash, recipe_hash, "
     "wall_s, sec_per_it, steps, sampler_cached, cache_cleared, prompt_id, error, "
     "video_path, poster_path, strip_path, width, height, fps, frame_count, size_bytes, "
-    "favourite, archived, notes, created_at, started_at, finished_at"
+    "favourite, archived, notes, created_at, started_at, finished_at, batch_id"
 )
 
 
@@ -112,6 +112,7 @@ def row_to_run(row: sqlite3.Row, tags: tuple[str, ...] = ()) -> Run:
         created_at=row["created_at"],
         started_at=row["started_at"],
         finished_at=row["finished_at"],
+        batch_id=row["batch_id"] if "batch_id" in row.keys() else None,
     )
 
 
@@ -187,37 +188,58 @@ class RunRepository:
 
     # --- creation ----------------------------------------------------------
 
-    def create(self, config: GenerationConfig, *, status: RunStatus = "queued") -> Run:
+    def create(
+        self,
+        config: GenerationConfig,
+        *,
+        status: RunStatus = "queued",
+        batch_id: str | None = None,
+    ) -> Run:
         """Allocate id, seq, and label in one transaction so a burst cannot collide."""
-        run_id = new_id()
+        made = self.create_many([config], status=status, batch_id=batch_id)
+        return made[0]
+
+    def create_many(
+        self,
+        configs: Iterable[GenerationConfig],
+        *,
+        status: RunStatus = "queued",
+        batch_id: str | None = None,
+    ) -> list[Run]:
+        """Insert every config in one batch so a sweep or a count>1 enqueue stays grouped."""
+        wanted = list(configs)
+        if not wanted:
+            return []
+        batch = batch_id or new_id()
         created = utc_now()
-        payload = json.dumps(config.model_dump(mode="json"), ensure_ascii=False)
+        ids: list[str] = []
         with session(self._connect) as conn, transaction(conn):
             next_seq = int(scalar(conn, "SELECT COALESCE(MAX(seq), 0) + 1 FROM runs") or 1)
-            label = derive_label(next_seq, config)
-            conn.execute(
-                """
-                INSERT INTO runs (
-                    id, seq, label, status, mode, config_json, config_hash, recipe_hash,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    next_seq,
-                    label,
-                    status,
-                    config.mode,
-                    payload,
-                    config_hash(config),
-                    recipe_hash(config),
-                    created,
-                ),
-            )
-        return self.require(run_id)
-
-    def create_many(self, configs: Iterable[GenerationConfig]) -> list[Run]:
-        return [self.create(config) for config in configs]
+            for offset, config in enumerate(wanted):
+                run_id = new_id()
+                ids.append(run_id)
+                payload = json.dumps(config.model_dump(mode="json"), ensure_ascii=False)
+                conn.execute(
+                    """
+                    INSERT INTO runs (
+                        id, seq, label, status, mode, config_json, config_hash, recipe_hash,
+                        created_at, batch_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        next_seq + offset,
+                        derive_label(next_seq + offset, config),
+                        status,
+                        config.mode,
+                        payload,
+                        config_hash(config),
+                        recipe_hash(config),
+                        created,
+                        batch,
+                    ),
+                )
+        return [self.require(run_id) for run_id in ids]
 
     # --- reading -----------------------------------------------------------
 

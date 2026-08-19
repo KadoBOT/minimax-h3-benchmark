@@ -5,63 +5,17 @@
  * seconds-per-step readout moves at the rate ComfyUI reports it.
  */
 
-import { useState } from "react"
 import { Ban, Pause, Play, X } from "lucide-react"
 import { Link } from "react-router"
 
-import { useStream } from "@/api/events"
+import { useStream } from "@/api/event-stream-context"
 import { useCancelRun, useQueue, useQueueControl } from "@/api/hooks"
-import { routes } from "@/api/routes"
+import { LivePreview } from "@/components/live-preview"
 import { Section, Stat } from "@/components/page"
 import { StatusChip } from "@/components/status-chip"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { secPerIt, seconds } from "@/lib/format"
-
-/**
- * What ComfyUI is drawing, while it is drawing it.
- *
- * The URL carries the frame count so each one is a fetch of its own rather than a cache hit,
- * and a frame that cannot be shown takes itself off screen rather than leaving a broken picture
- * behind.
- *
- * The templates hand the whole clip to the preview node, so a frame is usually a few hundred
- * milliseconds of video rather than a still — which is the thing being judged here, and the
- * reason it plays rather than sits.
- */
-function LivePreview({ runId, seq, mime }: { runId: string; seq: number; mime: string | null }) {
-  // Per frame, not per run: one that arrived after the run ended, or in a container this
-  // browser will not decode, takes itself off screen without silencing the ones after it.
-  const [failed, setFailed] = useState<number | null>(null)
-  if (failed === seq) return null
-
-  const source = `${routes.runPreview(runId)}?f=${seq}`
-  const label = `Preview frame ${seq} of the run in flight`
-
-  return (
-    <div className="bg-ink/60 border-rule/60 mt-2.5 overflow-hidden rounded border">
-      {mime?.startsWith("video/") ? (
-        <video
-          src={source}
-          aria-label={label}
-          className="max-h-56 w-full object-contain"
-          autoPlay
-          loop
-          muted
-          playsInline
-          onError={() => setFailed(seq)}
-        />
-      ) : (
-        <img
-          src={source}
-          alt={label}
-          className="max-h-56 w-full object-contain"
-          onError={() => setFailed(seq)}
-        />
-      )}
-    </div>
-  )
-}
 
 export function QueuePanel() {
   const { data: queue } = useQueue()
@@ -127,6 +81,7 @@ export function QueuePanel() {
               runId={active.run.id}
               seq={progress.previewSeq}
               mime={progress.previewMime}
+              className="border-rule/60 mt-2.5 max-h-56 rounded border"
             />
           ) : null}
 

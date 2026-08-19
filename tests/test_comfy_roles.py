@@ -201,3 +201,17 @@ def test_two_nodes_of_one_class_are_reported_as_ambiguous():
     found = R.resolve(read(workflow))
     assert found.ambiguous[R.SAMPLER_SELECT] == ("1", "2")
     assert found.id(R.SAMPLER_SELECT) == "1"
+
+
+def test_base_fps_is_resolved_when_titled_base_fps():
+    workflow = {
+        "nodes": [
+            {"id": 1, "type": "PrimitiveFloat", "title": "Base FPS", "widgets_values": [24]},
+            {"id": 2, "type": "PrimitiveFloat", "title": "MS_INPUT_INTERP_FPS_FILM", "widgets_values": [48]},
+            {"id": 3, "type": "PrimitiveFloat", "title": "MS_INPUT_INTERP_FPS", "widgets_values": [120]},
+        ],
+        "links": [],
+    }
+    found = R.resolve(read(workflow))
+    assert found.id(R.BASE_FPS) == "1"
+    assert found.id(R.INTERP_FPS) == "3"

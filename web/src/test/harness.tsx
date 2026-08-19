@@ -12,18 +12,19 @@ import { MemoryRouter } from "react-router"
 import { vi } from "vitest"
 
 import { EventStreamProvider } from "@/api/events"
-import { Toaster } from "@/components/ui/sonner"
-import { TooltipProvider } from "@/components/ui/tooltip"
-import { BenchProvider } from "@/lib/bench"
 import type {
   Catalog,
   GenerationConfig,
   LabStatus,
   Meta,
+  QueueState,
   Run,
   RunView,
-  QueueState,
 } from "@/api/schema"
+import { Toaster } from "@/components/ui/sonner"
+import { TooltipProvider } from "@/components/ui/tooltip"
+import { BenchProvider } from "@/lib/bench"
+import type { StudioSession } from "@/lib/studio-runtime"
 
 export function testClient() {
   return new QueryClient({
@@ -89,6 +90,61 @@ export const CONFIG: GenerationConfig = {
   last_frame: "",
   ref_image_size: "match",
   widgets: {},
+}
+
+export const STUDIO_SESSION: StudioSession = {
+  contract_version: 1,
+  component_version: "1.1.0",
+  node_class: "MiniMaxH3Studio",
+  module_url: "/api/studio/component.js",
+  prepare_url: "/api/studio/prepare",
+  input_options: {
+    sampler_name: ["euler", "res_multistep"],
+    scheduler: ["simple", "beta"],
+    aspect_ratio: ["16:9 (Landscape)", "4:5 (Portrait)", "1.91:1 (Landscape)"],
+    interpolation: ["none", "film", "rife", "gmfss"],
+    turbo_lora: [
+      "minimax_h3_turbo_4step.safetensors",
+      "minimax_h3_turbo_8step.safetensors",
+    ],
+    attn: ["off", "sol", "comfy_kitchen"],
+  },
+  workflow: {
+    "42": {
+      class_type: "MiniMaxH3Studio",
+      inputs: {
+        mode: "T2V",
+        prompt: "",
+        duration: 5,
+        aspect_ratio: "16:9 (Landscape)",
+        megapixels: 0.5,
+        sampler_name: "euler",
+        scheduler: "simple",
+        interpolation: "none",
+        cache: false,
+        references: "{}",
+        sol_attn: false,
+        attn: "off",
+      },
+    },
+  },
+  bindings: {
+    mode: {
+      key: "mode",
+      store: "config",
+      values: { T2V: "t2v", FLF2V: "flf2v", R2V: "r2v" },
+    },
+    duration: { key: "duration_s", store: "config" },
+    megapixels: { key: "mp", store: "config" },
+    sampler_name: { key: "sampler", store: "config" },
+    interpolation: {
+      key: "interp",
+      store: "config",
+      values: { none: "off", film: "film", rife: "rife", gmfss: "gmfss" },
+    },
+    cache: { key: "cache_enabled", store: "config" },
+    references: { key: "references", store: "references" },
+  },
 }
 
 let counter = 0
@@ -284,8 +340,6 @@ export function fakeApi(routes: Record<string, Handler | unknown>) {
     }
     calls.push({ method, path: url.pathname, body })
 
-    // `null` is a legitimate response body, so presence is checked with `in` rather than by
-    // testing the value — otherwise a handler returning null reads as "no such route".
     const wildcard = Object.entries(routes)
       .filter(([pattern]) => pattern.includes("*"))
       .sort((a, b) => b[0].length - a[0].length)
@@ -333,4 +387,5 @@ export const BASELINE_ROUTES = {
   "/api/tags": [],
   "/api/recipes": [],
   "/api/insights/axes": [],
+  "/api/studio/session": STUDIO_SESSION,
 }

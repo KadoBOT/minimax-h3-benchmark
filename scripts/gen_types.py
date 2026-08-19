@@ -24,8 +24,7 @@ TARGET = REPO_ROOT / "web" / "src" / "api" / "schema.ts"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-HEADER = """/* eslint-disable */
-/**
+HEADER = """/**
  * Generated from the API's OpenAPI schema by `python scripts/gen_types.py`.
  * Do not edit by hand — `tests/test_contract.py` regenerates this file and fails on drift.
  */

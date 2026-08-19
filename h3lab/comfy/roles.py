@@ -259,7 +259,16 @@ def _pick_duration(graph: Graph, candidates: list[Node], found: dict[str, str]) 
 def _pick_base_fps(graph: Graph, candidates: list[Node], found: dict[str, str]) -> Node | None:
     expression = _by_id(graph, found.get(FRAME_COUNT))
     taken = {found.get(DURATION)}
-    node = _through(graph, expression, "values.b", [n.class_type for n in candidates])
+    interp_fps = found.get(INTERP_FPS)
+    if interp_fps:
+        taken.add(interp_fps)
+    available = [n for n in candidates if n.id not in taken]
+    non_interp = [n for n in available if "INTERP" not in _title_of(n)]
+    if non_interp:
+        node = _through(graph, expression, "values.b", [n.class_type for n in non_interp])
+        if node is not None:
+            return node
+    node = _through(graph, expression, "values.b", [n.class_type for n in available])
     return node if node is not None and node.id not in taken else None
 
 
@@ -361,7 +370,7 @@ RULES: tuple[Rule, ...] = (
     Rule(
         BASE_FPS,
         ("PrimitiveFloat", "PrimitiveInt"),
-        tags=("MS_INPUT_BASE_FPS",),
+        tags=("MS_INPUT_BASE_FPS", "BASE_FPS", "MS_BASE_FPS"),
         pick=_pick_base_fps,
         legacy=(108,),
     ),

@@ -154,6 +154,26 @@ def _rehash_configs(conn: sqlite3.Connection) -> None:
                 )
 
 
+def _ensure_batch_id(conn: sqlite3.Connection) -> None:
+    """Add `batch_id` if a earlier v5 already claimed the version number for something else."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+    if "batch_id" not in columns:
+        conn.execute("ALTER TABLE runs ADD COLUMN batch_id TEXT")
+    _backfill_batch_ids(conn)
+
+
+def _backfill_batch_ids(conn: sqlite3.Connection) -> None:
+    """Give every existing run a batch. Identical created_at means they were queued together."""
+    import hashlib
+
+    rows = conn.execute("SELECT id, created_at FROM runs WHERE batch_id IS NULL").fetchall()
+    for row in rows:
+        stamp = row["created_at"] or row["id"]
+        batch = hashlib.blake2b(str(stamp).encode("utf-8"), digest_size=8).hexdigest()
+        conn.execute("UPDATE runs SET batch_id = ? WHERE id = ?", (batch, row["id"]))
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_batch ON runs(batch_id)")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(version=1, name="initial", sql=_V1),
     Migration(version=2, name="rename-rife-to-interp", fn=_rehash_configs),
@@ -168,6 +188,15 @@ MIGRATIONS: tuple[Migration, ...] = (
     # the current model corrects the value and both digests in place, which is what lets a
     # queue full of turbo runs be repaired instead of thrown away.
     Migration(version=4, name="turbo-steps-follow-the-lora", fn=_rehash_configs),
+    Migration(
+        version=5,
+        name="queue-batch-id",
+        sql="ALTER TABLE runs ADD COLUMN batch_id TEXT;",
+        fn=_backfill_batch_ids,
+    ),
+    # Some live databases already used version 5 for unrelated columns (`shared_*`).
+    # Those skip v5, so v6 adds `batch_id` only when it is still missing.
+    Migration(version=6, name="queue-batch-id-if-missing", fn=_ensure_batch_id),
 )
 
 LATEST_VERSION = max(migration.version for migration in MIGRATIONS)

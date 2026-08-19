@@ -18,7 +18,7 @@ from h3lab.api.schemas import (
     SweepRequest,
 )
 from h3lab.domain.sweeps import SweepPreview
-from h3lab.engine.lab import DryRun, QueueState, RunPage, RunView
+from h3lab.engine.lab import DryRun, Neighbors, QueueState, RunPage, RunView
 from h3lab.storage.runs import RunNotFound
 
 router = APIRouter(tags=["runs"])
@@ -45,6 +45,13 @@ def dry_run(lab: LabDep, body: DryRunRequest) -> DryRun:
 @router.get("/runs/{run_id}")
 def get_run(lab: LabDep, run_id: str) -> RunView:
     return lab.get_run(run_id)
+
+
+@router.get("/runs/{run_id}/neighbors")
+def run_neighbors(
+    lab: LabDep, run_id: str, query: Annotated[RunQuery, Query()]
+) -> Neighbors:
+    return lab.neighbors(run_id, query.to_filter(), sort=query.sort)
 
 
 @router.get("/runs/{run_id}/workflow")

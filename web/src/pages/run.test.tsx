@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react"
+import { act, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { Route, Routes } from "react-router"
 import { describe, expect, it } from "vitest"
@@ -6,11 +6,13 @@ import { describe, expect, it } from "vitest"
 import { RunPage } from "@/pages/run"
 import type { RunView } from "@/api/schema"
 import { BASELINE_ROUTES, fakeApi, makeView, renderApp } from "@/test/harness"
+import { FakeEventSource } from "@/test/setup"
 
 function open(view: RunView = makeView({ run: { id: "r1", label: "h3/mod · 20st", tags: ["keeper"] } })) {
   const api = fakeApi({
     ...BASELINE_ROUTES,
     "/api/runs/r1": view,
+    "/api/runs/r1/neighbors": { prev: null, next: null },
     "PUT /api/runs/r1/rating": { ...view, stars: 8 },
     "PATCH /api/runs/r1": view,
     "POST /api/runs/r1/rerun": view,
@@ -26,10 +28,75 @@ function open(view: RunView = makeView({ run: { id: "r1", label: "h3/mod · 20st
 }
 
 describe("a single run", () => {
+  it("links to the previous and next run in the listing", async () => {
+    const view = makeView({ run: { id: "r1", label: "h3/mod · 20st" } })
+    fakeApi({
+      ...BASELINE_ROUTES,
+      "/api/runs/r1": view,
+      "/api/runs/r1/neighbors": {
+        prev: makeView({ run: { id: "r0", label: "older" } }),
+        next: makeView({ run: { id: "r2", label: "newer" } }),
+      },
+    })
+    renderApp(
+      <Routes>
+        <Route path="/runs/:runId" element={<RunPage />} />
+      </Routes>,
+      { route: "/runs/r1?status=succeeded" }
+    )
+    await screen.findByText("h3/mod · 20st")
+    expect(await screen.findByRole("link", { name: /prev/i })).toHaveAttribute(
+      "href",
+      "/runs/r0?status=succeeded"
+    )
+    expect(screen.getByRole("link", { name: /next/i })).toHaveAttribute(
+      "href",
+      "/runs/r2?status=succeeded"
+    )
+  })
+
+  it("shows the live preview while the run is still rendering", async () => {
+    const view = makeView({
+      run: { id: "r1", label: "h3/mod · 20st", status: "running", artifact: {} },
+    })
+    fakeApi({
+      ...BASELINE_ROUTES,
+      "/api/runs/r1": view,
+      "/api/runs/r1/neighbors": { prev: null, next: null },
+    })
+    renderApp(
+      <Routes>
+        <Route path="/runs/:runId" element={<RunPage />} />
+      </Routes>,
+      { route: "/runs/r1" }
+    )
+    await screen.findByText("h3/mod · 20st")
+    expect(screen.getByText("Rendering…")).toBeInTheDocument()
+
+    const source = FakeEventSource.instances.at(-1)!
+    act(() => {
+      source.emit({ seq: 1, kind: "run.started", run_id: "r1", data: {} })
+      source.emit({
+        seq: 2,
+        kind: "run.progress",
+        run_id: "r1",
+        data: { step: 2, step_total: 8, preview_seq: 4, preview_mime: "video/mp4" },
+      })
+    })
+
+    const clip = await screen.findByLabelText(/preview frame 4/i)
+    expect(clip.tagName).toBe("VIDEO")
+    expect(clip).toHaveAttribute("src", "/api/runs/r1/preview?f=4")
+    expect(screen.getByText(/step 2 of 8/i)).toBeInTheDocument()
+  })
+
   it("plays the video and shows what the run cost", async () => {
     open()
     expect(await screen.findByText("h3/mod · 20st")).toBeInTheDocument()
-    expect(document.querySelector("video")).toHaveAttribute("src", "/api/media/videos/r1.mp4")
+    const video = document.querySelector("video")
+    expect(video).toHaveAttribute("src", "/api/media/videos/r1.mp4")
+    expect(video).toHaveAttribute("autoplay")
+    expect(video).toHaveAttribute("loop")
     expect(screen.getByText(/1\.50.s\/it/)).toBeInTheDocument()
     expect(screen.getByText("832×480")).toBeInTheDocument()
   })

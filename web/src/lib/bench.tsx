@@ -6,23 +6,11 @@
  * most annoying thing about the old lab. Persisted to `localStorage` so a reload keeps it too.
  */
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+
+import { BENCH_LIMIT, BenchContext, type Bench } from "@/lib/bench-context"
 
 const STORAGE_KEY = "h3lab.bench"
-export const BENCH_LIMIT = 4
-
-type Bench = {
-  ids: string[]
-  has: (id: string) => boolean
-  toggle: (id: string) => void
-  add: (id: string) => void
-  remove: (id: string) => void
-  clear: () => void
-  replace: (ids: string[]) => void
-  full: boolean
-}
-
-const BenchContext = createContext<Bench | null>(null)
 
 function load(): string[] {
   try {
@@ -79,10 +67,4 @@ export function BenchProvider({ children }: { children: React.ReactNode }) {
   )
 
   return <BenchContext.Provider value={value}>{children}</BenchContext.Provider>
-}
-
-export function useBench(): Bench {
-  const value = useContext(BenchContext)
-  if (!value) throw new Error("useBench must be used inside a BenchProvider")
-  return value
 }

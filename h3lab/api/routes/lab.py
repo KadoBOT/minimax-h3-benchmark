@@ -44,7 +44,7 @@ class StarRange(BaseModel):
 
 
 class Meta(BaseModel):
-    """Vocabulary the UI needs to render its forms, fetched once and cached forever.
+    """Stable benchmark vocabulary fetched once and cached forever.
 
     Every list here comes from the same constants the validators use, so a control can never
     offer a value the API would reject.
@@ -85,7 +85,7 @@ def catalog(lab: LabDep, refresh: bool = False) -> Catalog:
 
 
 @router.get("/meta")
-def meta(settings: SettingsDep) -> Meta:
+def meta(lab: LabDep, settings: SettingsDep) -> Meta:
     return Meta(
         axes=list(AXES),
         criteria=list(CRITERIA),

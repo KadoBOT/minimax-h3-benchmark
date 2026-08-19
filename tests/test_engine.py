@@ -398,7 +398,11 @@ def test_a_submission_carries_the_editor_workflow_for_the_saved_image(
     assert workflow is not None
     assert prompt_of(workflow) == stub.submitted[0]
     assert workflow["extra"]["h3lab"]["run_id"] == run.id
-    assert "FrameInterpolate" in {node["type"] for node in workflow["nodes"]}
+    studio = next(
+        node for node in stub.submitted[0].values()
+        if node["class_type"] == "MiniMaxH3Studio"
+    )
+    assert studio["inputs"]["interpolation"] == "film"
 
 
 def test_a_rejected_graph_marks_the_run_failed_with_the_reason(runner_setup, base_config, stub):
@@ -559,27 +563,25 @@ def test_the_workflow_cache_reads_each_template_once(lab_settings):
     assert cache.get("flf2v") is not first
 
 
-def test_an_unknown_mode_has_no_template(lab_settings):
-    from h3lab.comfy.graph import WorkflowError
-
-    with pytest.raises(WorkflowError):
-        WorkflowCache(lab_settings).get("nonsense")
+def test_every_mode_resolves_the_same_canonical_template(lab_settings):
+    cache = WorkflowCache(lab_settings)
+    assert cache.get("nonsense") == cache.get("t2v")
 
 
-def _copy_template(settings, mode: str, source: str = "flf2v") -> Path:
+def _copy_template(settings) -> Path:
     """A writable template in the settings' own workflow folder."""
-    from tests.conftest import legacy_workflow_path
+    from tests.conftest import unified_workflow_path
 
-    target = settings.workflow_dir / f"minimax_h3_{mode}_workflow.json"
+    target = settings.workflow_dir / "minimax_h3_unified_guided_dual.json"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(legacy_workflow_path(source).read_text(encoding="utf-8"), "utf-8")
+    target.write_text(unified_workflow_path().read_text(encoding="utf-8"), "utf-8")
     return target
 
 
 def test_a_template_edited_on_disk_is_read_again(tmp_path, lab_settings):
     """Editing a workflow used to need a restart, which is how a stale graph got benchmarked."""
     settings = lab_settings.with_overrides(workflow_dir=tmp_path / "workflows")
-    path = _copy_template(settings, "flf2v")
+    path = _copy_template(settings)
     cache = WorkflowCache(settings)
 
     first = cache.get("flf2v")
@@ -596,7 +598,7 @@ def test_a_template_edited_on_disk_is_read_again(tmp_path, lab_settings):
 
 def test_a_template_reload_is_announced(tmp_path, lab_settings):
     settings = lab_settings.with_overrides(workflow_dir=tmp_path / "workflows")
-    path = _copy_template(settings, "t2v")
+    path = _copy_template(settings)
     bus = EventBus()
     cache = WorkflowCache(settings, events=bus)
     cache.get("t2v")
@@ -614,7 +616,7 @@ def test_a_template_reload_is_announced(tmp_path, lab_settings):
 def test_a_template_nobody_touched_is_not_reloaded(tmp_path, lab_settings):
     """Re-reading a 130 kB file per run is waste; re-parsing it mid-sweep is a changed history."""
     settings = lab_settings.with_overrides(workflow_dir=tmp_path / "workflows")
-    _copy_template(settings, "flf2v")
+    _copy_template(settings)
     cache = WorkflowCache(settings)
 
     first = cache.get("flf2v")
@@ -666,12 +668,7 @@ def test_a_dry_run_names_a_missing_input_file(lab, base_config):
     assert any("absent.png" in problem for problem in report.problems)
 
 
-def test_a_dry_run_catches_a_cache_setting_the_node_will_refuse(lab, base_config):
-    """The Spectrum node validates cross-field rules itself, but only once it holds the GPU.
-
-    Before this, an impossible combination patched into a perfectly well-formed graph and
-    the refusal arrived minutes later as a node error. A dry run answers in milliseconds.
-    """
+def test_a_dry_run_leaves_cache_validation_to_the_workflow(lab, base_config):
     report = lab.dry_run(
         base_config.merged(
             first_frame="frame.png",
@@ -680,15 +677,14 @@ def test_a_dry_run_catches_a_cache_setting_the_node_will_refuse(lab, base_config
             widgets={"warmup_steps": 6, "bootstrap_first_forecast": True, "degree": 1},
         )
     )
-    assert report.ok is False
-    assert "bootstrap_first_forecast requires warmup_steps <= 1" in report.problems
+    assert report.ok is True
+    assert report.problems == []
 
 
-def test_a_dry_run_catches_a_resolution_the_node_will_refuse(lab, base_config):
-    """Below 0.1 MP the graph submits and is rejected, so the queue slot is wasted for nothing."""
+def test_a_dry_run_leaves_resolution_validation_to_studio(lab, base_config):
     report = lab.dry_run(base_config.merged(first_frame="frame.png", mp=0.05))
-    assert report.ok is False
-    assert any("mp must be at least 0.1" in problem for problem in report.problems)
+    assert report.ok is True
+    assert report.problems == []
 
 
 @pytest.mark.parametrize("preset", ["conservative", "moderate", "aggressive"])

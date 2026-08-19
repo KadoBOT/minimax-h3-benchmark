@@ -24,7 +24,9 @@ import { PreviewCard } from "@base-ui/react/preview-card"
 
 import { routes } from "@/api/routes"
 import type { Run } from "@/api/schema"
-import { seconds } from "@/lib/format"
+import { RunConfigList } from "@/components/run-facts"
+import { label as fieldLabel } from "@/lib/config"
+import { seconds, secPerIt } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 export const STRIP_TILES = 6
@@ -189,7 +191,7 @@ function HoverPreview({
         >
           <PreviewCard.Popup
             data-testid="hover-card"
-            className="border-rule bg-panel w-[30rem] max-w-[85vw] overflow-hidden rounded-lg border shadow-2xl"
+            className="border-rule bg-panel w-[34rem] max-w-[92vw] overflow-hidden rounded-lg border shadow-2xl"
           >
             <video
               key={video}
@@ -204,17 +206,28 @@ function HoverPreview({
               className="bg-ink block w-full"
               style={{ aspectRatio: width && height ? `${width} / ${height}` : "16 / 9" }}
             />
-            <div className="edge-code text-muted-foreground flex items-center gap-2.5 px-2.5 py-1.5">
-              <span className="text-bone/70 truncate tracking-[0.14em]">{run.label}</span>
-              <span className="ml-auto shrink-0">
-                {width && height ? `${width}×${height}` : "—"}
-                {duration ? ` · ${seconds(duration)}` : ""}
-              </span>
-            </div>
+            <HoverFacts run={run} duration={duration} />
           </PreviewCard.Popup>
         </PreviewCard.Positioner>
       </PreviewCard.Portal>
     </PreviewCard.Root>
+  )
+}
+
+function HoverFacts({ run, duration }: { run: Run; duration: number | null }) {
+  const { width, height } = run.artifact ?? {}
+  return (
+    <div className="max-h-[40vh] overflow-y-auto px-2.5 py-2" data-testid="hover-facts">
+      <div className="edge-code text-muted-foreground mb-2 flex items-center gap-2.5">
+        <span className="text-bone/70 truncate tracking-[0.14em]">{run.label}</span>
+        <span className="ml-auto shrink-0">
+          {width && height ? `${width}×${height}` : "—"}
+          {duration ? ` · ${seconds(duration)}` : ""}
+          {run.metrics?.sec_per_it ? ` · ${secPerIt(run.metrics.sec_per_it)}` : ""}
+        </span>
+      </div>
+      <RunConfigList config={run.config} labels={(field) => fieldLabel(undefined, field)} compact />
+    </div>
   )
 }
 

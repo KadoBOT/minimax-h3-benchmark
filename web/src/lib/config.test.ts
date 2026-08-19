@@ -27,6 +27,17 @@ describe("draft configs", () => {
     expect(inertFields(BASE).has("sol_preset")).toBe(true)
   })
 
+  it("uses explicit attention rather than its legacy Sol projection", () => {
+    expect(
+      inertFields({ ...BASE, sol_attn: true, widgets: { attn: "comfy_kitchen" } }).has(
+        "sol_preset"
+      )
+    ).toBe(true)
+    expect(
+      inertFields({ ...BASE, sol_attn: false, widgets: { attn: "sol" } }).has("sol_preset")
+    ).toBe(false)
+  })
+
   it("names what a mode is still missing, in the label the API uses", () => {
     expect(missingInputs({ mode: "t2v" }, META)).toEqual([])
     expect(missingInputs({ mode: "flf2v" }, META)).toEqual(["First frame"])

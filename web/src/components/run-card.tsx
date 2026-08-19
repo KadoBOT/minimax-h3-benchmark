@@ -6,13 +6,15 @@
  */
 
 import { Heart, RotateCw, Rows3 } from "lucide-react"
-import { Link } from "react-router"
+import { Link, useLocation } from "react-router"
 
-import { useBench } from "@/lib/bench"
+import { useBench } from "@/lib/bench-context"
 import { useClearRating, usePatchRun, useRate, useRerun } from "@/api/hooks"
 import type { RunView } from "@/api/schema"
 import { EdgeCode } from "@/components/edge-code"
 import { Filmstrip } from "@/components/filmstrip"
+import { LivePreview } from "@/components/live-preview"
+import { useLivePreview } from "@/components/use-live-preview"
 import { StarRating } from "@/components/stars"
 import { StatusChip } from "@/components/status-chip"
 import { Button } from "@/components/ui/button"
@@ -29,7 +31,9 @@ export function RunCard({
   onFocus?: () => void
 }) {
   const { run } = view
+  const location = useLocation()
   const bench = useBench()
+  const live = useLivePreview(run.id)
   const staged = bench.has(run.id)
   const rate = useRate()
   const clear = useClearRating()
@@ -49,8 +53,20 @@ export function RunCard({
       )}
     >
       <div className="flex min-w-0 flex-col gap-2.5 sm:flex-row sm:items-start sm:gap-3">
-        <Link to={`/runs/${run.id}`} className="w-full min-w-0 sm:flex-1">
-          <Filmstrip run={run} className="rounded-sm" />
+        <Link
+          to={{ pathname: `/runs/${run.id}`, search: location.search }}
+          className="w-full min-w-0 sm:flex-1"
+        >
+          {run.status === "running" && live ? (
+            <LivePreview
+              runId={run.id}
+              seq={live.seq}
+              mime={live.mime}
+              className="border-rule/60 max-h-48 rounded-sm border"
+            />
+          ) : (
+            <Filmstrip run={run} className="rounded-sm" />
+          )}
         </Link>
         <div className="border-rule/40 flex w-full min-w-0 shrink-0 flex-wrap items-center justify-between gap-2 border-t pt-2 sm:w-36 sm:flex-col sm:items-end sm:justify-start sm:gap-1.5 sm:border-t-0 sm:pt-0">
           <StatusChip run={run} />

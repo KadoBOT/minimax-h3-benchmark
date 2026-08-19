@@ -48,11 +48,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = sub.add_parser("check", help="report what is wrong without queueing anything")
     check.add_argument("--json", action="store_true", help="machine-readable output")
-    check.add_argument(
-        "--roles",
-        action="store_true",
-        help="name the node playing each role in every template",
-    )
 
     sub.add_parser("import-legacy", help="pull runs out of the previous lab's database")
     sub.add_parser("routes", help="list every route the API answers")
@@ -73,37 +68,11 @@ def settings_from(args: argparse.Namespace) -> Settings:
     )
 
 
-def _probe_config(mode: str, diffusion_model: str = "", turbo_lora: str = ""):
-    """A config that satisfies a mode's input requirements without touching the disk.
-
-    Two of the three modes refuse to exist without an input file, so the placeholder names
-    below stand in: patching the graph only needs a name to write into a load node.
-    """
-    from h3lab.domain.config import MODE_NEEDS, GenerationConfig
-
-    needs = next((n for n in MODE_NEEDS if n.mode == mode), None)
-    fields: dict[str, object] = {"mode": mode}
-    if diffusion_model:
-        fields["diffusion_model"] = diffusion_model
-    if turbo_lora:
-        fields["turbo_lora"] = turbo_lora
-    wanted = list(getattr(needs, "requires_all", ()) or ())
-    any_of = list(getattr(needs, "requires_any", ()) or ())
-    if any_of:
-        wanted.append(any_of[0])
-    for name in wanted:
-        field = GenerationConfig.model_fields[name]
-        plural = field.annotation is not str
-        fields[name] = ("probe.png",) if plural else "probe.png"
-    return GenerationConfig(**fields)
-
-
 class Report:
-    """What `check` found: one row per subsystem, plus the role table per template."""
+    """What `check` found: one row per subsystem."""
 
     def __init__(self) -> None:
         self.checks: list[dict[str, object]] = []
-        self.roles: dict[str, list[dict[str, object]]] = {}
 
     def record(self, name: str, ok: bool, detail: str) -> None:
         self.checks.append({"check": name, "ok": ok, "detail": detail})
@@ -113,31 +82,13 @@ class Report:
         return all(bool(item["ok"]) for item in self.checks)
 
 
-def _role_detail(rows: list[dict[str, object]]) -> tuple[bool, str]:
-    """One sentence about how well the lab still recognises a template.
-
-    An essential role with nobody to play it is a failure — that template cannot be built.
-    Every other absence is information: no template has every optional node.
-    """
-    found = [row for row in rows if row["node"]]
-    missing = [str(row["role"]) for row in rows if not row["node"] and row["essential"]]
-    detail = f"{len(found)}/{len(rows)} roles"
-    if missing:
-        return False, f"{detail} — no {', '.join(missing)}"
-    guessed = [str(row["role"]) for row in rows if row["how"] == "first of class"]
-    if guessed:
-        detail += f" — guessed: {', '.join(guessed)}"
-    return True, detail
-
-
 def _checks(settings: Settings) -> Report:
     """Each check answers one question a user would otherwise answer by trial and error."""
-    from h3lab.comfy import roles as R
-    from h3lab.comfy.catalog import _comfy_loras, _comfy_unets
     from h3lab.comfy.client import ComfyClient, ComfyError
-    from h3lab.comfy.graph import build, load_workflow, missing_links
+    from h3lab.comfy.graph import load_workflow
     from h3lab.comfy.schema import Schemas
-    from h3lab.comfy.workflow import read
+    from h3lab.comfy.studio import find_studio_node
+    from h3lab.comfy.workflow import executable
     from h3lab.domain.config import GEN_MODES
     from h3lab.engine import artifacts
 
@@ -151,16 +102,12 @@ def _checks(settings: Settings) -> Report:
     # schemas in hand, a widget a node pack renamed is reported here instead of at run time.
     client = ComfyClient(settings.comfy_url, connect_timeout_s=1.5, request_timeout_s=5.0)
     schemas = Schemas()
-    unets: list[str] = []
-    loras: list[str] = []
     try:
         stats = client.system_stats()
         devices = stats.get("devices") or []
         name = devices[0].get("name", "unknown") if devices else "unknown"
         record("comfyui", True, f"{settings.comfy_url} — {name}")
         schemas = Schemas.from_client(client)
-        unets = _comfy_unets(client)
-        loras = _comfy_loras(client)
         record(
             "node schemas",
             bool(schemas),
@@ -168,40 +115,31 @@ def _checks(settings: Settings) -> Report:
         )
     except ComfyError as exc:
         record("comfyui", False, f"{settings.comfy_url} — {exc}")
-    finally:
-        client.close()
-
-    probe_unet = unets[0] if unets else ""
-    probe_lora = loras[0] if loras else ""
 
     for mode in GEN_MODES:
         path = settings.workflow_path(mode)
         if not path.is_file():
             record(f"workflow {mode}", False, f"missing at {path}")
-            record(f"roles {mode}", False, f"missing at {path}")
+            record(f"studio {mode}", False, f"missing at {path}")
             continue
         try:
             template = load_workflow(path)
-            # Roles are read from the template itself, not from the patched graph: the
-            # question is what this file contains, not what one probe config switched on.
-            graph = read(template, widget_names=schemas.widget_names)
-            rows = R.resolve(graph).report(graph)
-            report.roles[mode] = rows
-            record(f"roles {mode}", *_role_detail(rows))
-        except Exception as exc:  # noqa: BLE001 - an unreadable template is the answer
-            record(f"roles {mode}", False, f"{type(exc).__name__}: {exc}")
-        try:
-            prompt, _graph, _roles = build(
-                template, _probe_config(mode, probe_unet, probe_lora), output_tag="check", schemas=schemas
+            prompt, _graph = executable(
+                template,
+                widget_names=schemas.widget_names,
             )
-            trouble = missing_links(prompt) + schemas.problems(prompt)
+            studio_id, _studio = find_studio_node(prompt)
             record(
                 f"workflow {mode}",
-                not trouble,
-                f"{len(prompt)} nodes" if not trouble else "; ".join(trouble),
+                True,
+                f"{len(prompt)} nodes",
             )
+            record(f"studio {mode}", True, f"node {studio_id}")
         except Exception as exc:  # noqa: BLE001 - a broken template is the answer, not a crash
             record(f"workflow {mode}", False, f"{type(exc).__name__}: {exc}")
+            record(f"studio {mode}", False, f"{type(exc).__name__}: {exc}")
+
+    client.close()
 
     models_dir = settings.models_dir
     if models_dir.is_dir():
@@ -228,30 +166,11 @@ def _checks(settings: Settings) -> Report:
     return report
 
 
-def _write_roles(report: Report, out: TextIO) -> None:
-    """The role table: which node the lab believes plays each part, and why it believes it."""
-    for mode, rows in report.roles.items():
-        out.write(f"\nroles — {mode}\n")
-        width = max(len(str(row["role"])) for row in rows)
-        for row in rows:
-            if not row["node"]:
-                out.write(f"  {str(row['role']).ljust(width)}  —\n")
-                continue
-            line = f"  {str(row['role']).ljust(width)}  {row['node']:<8} {row['class_type']}"
-            title = str(row["title"] or "")
-            if title:
-                line += f" “{title}”"
-            out.write(f"{line}  ({row['how']})\n")
-
-
-def command_check(settings: Settings, as_json: bool, out: TextIO, roles: bool = False) -> int:
+def command_check(settings: Settings, as_json: bool, out: TextIO) -> int:
     report = _checks(settings)
     results = report.checks
     if as_json:
-        payload: dict[str, object] = {"ok": report.ok, "checks": results}
-        if roles:
-            payload["roles"] = report.roles
-        json.dump(payload, out, indent=2)
+        json.dump({"ok": report.ok, "checks": results}, out, indent=2)
         out.write("\n")
     else:
         width = max(len(str(item["check"])) for item in results)
@@ -264,13 +183,11 @@ def command_check(settings: Settings, as_json: bool, out: TextIO, roles: bool = 
             if failed
             else f"\nall {len(results)} checks passed\n"
         )
-        if roles:
-            _write_roles(report, out)
     # ffmpeg and the front end are optional; the lab runs without them.
     fatal = {"comfyui"} | {
         item["check"]
         for item in results
-        if str(item["check"]).startswith(("workflow", "roles"))
+        if str(item["check"]).startswith(("workflow", "studio"))
     }
     return EXIT_PROBLEM if any(not i["ok"] and i["check"] in fatal for i in results) else EXIT_OK
 
@@ -387,9 +304,7 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
     settings = settings_from(args)
 
     handlers = {
-        "check": lambda: command_check(
-            settings, as_json=args.json, out=stream, roles=getattr(args, "roles", False)
-        ),
+        "check": lambda: command_check(settings, as_json=args.json, out=stream),
         "routes": lambda: command_routes(settings, stream),
         "openapi": lambda: command_openapi(settings, stream),
         "import-legacy": lambda: command_import_legacy(settings, stream),

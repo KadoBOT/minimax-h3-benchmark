@@ -6,7 +6,7 @@
  * "the number keys stopped rating", not "a hook changed shape".
  */
 
-import { screen, waitFor, within } from "@testing-library/react"
+import { act, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
@@ -17,18 +17,113 @@ import {
   makeView,
   renderApp,
 } from "@/test/harness"
+import { FakeEventSource } from "@/test/setup"
 
 function page(views = [makeView(), makeView()]) {
   return { items: views, total: views.length, limit: 60, offset: 0 }
 }
 
+/** Serves each /api/runs query only the statuses it asked for, so the three buckets do not duplicate. */
+function runsByStatus(views: ReturnType<typeof makeView>[]) {
+  return (url: URL) => {
+    const wanted = url.searchParams.getAll("status")
+    const items = wanted.length ? views.filter((view) => wanted.includes(view.run.status)) : views
+    return page(items)
+  }
+}
+
 describe("the runs list", () => {
+  it("groups runs that were queued together", async () => {
+    const views = [
+      makeView({ run: { id: "a", batch_id: "q1", label: "sweep a" } }),
+      makeView({ run: { id: "b", batch_id: "q1", label: "sweep b" } }),
+      makeView({ run: { id: "c", batch_id: "q2", label: "lone" } }),
+    ]
+    fakeApi({ ...BASELINE_ROUTES, "/api/runs": runsByStatus(views) })
+    renderApp(<RunsPage />)
+
+    expect(await screen.findByText("sweep a")).toBeInTheDocument()
+    expect(screen.getAllByTestId("run-batch")).toHaveLength(1)
+    expect(screen.getByText("2 runs")).toBeInTheDocument()
+    expect(screen.getByText("lone")).toBeInTheDocument()
+  })
+
+  it("pins a running run above finished ones", async () => {
+    fakeApi({
+      ...BASELINE_ROUTES,
+      "/api/runs": runsByStatus([
+        makeView({ run: { id: "done", label: "already done", status: "succeeded" } }),
+        makeView({ run: { id: "live", label: "in flight", status: "running" } }),
+      ]),
+    })
+    renderApp(<RunsPage />)
+
+    const cards = await screen.findAllByTestId("run-card")
+    expect(cards[0]).toHaveAttribute("data-run-id", "live")
+    expect(cards[1]).toHaveAttribute("data-run-id", "done")
+    expect(screen.getByRole("heading", { name: "In flight" })).toBeInTheDocument()
+  })
+
+  it("shows the live preview on a running run once ComfyUI draws a frame", async () => {
+    fakeApi({
+      ...BASELINE_ROUTES,
+      "/api/runs": runsByStatus([
+        makeView({ run: { id: "live", label: "in flight", status: "running" } }),
+      ]),
+    })
+    renderApp(<RunsPage />)
+    await screen.findByText("in flight")
+
+    const source = FakeEventSource.instances.at(-1)!
+    act(() => {
+      source.emit({ seq: 1, kind: "run.started", run_id: "live", data: {} })
+      source.emit({
+        seq: 2,
+        kind: "run.progress",
+        run_id: "live",
+        data: { step: 2, step_total: 4, preview_seq: 3, preview_mime: "image/jpeg" },
+      })
+    })
+
+    const frame = await screen.findByRole("img", { name: /preview frame 3/i })
+    expect(frame).toHaveAttribute("src", "/api/runs/live/preview?f=3")
+  })
+
+  it("keeps finished runs visible when the queue is long", async () => {
+    const queued = Array.from({ length: 8 }, (_, index) =>
+      makeView({ run: { id: `q${index}`, label: `waiting ${index}`, status: "queued" } })
+    )
+    fakeApi({
+      ...BASELINE_ROUTES,
+      "/api/runs": runsByStatus([
+        ...queued,
+        makeView({ run: { id: "done", label: "already done", status: "succeeded" } }),
+      ]),
+    })
+    renderApp(<RunsPage />)
+
+    expect(await screen.findByText("already done")).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "Queued" })).toBeInTheDocument()
+    expect(screen.getAllByTestId("run-card").length).toBeLessThan(8 + 1)
+    expect(screen.getByRole("button", { name: /more queued/i })).toBeInTheDocument()
+  })
+
+  it("keeps the filter in the URL so opening a run and going back does not lose it", async () => {
+    fakeApi({ ...BASELINE_ROUTES, "/api/runs": runsByStatus([makeView({ run: { id: "a" } })]) })
+    renderApp(<RunsPage />, { route: "/runs?status=succeeded" })
+
+    const chip = await screen.findByRole("button", { name: "succeeded" })
+    expect(chip.getAttribute("aria-pressed") ?? chip.getAttribute("data-pressed")).toBeTruthy()
+    const card = await screen.findByTestId("run-card")
+    expect(card.querySelector("a")?.getAttribute("href")).toBe("/runs/a?status=succeeded")
+  })
+
   it("shows a strip and an edge code for every run", async () => {
     const views = [
       makeView({ run: { id: "a", label: "euler · 20 steps" }, stars: 8 }),
       makeView({ run: { id: "b", label: "dpmpp · 20 steps" } }),
     ]
-    fakeApi({ ...BASELINE_ROUTES, "/api/runs": page(views) })
+    fakeApi({ ...BASELINE_ROUTES, "/api/runs": runsByStatus(views) })
 
     renderApp(<RunsPage />)
 
@@ -62,7 +157,7 @@ describe("the runs list", () => {
         },
       }),
     ]
-    fakeApi({ ...BASELINE_ROUTES, "/api/runs": page(views) })
+    fakeApi({ ...BASELINE_ROUTES, "/api/runs": runsByStatus(views) })
 
     renderApp(<RunsPage />)
 
@@ -75,7 +170,7 @@ describe("the runs list", () => {
     const views = [makeView({ run: { id: "a" } }), makeView({ run: { id: "b" } })]
     const { calls } = fakeApi({
       ...BASELINE_ROUTES,
-      "/api/runs": page(views),
+      "/api/runs": runsByStatus(views),
       "PUT /api/runs/*/rating": () => views[0],
     })
 
@@ -96,7 +191,7 @@ describe("the runs list", () => {
     const views = [makeView({ run: { id: "a" } }), makeView({ run: { id: "b" } })]
     const { calls } = fakeApi({
       ...BASELINE_ROUTES,
-      "/api/runs": page(views),
+      "/api/runs": runsByStatus(views),
       "PUT /api/runs/*/rating": () => views[0],
     })
 
@@ -124,7 +219,7 @@ describe("the runs list", () => {
     const views = [makeView({ run: { id: "a" } })]
     const { calls } = fakeApi({
       ...BASELINE_ROUTES,
-      "/api/runs": page(views),
+      "/api/runs": runsByStatus(views),
       "PUT /api/runs/*/rating": () => views[0],
     })
 
@@ -139,7 +234,7 @@ describe("the runs list", () => {
 
   it("stages a run onto the bench with c, and remembers it across a remount", async () => {
     const views = [makeView({ run: { id: "a" } })]
-    fakeApi({ ...BASELINE_ROUTES, "/api/runs": page(views) })
+    fakeApi({ ...BASELINE_ROUTES, "/api/runs": runsByStatus(views) })
 
     const first = renderApp(<RunsPage />)
     await screen.findAllByTestId("run-card")
@@ -159,7 +254,7 @@ describe("the runs list", () => {
     const views = [makeView({ run: { id: "a", favourite: false } })]
     const { calls } = fakeApi({
       ...BASELINE_ROUTES,
-      "/api/runs": page(views),
+      "/api/runs": runsByStatus(views),
       "PATCH /api/runs/*": () => views[0],
     })
 
@@ -176,7 +271,7 @@ describe("the runs list", () => {
 
   it("does not rate while the search box has focus", async () => {
     const views = [makeView({ run: { id: "a" } })]
-    const { calls } = fakeApi({ ...BASELINE_ROUTES, "/api/runs": page(views) })
+    const { calls } = fakeApi({ ...BASELINE_ROUTES, "/api/runs": runsByStatus(views) })
 
     renderApp(<RunsPage />)
     await screen.findAllByTestId("run-card")
@@ -190,7 +285,7 @@ describe("the runs list", () => {
   })
 
   it("asks the server for the filter the user picked", async () => {
-    const { fetchMock } = fakeApi({ ...BASELINE_ROUTES, "/api/runs": page([]) })
+    const { fetchMock } = fakeApi({ ...BASELINE_ROUTES, "/api/runs": runsByStatus([]) })
 
     renderApp(<RunsPage />)
     await screen.findByText(/nothing matches|no runs yet/i)
@@ -206,7 +301,7 @@ describe("the runs list", () => {
   })
 
   it("says what to do when there is nothing to judge", async () => {
-    fakeApi({ ...BASELINE_ROUTES, "/api/runs": page([]) })
+    fakeApi({ ...BASELINE_ROUTES, "/api/runs": runsByStatus([]) })
     renderApp(<RunsPage />)
     expect(await screen.findByText(/queue something on the lab page/i)).toBeInTheDocument()
   })
@@ -214,7 +309,7 @@ describe("the runs list", () => {
   async function failedCard(error: string) {
     fakeApi({
       ...BASELINE_ROUTES,
-      "/api/runs": page([
+      "/api/runs": runsByStatus([
         makeView({
           run: {
             id: "a",

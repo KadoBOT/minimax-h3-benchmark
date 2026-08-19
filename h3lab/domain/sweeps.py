@@ -12,7 +12,7 @@ from typing import Annotated, Any, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from h3lab.domain.config import GenerationConfig, config_hash
+from h3lab.domain.config import STUDIO_EXTRA_FIELDS, GenerationConfig, config_hash
 
 SeedStrategy = Literal["fixed", "increment", "random"]
 SEED_STRATEGIES: tuple[SeedStrategy, ...] = ("fixed", "increment", "random")
@@ -29,7 +29,7 @@ class SweepAxis(BaseModel):
     @field_validator("field")
     @classmethod
     def _known_field(cls, value: str) -> str:
-        if value not in GenerationConfig.model_fields:
+        if value not in GenerationConfig.model_fields and value not in STUDIO_EXTRA_FIELDS:
             raise ValueError(f"unknown config field {value!r}")
         if value == "seed":
             raise ValueError("vary the seed with repeats and seed_strategy, not as an axis")

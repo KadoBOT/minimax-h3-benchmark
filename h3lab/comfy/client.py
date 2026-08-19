@@ -13,11 +13,19 @@ import httpx
 
 from h3lab.comfy.graph import Prompt
 from h3lab.comfy.progress import PREVIEW_MESSAGE, ProgressTracker
+from h3lab.comfy.studio import (
+    STUDIO_API_ROOT,
+    STUDIO_CONTRACT_VERSION,
+    StudioContractError,
+    response_error,
+    validate_manifest,
+    validate_prepare_response,
+)
 
 LiveCallback = Callable[[dict[str, Any]], None]
 
-VIDEO_SUFFIXES = (".mp4", ".webm", ".mkv", ".gif")
-OUTPUT_KEYS = ("gifs", "videos", "images")
+VIDEO_SUFFIXES = (".mp4", ".webm", ".mkv", ".mov", ".gif")
+OUTPUT_KEYS = ("videos", "gifs")
 
 
 class ComfyError(RuntimeError):
@@ -150,6 +158,21 @@ class ComfyClient:
 
     # --- plumbing ----------------------------------------------------------
 
+    def _request_raw(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Any | None = None,
+        timeout: float | None = None,
+    ) -> httpx.Response:
+        try:
+            return self._http.request(
+                method, path, json=json_body, timeout=self._timeout(timeout)
+            )
+        except httpx.HTTPError as exc:
+            raise ComfyUnreachable(f"cannot reach ComfyUI at {self.base_url}: {exc}") from exc
+
     def _call(
         self,
         method: str,
@@ -158,12 +181,12 @@ class ComfyClient:
         json_body: Any | None = None,
         timeout: float | None = None,
     ) -> Any:
-        try:
-            response = self._http.request(
-                method, path, json=json_body, timeout=self._timeout(timeout)
-            )
-        except httpx.HTTPError as exc:
-            raise ComfyUnreachable(f"cannot reach ComfyUI at {self.base_url}: {exc}") from exc
+        response = self._request_raw(
+            method,
+            path,
+            json_body=json_body,
+            timeout=timeout,
+        )
         if response.status_code >= 400:
             body = response.text[:2000]
             raise ComfyError(f"HTTP {response.status_code} on {path}: {body}")
@@ -201,6 +224,76 @@ class ComfyClient:
                 continue
             return parse_combo(entries[input_name])
         return []
+
+    def studio_manifest(self) -> dict[str, Any]:
+        path = f"{STUDIO_API_ROOT}/manifest"
+        response = self._request_raw("GET", path)
+        self._raise_studio_http_error(response, path)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise StudioContractError(
+                "contract_unavailable",
+                "Studio manifest response is not valid JSON",
+            ) from exc
+        return validate_manifest(payload)
+
+    def studio_component(self) -> tuple[bytes, str]:
+        path = f"{STUDIO_API_ROOT}/component.js"
+        response = self._request_raw("GET", path)
+        self._raise_studio_http_error(response, path)
+        return response.content, response.headers.get(
+            "content-type",
+            "application/javascript",
+        )
+
+    def prepare_studio(
+        self,
+        workflow: dict[str, Any],
+        inputs: dict[str, Any],
+    ) -> dict[str, Any]:
+        path = f"{STUDIO_API_ROOT}/prepare"
+        response = self._request_raw(
+            "POST",
+            path,
+            json_body={
+                "contract_version": STUDIO_CONTRACT_VERSION,
+                "workflow": workflow,
+                "inputs": inputs,
+            },
+        )
+        self._raise_studio_http_error(response, path)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise StudioContractError(
+                "invalid_response",
+                "Studio prepare response is not valid JSON",
+            ) from exc
+        return validate_prepare_response(payload)
+
+    @staticmethod
+    def _raise_studio_http_error(response: httpx.Response, path: str) -> None:
+        if response.status_code < 400:
+            return
+        if response.status_code == 404:
+            raise StudioContractError(
+                "contract_unavailable",
+                "MiniMax H3 Studio contract v1 is not installed in ComfyUI",
+            )
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(error, dict) and error.get("code"):
+            raise response_error(
+                payload,
+                fallback=f"Studio request failed ({response.status_code})",
+            )
+        raise ComfyError(
+            f"HTTP {response.status_code} on {path}: {response.text[:2000]}"
+        )
 
     def models(self, folder: str) -> list[str]:
         """List model names available under a folder in ComfyUI (/models/{folder})."""
@@ -377,17 +470,6 @@ class ComfyClient:
                     if name.lower().endswith(VIDEO_SUFFIXES):
                         return (
                             name,
-                            str(item.get("subfolder") or ""),
-                            str(item.get("type") or "output"),
-                        )
-        for node_output in outputs.values():
-            for value in node_output.values():
-                if not isinstance(value, list):
-                    continue
-                for item in value:
-                    if isinstance(item, dict) and item.get("filename"):
-                        return (
-                            str(item["filename"]),
                             str(item.get("subfolder") or ""),
                             str(item.get("type") or "output"),
                         )

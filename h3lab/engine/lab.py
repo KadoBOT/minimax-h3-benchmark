@@ -14,9 +14,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from h3lab.comfy.catalog import Catalog, CatalogCache
 from h3lab.comfy.client import ComfyClient
 from h3lab.comfy.editor import run_provenance, to_editor_workflow
-from h3lab.comfy.catalog import InstalledNameError, resolve_run_weights
-from h3lab.comfy.graph import apply_config, describe, missing_links
+from h3lab.comfy.graph import describe
 from h3lab.comfy.progress import Preview
+from h3lab.comfy.studio import prepare_prompt, studio_session_prompt
 from h3lab.domain.arena import (
     ArenaRun,
     ArenaStandings,
@@ -26,6 +26,7 @@ from h3lab.domain.arena import (
 )
 from h3lab.domain.config import (
     FieldDiff,
+    GenMode,
     GenerationConfig,
     config_diff,
     config_hash,
@@ -77,6 +78,15 @@ class RunPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class Neighbors(BaseModel):
+    """The two runs beside this one in the listing the person is walking."""
+
+    model_config = ConfigDict(frozen=True)
+
+    prev: RunView | None = None
+    next: RunView | None = None
 
 
 class Comparison(BaseModel):
@@ -232,6 +242,20 @@ class Lab:
     def catalog(self, *, refresh: bool = False) -> Catalog:
         return self.catalog_cache.get(refresh=refresh)
 
+    def studio_session(self, mode: GenMode) -> dict[str, Any]:
+        from h3lab.comfy.form import studio_bindings
+
+        workflow = self.workflows.get(mode)
+        prompt = studio_session_prompt(workflow, self.runner.schemas())
+        manifest = self.client.studio_manifest()
+        return {
+            **manifest,
+            "module_url": "/api/studio/component.js",
+            "prepare_url": "/api/studio/prepare",
+            "workflow": prompt,
+            "bindings": studio_bindings(),
+        }
+
     def status(self) -> LabStatus:
         counts = self.runs.status_counts()
         return LabStatus(
@@ -359,10 +383,32 @@ class Lab:
         return self._views(created)
 
     def enqueue(self, config: GenerationConfig, *, count: int = 1) -> list[RunView]:
-        return self._announce([self.runs.create(config) for _ in range(max(1, count))])
+        n = max(1, count)
+        if n == 1:
+            return self._announce([self.runs.create(config)])
+        return self._announce(self.runs.create_many([config] * n))
 
     def enqueue_many(self, configs: Iterable[GenerationConfig]) -> list[RunView]:
-        return self._announce([self.runs.create(config) for config in configs])
+        return self._announce(self.runs.create_many(configs))
+
+    def neighbors(
+        self,
+        run_id: str,
+        filter_: RunFilter | None = None,
+        *,
+        sort: SortKey = "recent",
+    ) -> Neighbors:
+        """The previous and next run in the same listing the person is walking."""
+        page = self.list_runs(filter_, sort=sort, limit=500, offset=0)
+        ids = [view.run.id for view in page.items]
+        try:
+            index = ids.index(run_id)
+        except ValueError:
+            return Neighbors()
+        return Neighbors(
+            prev=page.items[index - 1] if index > 0 else None,
+            next=page.items[index + 1] if index + 1 < len(page.items) else None,
+        )
 
     def rerun(self, run_id: str, *, overrides: dict[str, Any] | None = None) -> RunView:
         """Queue the same experiment again, optionally with a change. The origin is kept."""
@@ -386,20 +432,20 @@ class Lab:
     def dry_run(self, config: GenerationConfig) -> DryRun:
         """Build the graph without submitting it, and report anything already wrong."""
         identity = {"config_hash": config_hash(config), "recipe_hash": recipe_hash(config)}
-        try:
-            config = resolve_run_weights(config, self.client)
-        except InstalledNameError as exc:
-            return DryRun(ok=False, problems=[str(exc)], **identity)
         problems = preflight(config, self.settings, self.client)
         try:
             workflow = self.workflows.get(config.mode)
-            prompt = apply_config(workflow, config, output_tag="dry-run")
+            prompt = prepare_prompt(
+                self.client,
+                workflow,
+                config,
+                schemas=self.runner.schemas(),
+            ).prompt
         except Exception as exc:  # noqa: BLE001 - a broken template is a reportable answer
             return DryRun(ok=False, problems=[*problems, str(exc)], **identity)
-        dangling = missing_links(prompt)
         return DryRun(
-            ok=not problems and not dangling,
-            problems=[*problems, *(f"dangling link {item}" for item in dangling)],
+            ok=not problems,
+            problems=problems,
             graph=GraphSummary(**describe(prompt)),
             duplicate_of=self.runs.hashes().get(config_hash(config)),
             **identity,
@@ -415,7 +461,12 @@ class Lab:
         """
         run = self.runs.require(run_id)
         workflow = self.workflows.get(run.config.mode)
-        prompt = apply_config(workflow, run.config, output_tag=run.id)
+        prompt = prepare_prompt(
+            self.client,
+            workflow,
+            run.config,
+            schemas=self.runner.schemas(),
+        ).prompt
         return to_editor_workflow(workflow, prompt, provenance=run_provenance(run))
 
     def preview(self, run_id: str) -> Preview | None:

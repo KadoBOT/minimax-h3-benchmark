@@ -7,45 +7,18 @@
  * replayed on reconnect so a dropped socket cannot leave a stale page behind.
  */
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 
+import {
+  EventStreamContext,
+  type EventStream,
+  type Progress,
+} from "./event-stream-context"
 import { keys } from "./keys"
 import { routes } from "./routes"
 import type { Event as LabEvent } from "./schema"
-
-export type Progress = {
-  runId: string
-  /** Sampler step, when the active node reports one. */
-  step: number | null
-  stepTotal: number | null
-  secPerIt: number | null
-  /** Human name of the node currently executing, e.g. "sampler". */
-  node: string | null
-  /**
-   * How many frames ComfyUI has drawn of this run so far, or null when it draws none.
-   *
-   * The frame itself is fetched from the run's preview URL; this counter is what tells the
-   * browser a newer one exists, and doubles as the cache key that gets it.
-   */
-  previewSeq: number | null
-  /** What that frame is: a picture, or a short clip of the latent as it stands. */
-  previewMime: string | null
-}
-
-type Stream = {
-  /** Whether the browser currently holds the stream open. */
-  live: boolean
-  /** Sequence number of the last event applied, mirroring the server's cursor. */
-  seq: number
-  /** Progress of the run the worker is on, or null between runs. */
-  progress: Progress | null
-  /** The most recent event, for pages that want to react to one specific kind. */
-  last: LabEvent | null
-}
-
-const StreamContext = createContext<Stream>({ live: false, seq: 0, progress: null, last: null })
 
 const RETRY_MS = 2_000
 
@@ -104,12 +77,11 @@ export function EventStreamProvider({ children }: { children: React.ReactNode })
     }
   }, [client])
 
-  const value = useMemo<Stream>(() => ({ live, seq, progress, last }), [live, seq, progress, last])
-  return <StreamContext.Provider value={value}>{children}</StreamContext.Provider>
-}
-
-export function useStream(): Stream {
-  return useContext(StreamContext)
+  const value = useMemo<EventStream>(
+    () => ({ live, seq, progress, last }),
+    [live, seq, progress, last]
+  )
+  return <EventStreamContext.Provider value={value}>{children}</EventStreamContext.Provider>
 }
 
 function nextProgress(current: Progress | null, event: LabEvent): Progress | null {

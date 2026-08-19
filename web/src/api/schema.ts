@@ -1,4 +1,3 @@
-/* eslint-disable */
 /**
  * Generated from the API's OpenAPI schema by `python scripts/gen_types.py`.
  * Do not edit by hand — `tests/test_contract.py` regenerates this file and fails on drift.
@@ -197,7 +196,7 @@ export interface GenerationConfig {
   turbo?: boolean;
   turbo_lora?: string;
   turbo_lora_strength?: number;
-  interp?: "off" | "film" | "rife";
+  interp?: "off" | "film" | "rife" | "gmfss";
   upscaler?: boolean;
   clean_vram?: boolean;
   cache_enabled?: boolean;
@@ -290,7 +289,7 @@ export interface Matchup {
   reason?: string;
 }
 
-/** Vocabulary the UI needs to render its forms, fetched once and cached forever. */
+/** Stable benchmark vocabulary fetched once and cached forever. */
 export interface Meta {
   axes: AxisDef[];
   criteria: string[];
@@ -315,6 +314,12 @@ export interface ModeNeeds {
   requires_all?: string[];
   requires_any?: string[];
   accepts?: string[];
+}
+
+/** The two runs beside this one in the listing the person is walking. */
+export interface Neighbors {
+  prev?: RunView | null;
+  next?: RunView | null;
 }
 
 export interface Ok {
@@ -415,6 +420,7 @@ export interface Run {
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
+  batch_id?: string | null;
 }
 
 /** Measured facts. ``sec_per_it`` is the same unit ComfyUI's tqdm prints. */
@@ -455,6 +461,12 @@ export interface ScoreWeights {
 export interface StarRange {
   min: number;
   max: number;
+}
+
+export interface StudioPrepareRequest {
+  contract_version?: 1;
+  workflow: Record<string, unknown>;
+  inputs: Record<string, unknown>;
 }
 
 export interface SweepAxisRequest {
@@ -552,11 +564,15 @@ export const API_PATHS = [
   "/api/runs/dry-run",
   "/api/runs/{run_id}",
   "/api/runs/{run_id}/cancel",
+  "/api/runs/{run_id}/neighbors",
   "/api/runs/{run_id}/preview",
   "/api/runs/{run_id}/rating",
   "/api/runs/{run_id}/rerun",
   "/api/runs/{run_id}/workflow",
   "/api/status",
+  "/api/studio/component.js",
+  "/api/studio/prepare",
+  "/api/studio/session",
   "/api/sweeps",
   "/api/sweeps/preview",
   "/api/tags",

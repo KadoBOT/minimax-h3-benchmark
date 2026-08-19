@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
@@ -22,12 +21,7 @@ else:
     DEFAULT_COMFY_INPUT_DIR = Path.home() / "ComfyUI" / "input"
     DEFAULT_COMFY_WORKFLOW_DIR = Path.home() / "ComfyUI" / "user" / "default" / "workflows"
 
-
-_CONDITIONING_CLASS = {
-    "MiniMaxH3TextToVideo": "t2v",
-    "MiniMaxH3ImageToVideo": "flf2v",
-    "MiniMaxH3ReferenceToVideo": "r2v",
-}
+UNIFIED_WORKFLOW_NAME = "minimax_h3_unified_guided_dual.json"
 
 _ENV_PREFIX = "H3LAB_"
 
@@ -68,7 +62,7 @@ class Settings:
     # None means the sibling of the diffusion models, which is where ComfyUI keeps LoRAs.
     loras_dir: Path | None = None
     comfy_input_dir: Path = DEFAULT_COMFY_INPUT_DIR
-    workflow_dir: Path = REPO_ROOT
+    workflow_dir: Path = DEFAULT_COMFY_WORKFLOW_DIR
     web_dist: Path = REPO_ROOT / "web" / "dist"
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
@@ -86,20 +80,8 @@ class Settings:
     def lora_models_dir(self) -> Path:
         return self.loras_dir or self.models_dir.parent / "loras"
 
-    def workflow_path(self, mode: str) -> Path:
-        """The editor workflow template for a generation mode.
-
-        Exact lab names win. Otherwise the newest file in the directory that
-        classifies as this mode (by filename token, then by conditioning class).
-        The repo-root copies are the last fallback so tests and a machine
-        without ComfyUI still have a graph.
-        """
-        fallback = REPO_ROOT / f"minimax_h3_{mode}_workflow.json"
-        return resolve_workflow_path(
-            self.workflow_dir,
-            mode,
-            fallback if self.workflow_dir != REPO_ROOT else None,
-        )
+    def workflow_path(self, _mode: str) -> Path:
+        return self.workflow_dir / UNIFIED_WORKFLOW_NAME
 
     @property
     def videos_dir(self) -> Path:
@@ -222,69 +204,3 @@ def discover_models_dir() -> Path | None:
         if candidate.is_dir():
             return candidate
     return None
-
-
-
-def _mode_from_filename(name: str) -> str | None:
-    lowered = name.lower()
-    if re.search(r"(^|[^a-z])flf2v([^a-z]|$)", lowered):
-        return "flf2v"
-    if re.search(r"(^|[^a-z])r2v([^a-z]|$)", lowered):
-        return "r2v"
-    if re.search(r"(^|[^a-z])i2v([^a-z]|$)", lowered):
-        return "flf2v"
-    if re.search(r"(^|[^a-z])t2v([^a-z]|$)", lowered):
-        return "t2v"
-    return None
-
-
-def _mode_from_graph(path: Path) -> str | None:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    found = {
-        mode
-        for class_type, mode in _CONDITIONING_CLASS.items()
-        if class_type in text
-    }
-    return next(iter(found)) if len(found) == 1 else None
-
-
-def classify_h3_workflow(path: Path) -> str | None:
-    if path.name.startswith("_") or path.name.endswith(".bak") or ".pre-" in path.name:
-        return None
-    return _mode_from_filename(path.name) or _mode_from_graph(path)
-
-
-UNIFIED_WORKFLOW_NAMES: tuple[str, ...] = (
-    "minimax_h3_unified.json",
-    "minimax_h3_unified_guided.json",
-)
-UNIFIED_MODES: frozenset[str] = frozenset({"flf2v", "t2v", "r2v"})
-
-
-def resolve_workflow_path(
-    directory: Path, mode: str, fallback: Path | None = None
-) -> Path:
-    if mode in UNIFIED_MODES:
-        for name in UNIFIED_WORKFLOW_NAMES:
-            unified = directory / name
-            if unified.is_file():
-                return unified
-    exact = directory / f"minimax_h3_{mode}_workflow.json"
-    if exact.is_file():
-        return exact
-    best: tuple[int, Path] | None = None
-    if directory.is_dir():
-        for path in directory.glob("*.json"):
-            if classify_h3_workflow(path) != mode:
-                continue
-            stamp = path.stat().st_mtime_ns
-            if best is None or stamp > best[0]:
-                best = (stamp, path)
-    if best is not None:
-        return best[1]
-    if fallback is not None and fallback.is_file():
-        return fallback
-    return exact

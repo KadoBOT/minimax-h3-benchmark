@@ -20,7 +20,7 @@ if (!base) {
   process.exit(2)
 }
 
-/** Requests we expect to fail: the lab talks to a ComfyUI that is not running. */
+/** Optional requests that may fail without invalidating the browser boundary under test. */
 const TOLERATED = [/\/api\/catalog/, /\/api\/dry-run/, /favicon/]
 
 const problems = []
@@ -30,45 +30,46 @@ const TOUR = [
   {
     name: "lab",
     path: "/",
-    expect: ["Set up a run", "Queue", "Sweep", "This config"],
+    expect: ["Set up a run", "This config"],
     async act(page) {
       // Interpolation has three answers, named by the API rather than by the browser. A
       // segmented control that renders but does not move the selection is the failure to catch.
-      const off = page.getByRole("button", { name: "Off", exact: true })
-      const film = page.getByRole("button", { name: "FILM Net", exact: true })
+      const interpolation = page.locator(".h3s-cluster").filter({ hasText: "FRAME INTERPOLATION" })
+      const off = interpolation.getByRole("button", { name: "Off", exact: true })
+      const film = interpolation.getByRole("button", { name: "FILM", exact: true })
       await page.getByRole("button", { name: "RIFE", exact: true }).waitFor({ timeout: 10_000 })
-      if ((await off.getAttribute("aria-pressed")) !== "true") {
+      if ((await off.getAttribute("data-on")) !== "1") {
         throw new Error("interpolation did not start off")
       }
       await film.click()
-      if ((await film.getAttribute("aria-pressed")) !== "true") {
+      if ((await film.getAttribute("data-on")) !== "1") {
         throw new Error("clicking FILM Net did not select it")
       }
-      if ((await off.getAttribute("aria-pressed")) !== "false") {
+      if ((await off.getAttribute("data-on")) !== null) {
         throw new Error("two interpolators were selected at once")
       }
       await off.click()
 
       // A frame mode arrives with a frame already chosen, and shows it. The image has to load
       // from the API for real — a broken src is invisible in the DOM but obvious on screen.
-      await page.getByRole("button", { name: "First / last frame" }).click()
-      const thumb = page.getByTestId("thumb").first()
+      await page.locator('.h3s-mode[data-mode="FLF2V"]').click()
+      const thumb = page.locator(".h3s-slot").filter({ hasText: "First frame" }).locator("img")
       await thumb.waitFor({ timeout: 10_000 })
       const drawn = await thumb.evaluate((node) => node.naturalWidth > 0)
       if (!drawn) throw new Error("the picked frame's thumbnail never decoded")
 
       await page.getByRole("combobox", { name: "Add a sweep axis" }).click()
-      await page.getByRole("option").first().click()
+      await page.getByRole("option", { name: "Attention", exact: true }).click()
 
       // References have no default here, and a sweep inherits the base config — so it has to
       // refuse rather than queue a matrix where every run fails the same validation.
       const preview = page.getByRole("button", { name: "Preview" })
-      await page.getByRole("button", { name: "References" }).click()
+      await page.locator('.h3s-mode[data-mode="R2V"]').click()
       await page.getByText(/still needs/i).first().waitFor({ timeout: 10_000 })
       if (!(await preview.isDisabled())) throw new Error("preview stayed live on an invalid base")
 
       // Text-only needs nothing extra, so the same matrix must now survive a real round trip.
-      await page.getByRole("button", { name: "Text only" }).click()
+      await page.locator('.h3s-mode[data-mode="T2V"]').click()
       await page.getByRole("button", { name: /^Queue \d+ runs?$/ }).waitFor({ timeout: 10_000 })
       await preview.click()
       await page.getByText("Already run", { exact: true }).waitFor({ timeout: 15_000 })
@@ -90,7 +91,11 @@ const TOUR = [
       )
     },
   },
-  { name: "compare", path: "/compare", expect: ["Compare"] },
+  {
+    name: "compare",
+    path: "/compare",
+    expect: ["Stage runs on the bench to read their differences side by side"],
+  },
   {
     name: "arena",
     path: "/arena",
@@ -144,7 +149,7 @@ const TOUR = [
       await page.getByRole("columnheader", { name: "Elo" }).first().waitFor({ timeout: 15_000 })
       const rows = page.locator("tbody tr")
       if ((await rows.count()) < 2) throw new Error("a ranking needs at least two values")
-      await page.getByText(/^Best /).first().waitFor({ timeout: 10_000 })
+      await page.getByRole("main").getByText(/^Best /).first().waitFor({ timeout: 10_000 })
     },
   },
   { name: "insights", path: "/insights", expect: ["What actually matters"] },
@@ -200,7 +205,8 @@ const step = async (name, label, body) => {
   try {
     await body()
   } catch (error) {
-    note(name, error.message.split("\n")[0])
+    note(name, error.message)
+    await page.screenshot({ path: shot(`${name}-failure`) }).catch(() => {})
   }
   const ok = problems.length === before
   console.log(`${ok ? "ok  " : "FAIL"} ${name.padEnd(14)} ${label}`)
@@ -268,9 +274,14 @@ await step("workflow", "downloaded a run's graph and read it", async () => {
   if (unplaced.length) {
     throw new Error(`${unplaced.length} node(s) have no position`)
   }
-  const types = new Set(workflow.nodes.map((node) => node.type))
-  if (!types.has("FrameInterpolate")) throw new Error("the film run's graph has no interpolator")
-  if (types.has("RIFEInterpolation")) throw new Error("the graph kept an interpolator it did not use")
+  const studio = workflow.nodes.find((node) => node.type === "MiniMaxH3Studio")
+  if (!studio) throw new Error("the film run's graph has no Studio node")
+  const studioValues =
+    studio.widgets_values_named ??
+    (!Array.isArray(studio.widgets_values) ? studio.widgets_values : null)
+  if (studioValues?.interpolation !== "film") {
+    throw new Error("the film run's Studio node is not configured for FILM")
+  }
   if (workflow.extra?.h3lab?.run_id !== film.id) {
     throw new Error("the graph does not name the run it came from")
   }
@@ -373,41 +384,36 @@ await step("hover", "a rested pointer played the clip", async () => {
  */
 await step("turbo-lora", "picked a LoRA, swept the axis", async () => {
   await page.goto(base, { waitUntil: "networkidle" })
-  const turbo = page.getByRole("switch", { name: /^Turbo/ })
-  await turbo.waitFor({ timeout: 15_000 })
-  await turbo.click()
-
-  const picker = page.getByRole("combobox", { name: "Turbo LoRA" })
+  const picker = page
+    .locator('[data-testid="studio-runtime"] select:has(option[value="none"])')
+    .first()
   await picker.waitFor({ timeout: 10_000 })
-  await page.getByText("4-step schedule").waitFor({ timeout: 10_000 })
-
-  await picker.click()
-  const options = page.getByRole("option")
-  await options.first().waitFor({ timeout: 10_000 })
-  const count = await options.count()
-  if (count < 2) throw new Error(`the picker offers ${count} LoRA(s), so there is no choice`)
-  const names = await options.allInnerTexts()
-  if (names.some((name) => /\.safetensors/.test(name))) {
-    throw new Error(`the options are raw filenames: ${names[0]}`)
+  await picker.scrollIntoViewIfNeeded()
+  const values = await picker.locator("option").evaluateAll((options) =>
+    options.map((option) => option.value)
+  )
+  const four = values.find((value) => /4step/i.test(value))
+  const eight = values.find((value) => /8step/i.test(value))
+  if (!four || !eight) {
+    throw new Error(`the picker needs both a 4-step and 8-step LoRA: ${values.join(", ")}`)
   }
-  // The 8-step file, chosen by what it reads as rather than by its position in the list.
-  const eight = names.findIndex((name) => /8step/i.test(name))
-  if (eight < 0) throw new Error(`no 8-step LoRA among ${names.join(", ")}`)
-  await options.nth(eight).click()
+  await picker.selectOption(four)
+  await page.getByText(/locked to 4 by turbo LoRA/i).waitFor({ timeout: 10_000 })
+  await picker.selectOption(eight)
 
   // The schedule moved with the pick, and the steps field shows it while refusing edits.
-  await page.getByText("8-step schedule").waitFor({ timeout: 10_000 })
-  const steps = page.getByRole("spinbutton", { name: "Steps" })
+  await page.getByText(/locked to 8 by turbo LoRA/i).waitFor({ timeout: 10_000 })
+  const sample = page.locator(".h3s-card").filter({ hasText: "Sample" }).first()
+  const steps = sample.locator(".h3s-field").filter({ hasText: "STEPS" }).locator("input")
   if (await steps.isEnabled()) throw new Error("a turbo run let its step count be edited")
   if ((await steps.inputValue()) !== "8") {
     throw new Error(`the steps field reads ${await steps.inputValue()}, not the LoRA's 8`)
   }
 
-  // Strength is the second half of the axis, and it is a slider with no text input.
-  const strength = page.getByRole("slider", { name: "Turbo strength" })
-  await strength.focus()
-  await page.keyboard.press("ArrowLeft")
-  await page.getByText(/0\.9\d ×/).waitFor({ timeout: 10_000 })
+  // Strength remains a Lab-owned benchmark setting even though Studio chooses the LoRA.
+  const strength = page.getByRole("spinbutton", { name: "Turbo strength" })
+  await strength.fill("0.95")
+  await page.getByText("0.95×", { exact: true }).waitFor({ timeout: 10_000 })
 
   await picker.scrollIntoViewIfNeeded()
   await page.screenshot({ path: shot("turbo-lora") })
@@ -428,7 +434,7 @@ await step("turbo-lora", "picked a LoRA, swept the axis", async () => {
   const body = await priced.json()
   const loras = new Set(body.items.map((item) => item.config.turbo_lora))
   if (loras.size < 2) throw new Error("the swept matrix names one LoRA")
-  if (!body.items.every((item) => item.config.turbo_lora_strength < 1)) {
+  if (!body.items.every((item) => item.config.turbo_lora_strength === 0.95)) {
     throw new Error("the matrix dropped the strength the form was set to")
   }
   await page.screenshot({ path: shot("turbo-lora-sweep") })

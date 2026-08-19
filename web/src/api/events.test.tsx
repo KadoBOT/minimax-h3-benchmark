@@ -11,7 +11,8 @@ import { QueryClientProvider } from "@tanstack/react-query"
 import { Toaster } from "@/components/ui/sonner"
 import { describe, expect, it } from "vitest"
 
-import { EventStreamProvider, useStream } from "@/api/events"
+import { useStream } from "@/api/event-stream-context"
+import { EventStreamProvider } from "@/api/events"
 import { FakeEventSource } from "@/test/setup"
 import { testClient } from "@/test/harness"
 

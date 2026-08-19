@@ -21,7 +21,8 @@ import { Failure, PageHeader, Section, Spinner } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { secPerIt } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { ArenaNav, useArenaFilterParam } from "./nav"
+import { ArenaNav } from "./nav"
+import { useArenaFilterParam } from "./use-arena-filter-param"
 
 export function StandingsPage() {
   const minStars = useArenaFilterParam()

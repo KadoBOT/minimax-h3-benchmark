@@ -20,6 +20,9 @@ UI_ONLY_TYPES: Final[frozenset[str]] = frozenset(
         "MarkdownNote",
         "Fast Groups Bypasser (rgthree)",
         "Fast Bypasser (rgthree)",
+        "Fast Groups Muter (rgthree)",
+        "Fast Muter (rgthree)",
+        "Fast Actions Button (rgthree)",
         "Reroute",
     }
 )
@@ -161,6 +164,7 @@ WIDGET_ORDER: Final[dict[str, list[str] | None]] = {
         "pass2_sampler_name",
         "pass2_shift",
         "pass2_scale",
+        "attn",
         "h3s_ui",
     ],
     "MiniMaxH3ImageToVideo": ["prompt", "width", "height", "length"],

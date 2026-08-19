@@ -18,6 +18,7 @@ output does not need.
 from __future__ import annotations
 
 import json
+import re
 from collections import deque
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -43,10 +44,13 @@ __all__ = [
     "WorkflowError",
     "apply_config",
     "build",
+    "build_studio_source",
     "describe",
     "load_workflow",
     "missing_links",
     "output_filename_prefix",
+    "repair_studio_video_boundaries",
+    "restore_studio_contract",
     "referenced_files",
     "to_api_prompt",
 ]
@@ -93,6 +97,14 @@ _MINTED: dict[str, tuple[str, tuple[str, ...]]] = {
 
 STUDIO_CLASS = "MiniMaxH3Studio"
 STUDIO_MODES: dict[str, str] = {"t2v": "T2V", "flf2v": "FLF2V", "r2v": "R2V"}
+_JSON_WIDGETS: frozenset[str] = frozenset({"references", "guides"})
+
+
+def _studio_widget_value(name: str, value: Any) -> Any:
+    """Studio stores references and guides as JSON strings."""
+    if name in _JSON_WIDGETS and not isinstance(value, str):
+        return json.dumps(value, separators=(",", ":"))
+    return value
 STUDIO_INTERP: dict[str, str] = {"off": "none", "film": "film", "rife": "rife", "gmfss": "gmfss"}
 STUDIO_TURBO_NONE = "none"
 
@@ -118,6 +130,122 @@ def to_api_prompt(workflow: dict[str, Any], **kwargs: Any) -> Prompt:
     return read_api_prompt(workflow, **kwargs)
 
 
+def _h3_tagged(graph: Graph, role: str) -> list[Node]:
+    marker = f"[h3s:{role}]"
+    return [node for node in graph if marker in node.title.lower()]
+
+
+def restore_studio_contract(graph: Graph, contract: Graph) -> None:
+    """Restore contract role hints while keeping the live graph authoritative."""
+    contract_nodes = list(contract)
+    tagged = [
+        (
+            source,
+            re.findall(r"\[H3S:[^\]]+\]", source.title, flags=re.IGNORECASE),
+        )
+        for source in contract_nodes
+    ]
+    tagged = [(source, tags) for source, tags in tagged if tags]
+    contract_ids = {node.id for node in contract_nodes}
+    used: set[str] = set()
+    pending: list[tuple[Node, list[str]]] = []
+
+    def without_tags(title: str) -> str:
+        return re.sub(
+            r"\s*\[H3S:[^\]]+\]", "", title, flags=re.IGNORECASE
+        ).strip()
+
+    def base_title(title: str) -> str:
+        return " ".join(without_tags(title).split()).casefold()
+
+    def apply(target: Node, tags: list[str]) -> None:
+        target.title = f"{without_tags(target.title)} {' '.join(tags)}".strip()
+        used.add(target.id)
+
+    for source, tags in tagged:
+        target = graph.get(source.id)
+        if (
+            target is not None
+            and target.class_type == source.class_type
+            and target.id not in used
+        ):
+            apply(target, tags)
+        else:
+            pending.append((source, tags))
+
+    for source, tags in pending:
+        same_class = [
+            node
+            for node in graph
+            if node.class_type == source.class_type and node.id not in used
+        ]
+        wanted_title = base_title(source.title)
+        title_matches = [
+            node for node in same_class if base_title(node.title) == wanted_title
+        ]
+        new_nodes = [node for node in same_class if node.id not in contract_ids]
+        if len(title_matches) == 1:
+            apply(title_matches[0], tags)
+        elif len(new_nodes) == 1:
+            apply(new_nodes[0], tags)
+
+
+def repair_studio_video_boundaries(graph: Graph) -> None:
+    """Restore links hidden by cyclic editor subgraph boundaries."""
+    dual_branches: list[tuple[Node, str]] = []
+    for selector in _h3_tagged(graph, "select/dual"):
+        for _name, source_id, _slot in selector.links():
+            source = graph.get(source_id)
+            if source is None:
+                continue
+            for role in ("dual/pass1", "dual/pass2"):
+                if f"[h3s:{role}]" in source.title.lower():
+                    dual_branches.append((source, role))
+    if dual_branches:
+        for node in graph:
+            for role in ("dual/pass1", "dual/pass2"):
+                node.title = node.title.replace(f"[H3S:{role}]", "").strip()
+        for source, role in dual_branches:
+            source.title = f"{source.title} [H3S:{role}]".strip()
+            if "[h3s:clean-vram]" in source.title.lower():
+                links = list(source.links())
+                if len(links) == 1:
+                    upstream = graph.get(links[0][1])
+                    if upstream is not None:
+                        upstream.title = f"{upstream.title} [H3S:{role}]".strip()
+
+    none = _h3_tagged(graph, "interpolation/none")
+    post_grade = _h3_tagged(graph, "post-grade")
+    source = post_grade[0] if post_grade else (none[0] if none else None)
+    if source is None:
+        return
+
+    for value in ("film", "rife", "gmfss"):
+        for node in _h3_tagged(graph, f"interpolation/{value}"):
+            for name in _IMAGE_INPUTS:
+                if name in node.input_types:
+                    node.inputs[name] = [source.id, 0]
+                    break
+
+    for selector in _h3_tagged(graph, "select/interpolation"):
+        sources = [
+            graph.get(upstream)
+            for name, upstream, _slot in selector.links()
+            if name.startswith("any_")
+        ]
+        if any(
+            candidate is not None
+            and "[h3s:interpolation/none]" in candidate.title.lower()
+            for candidate in sources
+        ):
+            continue
+        for index in range(1, 10):
+            name = f"any_{index:02d}"
+            if name not in selector.inputs:
+                selector.inputs[name] = [source.id, 0]
+                break
+
+
 # --- the patch -------------------------------------------------------------
 
 
@@ -131,11 +259,17 @@ class _Patch:
         *,
         output_tag: str,
         schemas: Schemas,
+        contract_workflow: dict[str, Any] | None = None,
     ) -> None:
         self.config = config
         self.output_tag = output_tag
         self.schemas = schemas
         self.graph = read(workflow, widget_names=schemas.widget_names)
+        if contract_workflow is not None:
+            restore_studio_contract(
+                self.graph,
+                read(contract_workflow, widget_names=schemas.widget_names),
+            )
         self.roles = R.resolve(self.graph)
         self.minted = 0
         missing = self.roles.missing()
@@ -293,6 +427,18 @@ class _Patch:
         self.schemas.fill_defaults(prompt)
         return prompt
 
+    def build_studio_source(self) -> Prompt:
+        if not self.is_studio():
+            return self.build()
+        self.wire_studio()
+        self.wire_studio_scalars()
+        self.wire_studio_model_chain()
+        self.repair_studio_video_boundaries()
+        self.retain_studio_graph()
+        prompt = self.graph.prompt()
+        self.schemas.fill_defaults(prompt)
+        return prompt
+
     def wire_studio(self) -> None:
         """Write the MiniMaxH3Studio API. Engine nodes stay linked to its outputs."""
         config = self.config
@@ -303,33 +449,44 @@ class _Patch:
             "video_audios": list(config.ref_video_audios),
             "audios": list(config.ref_audios),
         }
-        self.set_known(
-            studio,
-            {
-                "mode": STUDIO_MODES[config.mode],
-                "prompt": config.prompt,
-                "duration": config.duration_s,
-                "aspect_ratio": config.aspect_ratio or DEFAULT_ASPECT,
-                "megapixels": config.mp,
-                "ref_image_size": config.ref_image_size,
-                "first_frame": config.first_frame,
-                "last_frame": config.last_frame,
-                "references": json.dumps(references, separators=(",", ":")),
-                "steps": config.effective_steps,
-                "turbo": config.turbo,
-                "turbo_lora": config.turbo_lora_file or STUDIO_TURBO_NONE,
-                "scheduler": config.scheduler,
-                "sampler_name": config.sampler,
-                "cache": config.cache_active,
-                "upscale_ltx": False,
-                "upscale_rtx": config.upscaler,
-                "seed_mode": "fixed",
-                "seed": config.seed,
-                "interpolation": STUDIO_INTERP.get(config.interp, "none"),
-                "clean_vram": config.clean_vram,
-                "sol_attn": config.sol_attn,
-            },
-        )
+        mapped = {
+            "mode": STUDIO_MODES[config.mode],
+            "prompt": config.prompt,
+            "duration": config.duration_s,
+            "aspect_ratio": config.aspect_ratio or DEFAULT_ASPECT,
+            "megapixels": config.mp,
+            "ref_image_size": config.ref_image_size,
+            "first_frame": config.first_frame,
+            "last_frame": config.last_frame,
+            "references": json.dumps(references, separators=(",", ":")),
+            "steps": config.effective_steps,
+            "turbo": config.turbo,
+            "turbo_lora": config.turbo_lora_file or STUDIO_TURBO_NONE,
+            "scheduler": config.scheduler,
+            "sampler_name": config.sampler,
+            "cache": config.cache_active,
+            "upscale_ltx": False,
+            "upscale_rtx": config.upscaler,
+            "seed_mode": "fixed",
+            "seed": config.seed,
+            "interpolation": STUDIO_INTERP.get(config.interp, config.interp),
+            "clean_vram": config.clean_vram,
+            "sol_attn": config.sol_attn,
+            # An empty lab run must not inherit the template's storyboard.
+            "guides": _studio_widget_value("guides", config.widgets.get("guides", "[]")),
+        }
+        extras = {
+            name: _studio_widget_value(name, value)
+            for name, value in config.widgets.items()
+            if name not in mapped
+        }
+        # seed_mode and upscale_ltx have lab defaults but live only on the studio node.
+        for name in ("seed_mode", "upscale_ltx"):
+            if name in extras:
+                mapped[name] = extras[name]
+        # First-class config fields win; extras fill every other studio widget so a new
+        # API knob does not need a lab mapping to reach the graph.
+        self.set_known(studio, {**extras, **mapped})
 
     # -- scalars
 
@@ -368,6 +525,37 @@ class _Patch:
             {
                 "filename_prefix": output_filename_prefix(self.output_tag),
                 "frame_rate": self.frame_rate(),
+                "trim_to_audio": False,
+            },
+        )
+
+    def wire_studio_scalars(self) -> None:
+        config = self.config
+        conditioning = self.need(R.CONDITIONING)
+        self.set(conditioning, "prompt", config.prompt)
+
+        scheduler = self.need(R.SCHEDULER)
+        self.set(scheduler, "scheduler", config.scheduler)
+        self.set(scheduler, "steps", config.effective_steps)
+        self.set(self.node(R.SAMPLER_SELECT), "sampler_name", config.sampler)
+
+        noise = self.node(R.NOISE)
+        if noise is not None and self.accepts(noise, "noise_seed"):
+            self.set(noise, "noise_seed", config.seed)
+        self.set_first(self.node(R.SEED), ("seed",), config.seed)
+
+        self.set_known(
+            self.node(R.RESOLUTION),
+            {
+                "aspect_ratio": config.aspect_ratio or DEFAULT_ASPECT,
+                "megapixels": config.mp,
+            },
+        )
+        self.set_first(self.node(R.DURATION), ("value",), config.duration_s)
+        self.set_known(
+            self.need(R.VIDEO_OUT),
+            {
+                "filename_prefix": output_filename_prefix(self.output_tag),
                 "trim_to_audio": False,
             },
         )
@@ -656,6 +844,73 @@ class _Patch:
                     )
                 self.set_known(node, cache_widgets(config))
 
+    def wire_studio_model_chain(self) -> None:
+        config = self.config
+        loader = self.pick_model_loader()
+        self.set_first(
+            loader,
+            ("unet_name", "model_name", "ckpt_name", "clip_name"),
+            resolve_model_filename(config.diffusion_model),
+        )
+
+        turbo = self.node(R.TURBO_LORA)
+        if config.turbo and turbo is not None:
+            self.set_first(turbo, ("lora_name", "lora"), config.turbo_lora_file)
+            self.set_first(
+                turbo,
+                ("strength", "strength_model", "lora_strength"),
+                config.turbo_lora_strength,
+            )
+
+        self.set_known(self.node(R.SOL_ATTN), sol_widgets(config))
+
+        cache_classes = {
+            "spectrum": "SpectrumApplyMiniMaxH3",
+            "easy": "EasyCache",
+            "h3": "UC_MiniMaxH3Cache",
+        }
+        wanted = config.cache if config.cache != "none" else "spectrum"
+        selected_type = cache_classes[wanted]
+        selected = [
+            node
+            for node in self.graph
+            if node.class_type == selected_type
+        ]
+        if not selected and self.is_studio():
+            selected_type = cache_classes["spectrum"]
+            selected = [
+                node for node in self.graph
+                if node.class_type == selected_type
+            ]
+        if config.cache_active and not selected:
+            raise WorkflowError(
+                f"this workflow has no {wanted} cache node, so it cannot run with that "
+                "cache selected"
+            )
+        cache_types = set(cache_classes.values())
+        for node in list(self.graph):
+            if node.class_type not in cache_types:
+                continue
+            if node.class_type != selected_type:
+                self.drop(node, pass_through=True)
+            else:
+                self.set_known(node, cache_widgets(config))
+
+    def repair_studio_video_boundaries(self) -> None:
+        repair_studio_video_boundaries(self.graph)
+
+    def retain_studio_graph(self) -> None:
+        video = self.need(R.VIDEO_OUT)
+        keep = {video.id, *(node.id for node in R.ancestors(self.graph, video.id))}
+        for node in self.graph:
+            if "[h3s:" not in node.title.lower():
+                continue
+            keep.add(node.id)
+            keep.update(parent.id for parent in R.ancestors(self.graph, node.id))
+        for node_id in list(self.graph.nodes):
+            if node_id not in keep:
+                self.graph.remove(node_id)
+
     def pick_model_loader(self) -> Node:
         gguf = self.node(R.GGUF_LOADER)
         plain = self.node(R.DIFFUSION_LOADER)
@@ -896,6 +1151,25 @@ def build(
         schemas=schemas if schemas is not None else static_schemas(),
     )
     prompt = patch.build()
+    return prompt, patch.graph, patch.roles
+
+
+def build_studio_source(
+    workflow: dict[str, Any],
+    config: GenerationConfig,
+    *,
+    output_tag: str = "run",
+    schemas: Schemas | None = None,
+    contract_workflow: dict[str, Any] | None = None,
+) -> tuple[Prompt, Graph, R.Roles]:
+    patch = _Patch(
+        workflow,
+        config,
+        output_tag=output_tag,
+        schemas=schemas if schemas is not None else static_schemas(),
+        contract_workflow=contract_workflow,
+    )
+    prompt = patch.build_studio_source()
     return prompt, patch.graph, patch.roles
 
 

@@ -9,64 +9,27 @@
 import { useMemo, useState } from "react"
 import { Layers, X } from "lucide-react"
 
-import { useRunSweep, useSweepPreview } from "@/api/hooks"
+import { useRunSweep, useStudioSession, useSweepPreview } from "@/api/hooks"
 import type { GenerationConfig, Meta, SweepRequest } from "@/api/schema"
+import { Choice } from "@/components/choice"
 import { Section, Stat } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { display, label as fieldLabel } from "@/lib/config"
-import { loraStem, modelStem, plural } from "@/lib/format"
-import { Choice } from "./config-form"
-
-/** Fields worth sweeping, with the values each one can take. */
-type Sweepable = {
-  field: string
-  values: (string | number | boolean)[]
-  /** For values whose filenames are 60 characters of shared prefix. */
-  render?: (value: string | number | boolean) => string
-}
-
-function sweepable(meta: Meta | undefined, catalog: SweepCatalog): Sweepable[] {
-  const axes: Sweepable[] = [
-    { field: "cache", values: meta?.caches ?? [] },
-    { field: "cache_preset", values: meta?.preset_levels ?? [] },
-    { field: "sol_preset", values: meta?.preset_levels ?? [] },
-    { field: "sol_attn", values: [true, false] },
-    { field: "turbo", values: [true, false] },
-    {
-      field: "turbo_lora",
-      values: catalog.turbo_loras ?? [],
-      render: (value) => loraStem(String(value)),
-    },
-    { field: "turbo_lora_strength", values: [0.5, 0.75, 1, 1.25] },
-    { field: "interp", values: meta?.interpolations ?? [] },
-    { field: "upscaler", values: [true, false] },
-    { field: "clean_vram", values: [true, false] },
-    { field: "sampler", values: catalog.samplers },
-    { field: "scheduler", values: catalog.schedulers },
-    { field: "aspect_ratio", values: catalog.aspect_ratios },
-    {
-      field: "diffusion_model",
-      values: catalog.diffusion_models,
-      render: (value) => modelStem(String(value)),
-    },
-    { field: "steps", values: [4, 8, 12, 16, 20, 28, 36] },
-    { field: "mp", values: [0.25, 0.5, 0.75, 1, 1.5] },
-  ]
-  return axes.filter((axis) => axis.values.length > 1)
-}
+import { plural } from "@/lib/format"
+import { sweepable, type SweepCatalog } from "./sweep-options"
 
 /** Axes that only mean something while another setting is on, and what turns them on. */
 const NEEDS_TURBO = new Set(["turbo_lora", "turbo_lora_strength"])
+const SWEEP_LABELS: Record<string, string> = {
+  attn: "Attention",
+  cache_enabled: "Cache",
+}
 
-type SweepCatalog = {
-  samplers: string[]
-  schedulers: string[]
-  aspect_ratios: string[]
-  diffusion_models: string[]
-  turbo_loras?: string[]
+function sweepLabel(meta: Meta | undefined, field: string): string {
+  return SWEEP_LABELS[field] ?? fieldLabel(meta, field)
 }
 
 type Picked = { field: string; values: (string | number | boolean)[] }
@@ -90,7 +53,11 @@ export function SweepBuilder({
 
   const preview = useSweepPreview()
   const start = useRunSweep()
-  const available = useMemo(() => sweepable(meta, catalog), [meta, catalog])
+  const studio = useStudioSession(base.mode)
+  const available = useMemo(
+    () => sweepable(meta, catalog, studio.data?.input_options ?? {}),
+    [meta, catalog, studio.data?.input_options]
+  )
 
   const request: SweepRequest = {
     base,
@@ -109,7 +76,10 @@ export function SweepBuilder({
     const found = available.find((axis) => axis.field === field)
     if (!found || axes.some((axis) => axis.field === field)) return
     // Seed with the base value plus one alternative, which is the smallest useful comparison.
-    const current = base[field as keyof GenerationConfig] as string | number | boolean
+    const current =
+      field === "attn"
+        ? ((base.widgets?.attn as string | undefined) ?? (base.sol_attn ? "sol" : "off"))
+        : (base[field as keyof GenerationConfig] as string | number | boolean)
     const others = found.values.filter((value) => value !== current)
     setAxes([...axes, { field, values: [current, others[0]].filter((v) => v !== undefined) }])
   }
@@ -122,7 +92,7 @@ export function SweepBuilder({
         <Choice
           value=""
           options={available.filter((a) => !axes.some((b) => b.field === a.field)).map((a) => a.field)}
-          render={(field) => fieldLabel(meta, field)}
+          render={(field) => sweepLabel(meta, field)}
           onChange={addAxis}
           label="Add a sweep axis"
           placeholder="add an axis"
@@ -141,11 +111,11 @@ export function SweepBuilder({
             return (
               <div key={axis.field}>
                 <div className="mb-1.5 flex items-center justify-between">
-                  <Label className="text-bone text-xs">{fieldLabel(meta, axis.field)}</Label>
+                  <Label className="text-bone text-xs">{sweepLabel(meta, axis.field)}</Label>
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    aria-label={`Stop varying ${fieldLabel(meta, axis.field)}`}
+                    aria-label={`Stop varying ${sweepLabel(meta, axis.field)}`}
                     onClick={() => setAxes(axes.filter((item) => item.field !== axis.field))}
                   >
                     <X className="size-3" />

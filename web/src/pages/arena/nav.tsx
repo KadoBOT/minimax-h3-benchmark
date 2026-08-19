@@ -8,15 +8,6 @@ const STOPS = [
   { to: "/arena/standings", label: "Standings" },
 ] as const
 
-/** Helper to parse minStars from search params: defaults to 7 */
-export function useArenaFilterParam(): number | null {
-  const [searchParams] = useSearchParams()
-  const raw = searchParams.get("min_stars")
-  if (raw === "all" || raw === "0") return null
-  if (raw && !isNaN(Number(raw))) return Number(raw)
-  return 7
-}
-
 /** Two halves of one loop — cast a vote, read what the votes decided — with participant filtering. */
 export function ArenaNav() {
   const [searchParams, setSearchParams] = useSearchParams()
