@@ -20,6 +20,7 @@ export const routes = {
   runCancel: (id: string) => `/api/runs/${id}/cancel`,
   runWorkflow: (id: string) => `/api/runs/${id}/workflow`,
   runPreview: (id: string) => `/api/runs/${id}/preview`,
+  runNeighbors: (id: string) => `/api/runs/${id}/neighbors`,
   dryRun: () => `/api/runs/dry-run`,
 
   queue: () => `/api/queue`,
@@ -46,6 +47,10 @@ export const routes = {
   baseline: () => `/api/baseline`,
   tags: () => `/api/tags`,
   uploads: () => `/api/uploads`,
+
+  studioSession: () => `/api/studio/session`,
+  studioComponent: () => `/api/studio/component.js`,
+  studioPrepare: () => `/api/studio/prepare`,
 
   events: () => `/api/events`,
 

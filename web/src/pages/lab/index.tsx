@@ -16,8 +16,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { changedFields, display, label as fieldLabel, missingInputs, type Draft } from "@/lib/config"
 import { plural, shortHash } from "@/lib/format"
-import { ConfigForm } from "./config-form"
+import { BenchmarkControls } from "./benchmark-controls"
 import { QueuePanel } from "./queue-panel"
+import { StudioHost } from "./studio-host"
 import { SweepBuilder } from "./sweep-builder"
 
 const DRAFT_KEY = "h3lab.draft"
@@ -41,7 +42,9 @@ export function LabPage() {
   const savePreset = useSavePreset()
   const deletePreset = useDeletePreset()
 
-  const [draft, setDraft] = useState<Draft | null>(null)
+  const [draftOverrides, setDraftOverrides] = useState<Partial<Draft>>(
+    () => storedDraft() ?? {}
+  )
   const [count, setCount] = useState(1)
   const [presetName, setPresetName] = useState("")
 
@@ -50,16 +53,16 @@ export function LabPage() {
   // and media it actually has — which is what makes a fresh draft queueable instead of a
   // list of blanks. A previous session's draft wins over both.
   //
-  // The catalog is waited for rather than filled in later: patching a draft the user may
-  // already be editing is how a setting changes under someone's hands.
-  useEffect(() => {
-    if (draft || !meta.data || catalog.isLoading) return
-    setDraft({
+  // The catalog is waited for rather than filled in later. User edits are a separate,
+  // strongest layer, so a late query result cannot overwrite something already changed.
+  const draft = useMemo<Draft | null>(() => {
+    if (!meta.data || catalog.isLoading) return null
+    return {
       ...(meta.data.defaults as Draft),
       ...((catalog.data?.defaults ?? {}) as Partial<Draft>),
-      ...(storedDraft() ?? {}),
-    })
-  }, [meta.data, catalog.data, catalog.isLoading, draft])
+      ...draftOverrides,
+    }
+  }, [meta.data, catalog.data, catalog.isLoading, draftOverrides])
 
   useEffect(() => {
     if (!draft) return
@@ -70,7 +73,8 @@ export function LabPage() {
     }
   }, [draft])
 
-  const patch = (change: Partial<Draft>) => setDraft((current) => ({ ...(current as Draft), ...change }))
+  const patch = (change: Partial<Draft>) =>
+    setDraftOverrides((current) => ({ ...current, ...change }))
 
   const missing = useMemo(() => missingInputs(draft ?? {}, meta.data), [draft, meta.data])
   const check = dryRun.data
@@ -125,7 +129,13 @@ export function LabPage() {
 
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="min-w-0 space-y-4">
-          <ConfigForm draft={draft} onChange={patch} meta={meta.data} catalog={catalog.data} />
+          <StudioHost draft={draft} onChange={patch} />
+          <BenchmarkControls
+            draft={draft}
+            meta={meta.data}
+            catalog={catalog.data}
+            onChange={patch}
+          />
           <SweepBuilder
             base={config}
             meta={meta.data}
@@ -245,7 +255,7 @@ export function LabPage() {
                   return (
                     <li key={preset.id} className="flex items-center gap-2 py-2">
                       <button
-                        onClick={() => setDraft({ ...(preset.config as Draft) })}
+                        onClick={() => setDraftOverrides({ ...(preset.config as Draft) })}
                         className="min-w-0 flex-1 text-left"
                       >
                         <span className="text-bone block truncate text-sm">{preset.name}</span>

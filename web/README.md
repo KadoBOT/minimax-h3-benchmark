@@ -1,21 +1,19 @@
-# React + TypeScript + Vite + shadcn/ui
+# H3 Lab web app
 
-This is a template for a new Vite project with React, TypeScript, and shadcn/ui.
+React/Vite client for H3 Lab.
 
-## Adding components
-
-To add components to your app, run the following command:
+The Lab page loads the unstyled MiniMax H3 Studio ES module at runtime from the
+same-origin `/api/studio/component.js` gateway. The running ComfyUI custom node is the
+authority for Studio controls and workflow preparation; this app supplies the `h3s-*`
+styles, persists complete component inputs, and keeps benchmark-only model, cache preset,
+Turbo strength, queue, and sweep controls.
 
 ```bash
-npx shadcn@latest add button
+bun install
+bun run test
+bun run typecheck
+bun run build
 ```
 
-This will place the ui components in the `src/components` directory.
-
-## Using components
-
-To use the components in your app, import them as follows:
-
-```tsx
-import { Button } from "@/components/ui/button"
-```
+Do not vendor the Studio JavaScript or duplicate its graph adaptation here. Contract
+version failures are intentional installation errors.

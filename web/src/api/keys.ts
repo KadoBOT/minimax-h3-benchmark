@@ -13,9 +13,11 @@ export const keys = {
   votes: ["votes"] as const,
   recipes: ["recipes"] as const,
   axes: ["insights", "axes"] as const,
+  studioSession: (mode: string) => ["studio", "session", mode] as const,
 
   runs: (params: RunListParams) => ["runs", params] as const,
   run: (id: string) => ["runs", "one", id] as const,
+  neighbors: (id: string, params: RunListParams) => ["runs", "neighbors", id, params] as const,
   compare: (ids: string[]) => ["compare", [...ids].sort()] as const,
   leaderboard: (quality: number, speed: number, limit: number) =>
     ["leaderboard", quality, speed, limit] as const,

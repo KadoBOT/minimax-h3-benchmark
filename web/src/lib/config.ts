@@ -15,8 +15,14 @@ export function inertFields(config: Draft): Set<string> {
   const inert = new Set<string>()
   if (config.turbo) inert.add("steps") // the LoRA's own schedule replaces the step count
   if (config.cache === "none" || config.cache_enabled === false) inert.add("cache_preset")
-  if (!config.sol_attn) inert.add("sol_preset")
+  if (attentionMode(config) !== "sol") inert.add("sol_preset")
   return inert
+}
+
+export function attentionMode(config: Draft): "off" | "sol" | "comfy_kitchen" {
+  const explicit = config.widgets?.attn
+  if (explicit === "off" || explicit === "sol" || explicit === "comfy_kitchen") return explicit
+  return config.sol_attn ? "sol" : "off"
 }
 
 /** The LoRA a turbo run will load: the one it names, or the machine's default. */

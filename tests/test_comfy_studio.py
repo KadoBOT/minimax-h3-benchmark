@@ -15,7 +15,9 @@ from h3lab.comfy.graph import (
     missing_links,
     referenced_files,
 )
-from h3lab.comfy.workflow import is_link, read
+from h3lab.comfy.schema import static_schemas
+from h3lab.comfy.studio import studio_session_prompt
+from h3lab.comfy.workflow import executable, is_link, read
 from tests.conftest import unified_workflow_path
 
 
@@ -43,6 +45,41 @@ def test_the_unified_template_is_a_studio_graph(studio_workflow):
     node = found.node(graph, R.CONDITIONING)
     assert node is not None
     assert node.class_type == STUDIO_CLASS
+
+
+def test_session_is_the_generic_executable_prompt(studio_workflow):
+    schemas = static_schemas()
+    expected, _graph = executable(
+        studio_workflow,
+        widget_names=schemas.widget_names,
+    )
+
+    assert studio_session_prompt(studio_workflow, schemas) == expected
+
+
+def test_session_requires_only_studio_and_no_output_role():
+    workflow = {
+        "nodes": [
+            {
+                "id": 1,
+                "type": "MiniMaxH3Studio",
+                "inputs": [],
+                "outputs": [],
+            },
+            {
+                "id": 2,
+                "type": "AClassH3LabDoesNotKnow",
+                "inputs": [],
+                "outputs": [],
+                "title": "ordinary output",
+            },
+        ],
+        "links": [],
+    }
+
+    prompt = studio_session_prompt(workflow, static_schemas())
+
+    assert prompt["2"]["class_type"] == "AClassH3LabDoesNotKnow"
 
 
 @pytest.mark.parametrize("mode", ["flf2v", "t2v", "r2v"])

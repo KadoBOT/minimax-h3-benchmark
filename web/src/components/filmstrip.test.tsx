@@ -99,6 +99,8 @@ describe("the filmstrip preview", () => {
     expect(card).toHaveTextContent(WITH_VIDEO.label)
     expect(card).toHaveTextContent("848×480")
     expect(card).toHaveTextContent("5.0")
+    expect(screen.getByTestId("hover-facts")).toHaveTextContent(/prompt/i)
+    expect(screen.getByTestId("hover-facts")).toHaveTextContent(WITH_VIDEO.config.prompt ?? "")
   })
 
   it("does not load a video for a pointer that is only passing through", async () => {

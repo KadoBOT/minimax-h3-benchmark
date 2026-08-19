@@ -238,6 +238,73 @@ def test_create_allocates_sequence_label_and_hashes(runs, base_config):
     assert first.status == "queued"
 
 
+def test_create_many_shares_one_batch(runs, base_config):
+    made = runs.create_many(
+        [base_config.merged(seed=1), base_config.merged(seed=2), base_config.merged(seed=3)]
+    )
+    assert len(made) == 3
+    assert made[0].batch_id and made[0].batch_id == made[1].batch_id == made[2].batch_id
+    lone = runs.create(base_config.merged(seed=9))
+    assert lone.batch_id != made[0].batch_id
+
+
+def test_a_database_already_at_v5_without_batch_id_still_gets_the_column(
+    tmp_path: Path, base_config
+):
+    """The live lab DB used version 5 for a different change. batch_id must still land."""
+    stored = json.dumps(base_config.model_dump(mode="json"))
+    path = tmp_path / "v5.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(MIGRATIONS[0].sql)
+    conn.execute(
+        "INSERT INTO runs (id, seq, label, status, mode, config_json, config_hash, "
+        "recipe_hash, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("a", 1, "#1", "succeeded", "flf2v", stored, "x", "y", "2026-01-01T00:00:00"),
+    )
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('schema_version', '5')")
+    conn.commit()
+    conn.close()
+
+    store = open_store(path)
+    repo = RunRepository(store)
+    run = repo.require("a")
+    assert run.batch_id
+    listed = repo.list()
+    assert listed.total == 1
+    assert listed.items[0].batch_id == run.batch_id
+
+
+def test_a_pre_batch_database_gives_every_run_a_batch_id(tmp_path: Path, base_config):
+    stored = json.dumps(base_config.model_dump(mode="json"))
+    path = tmp_path / "pre.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(MIGRATIONS[0].sql)
+    conn.execute(
+        "INSERT INTO runs (id, seq, label, status, mode, config_json, config_hash, "
+        "recipe_hash, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("a", 1, "#1", "succeeded", "flf2v", stored, "x", "y", "2026-01-01T00:00:00"),
+    )
+    conn.execute(
+        "INSERT INTO runs (id, seq, label, status, mode, config_json, config_hash, "
+        "recipe_hash, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("b", 2, "#2", "succeeded", "flf2v", stored, "x", "y", "2026-01-01T00:00:00"),
+    )
+    conn.execute(
+        "INSERT INTO runs (id, seq, label, status, mode, config_json, config_hash, "
+        "recipe_hash, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("c", 3, "#3", "succeeded", "flf2v", stored, "x", "y", "2026-01-02T00:00:00"),
+    )
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('schema_version', '4')")
+    conn.commit()
+    conn.close()
+
+    store = open_store(path)
+    repo = RunRepository(store)
+    a, b, c = repo.require("a"), repo.require("b"), repo.require("c")
+    assert a.batch_id == b.batch_id
+    assert c.batch_id != a.batch_id
+
+
 def test_ids_are_unique_across_a_burst(runs, base_config):
     made = [runs.create(base_config.merged(seed=n)) for n in range(25)]
     assert len({run.id for run in made}) == 25

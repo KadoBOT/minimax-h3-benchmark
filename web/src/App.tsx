@@ -17,7 +17,7 @@ import { NotFoundPage } from "@/pages/not-found"
 import { RunPage } from "@/pages/run"
 import { RunsPage } from "@/pages/runs"
 
-export function makeQueryClient() {
+function makeQueryClient() {
   return new QueryClient({
     defaultOptions: {
       queries: {

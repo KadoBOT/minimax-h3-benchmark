@@ -338,9 +338,14 @@ def test_the_first_video_is_found_among_the_outputs():
     assert ComfyClient.find_video(history) == ("clip.mp4", "h3lab", "output")
 
 
-def test_a_non_video_output_is_used_as_a_last_resort():
-    history = {"outputs": {"110": {"latents": [{"filename": "x.latent", "type": "output"}]}}}
-    assert ComfyClient.find_video(history) == ("x.latent", "", "output")
+def test_still_images_and_non_video_outputs_are_not_video_results():
+    history = {
+        "outputs": {
+            "preview": {"images": [{"filename": "preview.png", "type": "temp"}]},
+            "latent": {"latents": [{"filename": "x.latent", "type": "output"}]},
+        },
+    }
+    assert ComfyClient.find_video(history) is None
 
 
 def test_no_outputs_means_no_video():

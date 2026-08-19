@@ -3,11 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from h3lab.settings import (
+    DEFAULT_COMFY_WORKFLOW_DIR,
     DEFAULT_COMFY_URL,
     DEFAULT_PORT,
     Settings,
-    classify_h3_workflow,
-    resolve_workflow_path,
+    UNIFIED_WORKFLOW_NAME,
 )
 
 
@@ -54,58 +54,20 @@ def test_ensure_dirs_creates_every_media_directory(tmp_path: Path):
         assert directory.is_dir()
 
 
-def test_unified_graph_is_the_exact_name_for_every_mode(tmp_path: Path):
-    unified = tmp_path / "minimax_h3_unified.json"
-    t2v = tmp_path / "minimax_h3_t2v_workflow.json"
-    graded = tmp_path / "minimax_h3_r2v_graded.v5.json"
-    unified.write_text('{"nodes":[{"type":"MiniMaxH3ImageToVideo"}]}', encoding="utf-8")
-    t2v.write_text('{"nodes":[{"type":"MiniMaxH3TextToVideo"}]}', encoding="utf-8")
-    graded.write_text('{"nodes":[{"type":"MiniMaxH3ReferenceToVideo"}]}', encoding="utf-8")
-    for mode in ("t2v", "flf2v", "r2v"):
-        assert resolve_workflow_path(tmp_path, mode) == unified
-
-
-def test_exact_lab_names_win_over_a_newer_classified_file(tmp_path: Path):
-    exact = tmp_path / "minimax_h3_flf2v_workflow.json"
-    graded = tmp_path / "minimax_h3_flf2v_graded.v4.json"
-    exact.write_text('{"nodes":[{"type":"MiniMaxH3ImageToVideo"}]}', encoding="utf-8")
-    graded.write_text('{"nodes":[{"type":"MiniMaxH3ImageToVideo"}]}', encoding="utf-8")
-    graded.touch()
-    assert resolve_workflow_path(tmp_path, "flf2v") == exact
-
-
-def test_classifies_a_graded_export_by_filename_and_picks_the_newest(tmp_path: Path):
-    older = tmp_path / "minimax_h3_flf2v_graded.json"
-    newer = tmp_path / "minimax_h3_flf2v_graded.v4.json"
-    older.write_text("{}", encoding="utf-8")
-    newer.write_text("{}", encoding="utf-8")
-    import os
-
-    os.utime(older, (1_000_000_000, 1_000_000_000))
-    os.utime(newer, (2_000_000_000, 2_000_000_000))
-    assert resolve_workflow_path(tmp_path, "flf2v") == newer
-
-
-def test_backups_are_not_templates(tmp_path: Path):
-    backup = tmp_path / "_minimax_h3_t2v_workflow.json"
-    backup.write_text('{"nodes":[{"type":"MiniMaxH3TextToVideo"}]}', encoding="utf-8")
-    assert classify_h3_workflow(backup) is None
-
-
-def test_settings_without_env_still_use_the_repo_fixtures():
+def test_settings_without_env_use_the_live_comfyui_workflow_directory():
     made = Settings()
-    assert made.workflow_path("t2v").is_file()
-    assert made.workflow_path("t2v").name == "minimax_h3_unified_guided.json"
+    assert made.workflow_dir == DEFAULT_COMFY_WORKFLOW_DIR
+    assert made.workflow_path("t2v") == DEFAULT_COMFY_WORKFLOW_DIR / UNIFIED_WORKFLOW_NAME
     assert made.workflow_path("flf2v") == made.workflow_path("r2v")
 
 
-def test_guided_unified_name_is_accepted_as_the_shared_template(tmp_path: Path):
-    guided = tmp_path / "minimax_h3_unified_guided.json"
+def test_configured_directory_has_no_fixture_or_legacy_fallback(tmp_path: Path):
     exact = tmp_path / "minimax_h3_t2v_workflow.json"
-    guided.write_text('{"nodes":[{"type":"MiniMaxH3Studio"}]}', encoding="utf-8")
-    exact.write_text('{"nodes":[{"type":"MiniMaxH3TextToVideo"}]}', encoding="utf-8")
+    exact.write_text("{}", encoding="utf-8")
+    made = Settings(workflow_dir=tmp_path)
+
     for mode in ("t2v", "flf2v", "r2v"):
-        assert resolve_workflow_path(tmp_path, mode) == guided
+        assert made.workflow_path(mode) == tmp_path / UNIFIED_WORKFLOW_NAME
 
 
 def test_with_overrides_returns_a_new_frozen_settings(tmp_path: Path):

@@ -27,6 +27,23 @@ _WIDGET_TYPES = frozenset({"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"})
 
 
 @dataclass(frozen=True, slots=True)
+class WidgetSpec:
+    """One widget as `/object_info` describes it: type, range, options, tooltip."""
+
+    name: str
+    kind: str
+    default: Any = None
+    minimum: float | None = None
+    maximum: float | None = None
+    step: float | None = None
+    tooltip: str = ""
+    multiline: bool = False
+    options: tuple[str, ...] = ()
+    label_on: str = "on"
+    label_off: str = "off"
+
+
+@dataclass(frozen=True, slots=True)
 class NodeSchema:
     """One node class as the running ComfyUI describes it."""
 
@@ -36,6 +53,7 @@ class NodeSchema:
     required: frozenset[str] = frozenset()
     combos: dict[str, tuple[str, ...]] = field(default_factory=dict)
     defaults: dict[str, Any] = field(default_factory=dict)
+    specs: dict[str, WidgetSpec] = field(default_factory=dict)
     output_types: tuple[str, ...] = ()
 
     def knows(self, name: str) -> bool:
@@ -82,6 +100,43 @@ def _default_value(spec: Any, combo: tuple[str, ...]) -> Any:
     return combo[0] if combo else None
 
 
+def _as_number(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def widget_spec(name: str, spec: Any) -> WidgetSpec | None:
+    """Turn one `/object_info` input entry into a widget description, or None if it is a link."""
+    if not _is_widget(spec):
+        return None
+    kind = spec[0]
+    extra = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+    options = _combo_values(spec)
+    if isinstance(kind, list):
+        kind_name = "COMBO"
+    elif options:
+        kind_name = "COMBO"
+    else:
+        kind_name = str(kind)
+    default = _default_value(spec, options)
+    return WidgetSpec(
+        name=name,
+        kind=kind_name,
+        default=default,
+        minimum=_as_number(extra.get("min")),
+        maximum=_as_number(extra.get("max")),
+        step=_as_number(extra.get("step")),
+        tooltip=str(extra.get("tooltip") or ""),
+        multiline=bool(extra.get("multiline")),
+        options=options,
+        label_on=str(extra.get("label_on") or "on"),
+        label_off=str(extra.get("label_off") or "off"),
+    )
+
+
 def parse_schema(class_type: str, info: dict[str, Any]) -> NodeSchema:
     inputs = info.get("input") or {}
     order = info.get("input_order") or {}
@@ -90,6 +145,7 @@ def parse_schema(class_type: str, info: dict[str, Any]) -> NodeSchema:
     required: list[str] = []
     combos: dict[str, tuple[str, ...]] = {}
     defaults: dict[str, Any] = {}
+    specs: dict[str, WidgetSpec] = {}
     for section in ("required", "optional"):
         entries = inputs.get(section)
         if not isinstance(entries, dict):
@@ -100,14 +156,15 @@ def parse_schema(class_type: str, info: dict[str, Any]) -> NodeSchema:
             names.append(name)
             if section == "required":
                 required.append(name)
-            if _is_widget(spec):
-                widgets.append(name)
-                values = _combo_values(spec)
-                if values:
-                    combos[name] = values
-                default = _default_value(spec, values)
-                if default is not None:
-                    defaults[name] = default
+            parsed = widget_spec(name, spec)
+            if parsed is None:
+                continue
+            widgets.append(name)
+            specs[name] = parsed
+            if parsed.options:
+                combos[name] = parsed.options
+            if parsed.default is not None:
+                defaults[name] = parsed.default
     return NodeSchema(
         class_type=class_type,
         widget_names=tuple(widgets),
@@ -115,6 +172,7 @@ def parse_schema(class_type: str, info: dict[str, Any]) -> NodeSchema:
         required=frozenset(required),
         combos=combos,
         defaults=defaults,
+        specs=specs,
         output_types=tuple(str(value) for value in info.get("output") or ()),
     )
 

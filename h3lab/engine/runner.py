@@ -14,19 +14,12 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
-from h3lab.comfy import roles as R
-from h3lab.comfy.catalog import (
-    InstalledNameError,
-    _comfy_loras,
-    match_installed,
-    resolve_run_weights,
-)
 from h3lab.comfy.client import ComfyClient, ComfyError, PromptRejected
 from h3lab.comfy.editor import run_provenance, to_editor_workflow
-from h3lab.comfy.graph import WorkflowError, build, load_workflow
-from h3lab.comfy.presets import cache_problems, cache_widgets, sol_widgets
+from h3lab.comfy.graph import WorkflowError, load_workflow
 from h3lab.comfy.progress import Preview, ProgressTracker
 from h3lab.comfy.schema import SchemaCache
+from h3lab.comfy.studio import StudioContractError, prepare_prompt
 from h3lab.domain.config import GenerationConfig
 from h3lab.domain.run import Artifact, Run, RunMetrics
 from h3lab.engine import artifacts
@@ -35,20 +28,23 @@ from h3lab.settings import Settings
 from h3lab.storage.runs import RunNotFound, RunRepository
 
 IDLE_SLEEP_S = 0.4
+PREPARE_RETRY_S = 1.0
 PROGRESS_MIN_INTERVAL_S = 0.35
 STARTUP_REASON = "interrupted: the lab restarted while this run was in flight"
-
-# `ResolutionSelector` rejects anything smaller. It belongs here rather than on the config
-# field because it is this install's limit, not a fact about what a run may have asked for.
-MIN_MEGAPIXELS = 0.1
-
 
 class PreflightError(RuntimeError):
     """The run cannot possibly succeed, and we know before asking ComfyUI."""
 
 
 # Failures the lab already has a sentence for. Everything else is a bug until proven otherwise.
-DIAGNOSED = (PreflightError, WorkflowError, ComfyError, RunNotFound, FileNotFoundError)
+DIAGNOSED = (
+    PreflightError,
+    WorkflowError,
+    StudioContractError,
+    ComfyError,
+    RunNotFound,
+    FileNotFoundError,
+)
 
 
 class WorkflowCache:
@@ -114,47 +110,24 @@ class WorkflowCache:
             self._loaded.clear()
             self._stamps.clear()
 
+    @property
+    def path(self) -> Path:
+        """The template currently used for every mode (unified) or t2v."""
+        return self._settings.workflow_path("t2v")
+
 
 def preflight(
     config: GenerationConfig,
     settings: Settings,
-    client: ComfyClient | None = None,
+    _client: ComfyClient | None = None,
 ) -> list[str]:
-    """Problems worth reporting before a run occupies the GPU."""
+    """Check only files the consumer must transport into ComfyUI."""
     problems: list[str] = []
     input_dir = settings.comfy_input_dir
     if config.media_files and input_dir.is_dir():
         for name in config.media_files:
             if not (input_dir / name).is_file():
                 problems.append(f"{name} is not in ComfyUI's input folder")
-    if config.turbo and config.turbo_lora_file:
-        if client is not None and client.is_up():
-            try:
-                loras = _comfy_loras(client)
-                if loras:
-                    try:
-                        match_installed(config.turbo_lora_file, loras, kind="LoRA")
-                    except InstalledNameError:
-                        problems.append(f"{config.turbo_lora_file} is not installed in ComfyUI")
-            except ComfyError:
-                pass
-        else:
-            lora_dir = settings.lora_models_dir
-            if lora_dir.is_dir():
-                target = lora_dir / config.turbo_lora_file
-                base_target = lora_dir / Path(config.turbo_lora_file).name
-                if not (target.is_file() or base_target.is_file()):
-                    has_files = any(lora_dir.rglob("*.safetensors")) or any(lora_dir.rglob("*.gguf"))
-                    if has_files:
-                        problems.append(f"{config.turbo_lora_file} is not in ComfyUI's LoRA folder")
-    if not settings.workflow_path(config.mode).is_file():
-        problems.append(f"no workflow template for mode {config.mode!r}")
-    if config.mp < MIN_MEGAPIXELS:
-        problems.append(f"mp must be at least {MIN_MEGAPIXELS} for the resolution node")
-    # The cache nodes validate their own widgets, but only after sampling starts. Asking the
-    # same questions here costs nothing and saves the minutes the GPU would have spent.
-    problems += cache_problems(cache_widgets(config), family=config.cache)
-    problems += cache_problems(sol_widgets(config), family="sol")
     return problems
 
 
@@ -191,6 +164,10 @@ class Runner:
         self._cancelling: set[str] = set()
         self._last_progress_at = 0.0
         self._last_error: str | None = None
+
+    def schemas(self):
+        """The installed node descriptions, or empty when ComfyUI cannot be reached."""
+        return self._schemas.get()
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -350,18 +327,29 @@ class Runner:
     # --- one run -----------------------------------------------------------
 
     def _execute(self, run: Run) -> None:
-        try:
-            config = resolve_run_weights(run.config, self._client)
-        except InstalledNameError as exc:
-            raise PreflightError(str(exc)) from exc
+        config = run.config
         problems = preflight(config, self._settings, self._client)
         if problems:
             raise PreflightError("; ".join(problems))
 
         workflow = self._workflows.get(config.mode)
-        prompt, _graph, roles = build(
-            workflow, config, output_tag=run.id, schemas=self._schemas.get()
-        )
+        try:
+            prepared = prepare_prompt(
+                self._client,
+                workflow,
+                config,
+                schemas=self._schemas.get(),
+            )
+        except StudioContractError:
+            raise
+        except ComfyError as exc:
+            self._runs.requeue(run.id)
+            self._last_error = str(exc)
+            self._events.publish("run.updated", run_id=run.id, status="queued")
+            self._events.publish("queue.changed")
+            self._stop.wait(PREPARE_RETRY_S)
+            return
+        prompt = prepared.prompt
         editor = to_editor_workflow(workflow, prompt, provenance=run_provenance(run))
 
         if self._clear_cache:
@@ -406,14 +394,16 @@ class Runner:
                 wall_s=round(outcome.wall_s, 3),
                 sec_per_it=outcome.sec_per_it,
                 steps=outcome.steps or run.config.effective_steps,
-                sampler_cached=outcome.was_cached(roles.id(R.SAMPLER)),
+                sampler_cached=None,
                 cache_cleared=self._clear_cache,
             ),
         )
 
         artifact = self._collect_output(run.id, outcome.history)
-        if artifact is not None:
-            self._runs.attach_artifact(run.id, artifact)
+        if artifact is None:
+            self._fail(run.id, "ComfyUI completed without a video output")
+            return
+        self._runs.attach_artifact(run.id, artifact)
 
         finished = self._runs.mark_succeeded(run.id)
         self._events.publish(

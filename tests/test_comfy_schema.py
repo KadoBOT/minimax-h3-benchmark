@@ -34,6 +34,15 @@ def schemas() -> Schemas:
     return Schemas(INFO)
 
 
+def test_a_widget_spec_keeps_the_range_and_tooltip(schemas):
+    strength = schemas.get("MiniMaxH3TurboLoRA").specs["strength"]
+    assert strength.kind == "FLOAT"
+    assert strength.default == 1.0
+    low = schemas.get("MiniMaxH3TurboLoRA").specs["low_vram"]
+    assert low.kind == "BOOLEAN"
+    assert low.default is False
+
+
 def test_a_class_reports_its_widgets_in_the_order_comfyui_declares_them(schemas):
     schema = schemas.get("MiniMaxH3TurboLoRA")
     assert schema.widget_names == ("lora_name", "strength", "low_vram")

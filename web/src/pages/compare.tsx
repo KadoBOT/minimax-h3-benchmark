@@ -17,7 +17,7 @@ import { Filmstrip } from "@/components/filmstrip"
 import { Failure, PageHeader, Section, Spinner } from "@/components/page"
 import { StarsRead } from "@/components/stars"
 import { Button } from "@/components/ui/button"
-import { useBench } from "@/lib/bench"
+import { useBench } from "@/lib/bench-context"
 import { secPerIt } from "@/lib/format"
 import { cn } from "@/lib/utils"
 

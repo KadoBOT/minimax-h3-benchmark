@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from h3lab.api.schemas import Problem, ProblemKind
 from h3lab.comfy.client import ComfyError, ComfyUnreachable
 from h3lab.comfy.graph import WorkflowError
+from h3lab.comfy.studio import StudioContractError
 from h3lab.settings import Settings
 from h3lab.storage.library import PresetNameTaken
 from h3lab.storage.runs import RunNotFound
@@ -86,6 +87,10 @@ def install(app: FastAPI, settings: Settings) -> None:
     @app.exception_handler(WorkflowError)
     async def _workflow_broken(_request: Request, exc: WorkflowError) -> JSONResponse:
         return problem(422, "workflow", "the workflow cannot run this config", str(exc))
+
+    @app.exception_handler(StudioContractError)
+    async def _studio_contract(_request: Request, exc: StudioContractError) -> JSONResponse:
+        return problem(422, "workflow", "the Studio integration is unavailable", str(exc))
 
     @app.exception_handler(ComfyUnreachable)
     async def _comfy_down(_request: Request, exc: ComfyUnreachable) -> JSONResponse:

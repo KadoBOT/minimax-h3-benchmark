@@ -6,20 +6,21 @@
  * mouse works too, but the keyboard is what makes a long session bearable.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Keyboard, Search, X } from "lucide-react"
-import { useNavigate } from "react-router"
+import { useNavigate, useSearchParams } from "react-router"
 
 import { useClearRating, usePatchRun, useRate, useRuns, useTags } from "@/api/hooks"
-import type { Run } from "@/api/schema"
+import type { Run, RunView } from "@/api/schema"
 import { Failure, PageHeader, Section, StripSkeleton } from "@/components/page"
 import { RunCard } from "@/components/run-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { useBench } from "@/lib/bench"
+import { useBench } from "@/lib/bench-context"
 import { plural } from "@/lib/format"
-import { Choice } from "@/pages/lab/config-form"
+import { filtersFromSearch, runListParams, searchFromFilters, type RunFilters } from "@/lib/run-filters"
+import { Choice } from "@/components/choice"
 import type { RunListParams } from "@/api/hooks"
 
 const SORTS: Record<string, string> = {
@@ -31,15 +32,18 @@ const SORTS: Record<string, string> = {
 }
 
 const STATUSES: Run["status"][] = ["succeeded", "running", "queued", "failed"]
+const REST_STATUSES: Run["status"][] = ["succeeded", "failed", "cancelled", "interrupted"]
+const QUEUED_PREVIEW = 3
+const EMPTY_RUNS: RunView[] = []
 
 export function RunsPage() {
-  const [query, setQuery] = useState("")
-  const [sort, setSort] = useState<RunListParams["sort"]>("recent")
-  const [statuses, setStatuses] = useState<Run["status"][]>([])
-  const [onlyFavourites, setOnlyFavourites] = useState(false)
-  const [onlyRated, setOnlyRated] = useState<boolean | undefined>(undefined)
-  const [tag, setTag] = useState("")
-  const [showArchived, setShowArchived] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const filters = useMemo(() => filtersFromSearch(searchParams), [searchParams])
+  const writeFilters = (next: RunFilters, replace = false) => {
+    setSearchParams(searchFromFilters(next), { replace })
+  }
+
+  const { query, sort, statuses, onlyFavourites, onlyRated, tag, showArchived } = filters
   const [cursor, setCursor] = useState(0)
 
   const bench = useBench()
@@ -49,28 +53,46 @@ export function RunsPage() {
   const clearRating = useClearRating()
   const patch = usePatchRun()
 
-  const params: RunListParams = useMemo(
-    () => ({
-      query: query.trim() || undefined,
-      sort,
-      status: statuses.length ? statuses : undefined,
-      favourite: onlyFavourites ? true : undefined,
-      rated: onlyRated,
-      tag: tag || undefined,
-      archived: showArchived ? undefined : false,
-      limit: 60,
-    }),
-    [query, sort, statuses, onlyFavourites, onlyRated, tag, showArchived]
+  const params: RunListParams = useMemo(() => runListParams(filters), [filters])
+  const listing = searchParams.toString()
+  const open = useCallback(
+    (id: string) => navigate(listing ? `/runs/${id}?${listing}` : `/runs/${id}`),
+    [listing, navigate]
   )
 
-  const runs = useRuns(params)
-  const items = runs.data?.items ?? []
-  const current = items[Math.min(cursor, Math.max(0, items.length - 1))]
+  const restStatuses = statuses.length
+    ? statuses.filter((status) => REST_STATUSES.includes(status))
+    : REST_STATUSES
 
-  // Keep the cursor inside the list when a filter shortens it.
-  useEffect(() => {
-    if (cursor > items.length - 1) setCursor(Math.max(0, items.length - 1))
-  }, [items.length, cursor])
+  const running = useRuns({ status: ["running"], archived: showArchived ? undefined : false, limit: 20 })
+  const queued = useRuns({
+    status: ["queued"],
+    archived: showArchived ? undefined : false,
+    sort: "oldest",
+    limit: 200,
+  })
+  const rest = useRuns(
+    { ...params, status: restStatuses, limit: 60 },
+    { enabled: restStatuses.length > 0 }
+  )
+
+  const runningItems = running.data?.items ?? EMPTY_RUNS
+  const queuedItems = queued.data?.items ?? EMPTY_RUNS
+  const restItems = rest.data?.items ?? EMPTY_RUNS
+  const [queueOpen, setQueueOpen] = useState(false)
+  const queuedShown = useMemo(
+    () => (queueOpen ? queuedItems : queuedItems.slice(0, QUEUED_PREVIEW)),
+    [queueOpen, queuedItems]
+  )
+  const items = useMemo(
+    () => [...runningItems, ...queuedShown, ...restItems],
+    [queuedShown, restItems, runningItems]
+  )
+  const lastIndex = Math.max(0, items.length - 1)
+  const current = items[Math.min(cursor, lastIndex)]
+  const empty = runningItems.length + queuedItems.length + restItems.length === 0
+  const loading = (running.isLoading || queued.isLoading || rest.isLoading) && empty
+  const failed = running.isError && queued.isError && (rest.isError || restStatuses.length === 0)
 
   const searchBox = useRef<HTMLInputElement>(null)
 
@@ -88,7 +110,9 @@ export function RunsPage() {
       const run = current?.run
       const move = (delta: number) => {
         event.preventDefault()
-        setCursor((index) => Math.min(items.length - 1, Math.max(0, index + delta)))
+        setCursor((index) =>
+          Math.min(lastIndex, Math.max(0, Math.min(index, lastIndex) + delta))
+        )
       }
 
       switch (event.key) {
@@ -102,7 +126,7 @@ export function RunsPage() {
           event.preventDefault()
           return searchBox.current?.focus()
         case "Enter":
-          if (run) navigate(`/runs/${run.id}`)
+          if (run) open(run.id)
           return
         case "c":
           if (run) bench.toggle(run.id)
@@ -124,13 +148,13 @@ export function RunsPage() {
       if (/^[0-9]$/.test(event.key) && run) {
         const stars = event.key === "0" ? 10 : Number(event.key)
         rate.mutate({ id: run.id, stars })
-        setCursor((index) => Math.min(items.length - 1, index + 1))
+        setCursor((index) => Math.min(lastIndex, Math.min(index, lastIndex) + 1))
       }
     }
 
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [current, items.length, bench, navigate, patch, rate, clearRating])
+  }, [current, lastIndex, bench, open, patch, rate, clearRating])
 
   // Keep the focused card on screen as the cursor moves.
   useEffect(() => {
@@ -146,7 +170,11 @@ export function RunsPage() {
   return (
     <>
       <PageHeader
-        eyebrow={runs.data ? `${plural(runs.data.total, "run")}` : "Runs"}
+        eyebrow={
+          rest.data
+            ? `${plural((rest.data.total ?? 0) + runningItems.length + queuedItems.length, "run")}`
+            : "Runs"
+        }
         title="Judge the results"
         lede="Every run as a contact strip. Rate with the number keys and the list moves on by itself."
       >
@@ -159,7 +187,7 @@ export function RunsPage() {
           <Input
             ref={searchBox}
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => writeFilters({ ...filters, query: event.target.value }, true)}
             aria-label="Search runs"
             placeholder="Search prompts, labels, notes  ( / )"
             className="pl-8"
@@ -169,7 +197,7 @@ export function RunsPage() {
               variant="ghost"
               size="icon-xs"
               aria-label="Clear the search"
-              onClick={() => setQuery("")}
+              onClick={() => writeFilters({ ...filters, query: "" }, true)}
               className="absolute top-1/2 right-1.5 -translate-y-1/2"
             >
               <X className="size-3" />
@@ -182,7 +210,7 @@ export function RunsPage() {
             value={sort ?? "recent"}
             options={Object.keys(SORTS)}
             render={(value) => SORTS[value] ?? value}
-            onChange={(value) => setSort(value as RunListParams["sort"])}
+            onChange={(value) => writeFilters({ ...filters, sort: value as RunFilters["sort"] })}
             label="Sort runs by"
             size="sm"
             className="w-full sm:w-36 shrink-0"
@@ -192,7 +220,7 @@ export function RunsPage() {
             <Choice
               value={tag}
               options={tags.data}
-              onChange={setTag}
+              onChange={(value) => writeFilters({ ...filters, tag: value })}
               label="Filter by tag"
               emptyLabel="Any tag"
               placeholder="Any tag"
@@ -206,7 +234,7 @@ export function RunsPage() {
           <ToggleGroup
             size="sm"
             value={statuses}
-            onValueChange={(value) => setStatuses(value as Run["status"][])}
+            onValueChange={(value) => writeFilters({ ...filters, statuses: value as Run["status"][] })}
             className="flex-wrap sm:flex-nowrap"
           >
             {STATUSES.map((status) => (
@@ -226,9 +254,12 @@ export function RunsPage() {
             ]}
             onValueChange={(value) => {
               const picked = new Set(value as string[])
-              setOnlyFavourites(picked.has("favourite"))
-              setOnlyRated(picked.has("rated") ? true : picked.has("unrated") ? false : undefined)
-              setShowArchived(picked.has("archived"))
+              writeFilters({
+                ...filters,
+                onlyFavourites: picked.has("favourite"),
+                onlyRated: picked.has("rated") ? true : picked.has("unrated") ? false : undefined,
+                showArchived: picked.has("archived"),
+              })
             }}
             className="flex-wrap sm:flex-nowrap"
           >
@@ -242,13 +273,16 @@ export function RunsPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => {
-                setStatuses([])
-                setOnlyFavourites(false)
-                setOnlyRated(undefined)
-                setTag("")
-                setShowArchived(false)
-              }}
+              onClick={() =>
+                writeFilters({
+                  ...filters,
+                  statuses: [],
+                  onlyFavourites: false,
+                  onlyRated: undefined,
+                  tag: "",
+                  showArchived: false,
+                })
+              }
               className="text-xs"
             >
               Clear filters
@@ -257,32 +291,152 @@ export function RunsPage() {
         </div>
       </div>
 
-      {runs.isError ? (
-        <Failure error={runs.error} what="list the runs" onRetry={() => runs.refetch()} />
-      ) : runs.isLoading ? (
+      {failed ? (
+        <Failure
+          error={rest.error ?? running.error ?? queued.error}
+          what="list the runs"
+          onRetry={() => {
+            void running.refetch()
+            void queued.refetch()
+            void rest.refetch()
+          }}
+        />
+      ) : loading ? (
         <StripSkeleton rows={6} />
-      ) : items.length === 0 ? (
+      ) : empty ? (
         <EmptyRuns filtered={active > 0 || query.length > 0} />
       ) : (
-        <div className="space-y-2.5">
-          {items.map((view, index) => (
-            <RunCard
-              key={view.run.id}
-              view={view}
-              selected={current?.run.id === view.run.id}
-              onFocus={() => setCursor(index)}
-            />
-          ))}
+        <div className="space-y-4">
+          {runningItems.length > 0 ? (
+            <Lane title="In flight" hint="What the GPU is doing right now." testId="runs-running">
+              {runningItems.map((view) => (
+                <RunCard
+                  key={view.run.id}
+                  view={view}
+                  selected={current?.run.id === view.run.id}
+                  onFocus={() => setCursor(items.indexOf(view))}
+                />
+              ))}
+            </Lane>
+          ) : null}
+
+          {queuedItems.length > 0 ? (
+            <Lane
+              title="Queued"
+              hint={`${plural(queuedItems.length, "run")} waiting.`}
+              testId="runs-queued"
+              actions={
+                queuedItems.length > QUEUED_PREVIEW ? (
+                  <Button variant="ghost" size="sm" onClick={() => setQueueOpen((open) => !open)}>
+                    {queueOpen
+                      ? "Show fewer"
+                      : `${queuedItems.length - QUEUED_PREVIEW} more queued`}
+                  </Button>
+                ) : null
+              }
+            >
+              {groupByBatch(queuedShown).map((group) => (
+                <BatchBlock
+                  key={group.batchId ?? group.items[0]!.run.id}
+                  group={group}
+                  items={items}
+                  currentId={current?.run.id}
+                  onFocus={setCursor}
+                />
+              ))}
+            </Lane>
+          ) : null}
+
+          {restItems.length > 0 ? (
+            <Lane title="Done" hint="Finished, failed, or cancelled." testId="runs-done">
+              {groupByBatch(restItems).map((group) => (
+                <BatchBlock
+                  key={group.batchId ?? group.items[0]!.run.id}
+                  group={group}
+                  items={items}
+                  currentId={current?.run.id}
+                  onFocus={setCursor}
+                />
+              ))}
+            </Lane>
+          ) : null}
         </div>
       )}
 
-      {runs.data && runs.data.total > items.length ? (
+      {rest.data && rest.data.total > restItems.length ? (
         <p className="text-muted-foreground mt-4 text-center text-sm">
-          Showing {items.length} of {runs.data.total}. Narrow the filters to see the rest.
+          Showing {restItems.length} of {rest.data.total} finished. Narrow the filters to see the rest.
         </p>
       ) : null}
     </>
   )
+}
+
+function Lane({
+  title,
+  hint,
+  testId,
+  actions,
+  children,
+}: {
+  title: string
+  hint?: string
+  testId: string
+  actions?: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <Section title={title} hint={hint} actions={actions}>
+      <div className="space-y-2.5" data-testid={testId}>
+        {children}
+      </div>
+    </Section>
+  )
+}
+
+function BatchBlock({
+  group,
+  items,
+  currentId,
+  onFocus,
+}: {
+  group: { batchId: string | null; items: RunView[] }
+  items: RunView[]
+  currentId?: string
+  onFocus: (index: number) => void
+}) {
+  const body = group.items.map((view) => (
+    <RunCard
+      key={view.run.id}
+      view={view}
+      selected={currentId === view.run.id}
+      onFocus={() => onFocus(items.findIndex((item) => item.run.id === view.run.id))}
+    />
+  ))
+  if (group.items.length === 1) return body
+  return (
+    <section data-testid="run-batch" className="border-rule/70 space-y-2 rounded-lg border p-2">
+      <header className="text-muted-foreground flex items-baseline justify-between px-0.5 text-xs">
+        <span className="text-bone/80 font-medium">Queued together</span>
+        <span className="edge-code">{plural(group.items.length, "run")}</span>
+      </header>
+      {body}
+    </section>
+  )
+}
+
+function groupByBatch(items: RunView[]): { batchId: string | null; items: RunView[] }[] {
+  const groups: { batchId: string | null; items: RunView[] }[] = []
+  for (const view of items) {
+    const batchId = view.run.batch_id ?? null
+    const last = groups.at(-1)
+    if (last && batchId && last.batchId === batchId) {
+      last.items.push(view)
+    } else {
+      groups.push({ batchId, items: [view] })
+    }
+  }
+  return groups
 }
 
 function EmptyRuns({ filtered }: { filtered: boolean }) {

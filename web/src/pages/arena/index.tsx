@@ -21,7 +21,8 @@ import { Failure, PageHeader, Section, Spinner, Stat } from "@/components/page"
 import { Filmstrip } from "@/components/filmstrip"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { ArenaNav, useArenaFilterParam } from "./nav"
+import { ArenaNav } from "./nav"
+import { useArenaFilterParam } from "./use-arena-filter-param"
 
 export function ArenaPage() {
   const [skipped, setSkipped] = useState<string[]>([])

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import sys
 import threading
 from pathlib import Path
@@ -12,15 +13,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def legacy_workflow_path(mode: str) -> Path:
-    """The per-mode editor templates, even after a unified Studio graph is present."""
-    return REPO_ROOT / f"minimax_h3_{mode}_workflow.json"
+    """Archived per-mode templates retained to test non-Studio compatibility."""
+    return REPO_ROOT / "old_workflows" / f"minimax_h3_{mode}_workflow.json"
 
 
 def unified_workflow_path() -> Path:
-    guided = REPO_ROOT / "minimax_h3_unified_guided.json"
-    if guided.is_file():
-        return guided
-    return REPO_ROOT / "minimax_h3_unified.json"
+    return REPO_ROOT / "minimax_h3_unified_guided_dual.json"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -53,6 +51,7 @@ def settings(tmp_path: Path) -> Settings:
         data_dir=tmp_path / "data",
         models_dir=tmp_path / "models",
         comfy_input_dir=tmp_path / "comfy-input",
+        workflow_dir=REPO_ROOT,
         web_dist=tmp_path / "web-dist",
     )
     made.ensure_dirs()
@@ -83,6 +82,7 @@ class StubComfy:
         self.sec_per_it: float | None = 8.5
         self.video_bytes = b"stub video payload"
         self.downloads: list[str] = []
+        self.prepare_calls: list[tuple[dict[str, Any], dict[str, Any]]] = []
         self.block = threading.Event()
         self.block.set()
 
@@ -107,6 +107,31 @@ class StubComfy:
 
     def is_up(self) -> bool:
         return True
+
+    def prepare_studio(self, workflow, inputs):
+        self.prepare_calls.append((workflow, inputs))
+        prepared = copy.deepcopy(workflow)
+        studios = [
+            node
+            for node in prepared.values()
+            if node.get("class_type") == "MiniMaxH3Studio"
+        ]
+        if len(studios) == 1:
+            for name, value in inputs.items():
+                current = studios[0].setdefault("inputs", {}).get(name)
+                if not (
+                    isinstance(current, list)
+                    and len(current) == 2
+                    and isinstance(current[1], int)
+                ):
+                    studios[0]["inputs"][name] = value
+        return {
+            "contract_version": 1,
+            "workflow": prepared,
+            "inputs": inputs,
+            "capabilities": {},
+            "warnings": [],
+        }
 
     def execute(
         self, prompt, *, track: bool = True, on_live=None, workflow=None, tracker=None
@@ -186,6 +211,7 @@ def lab_settings(tmp_path: Path) -> Settings:
         data_dir=tmp_path / "data",
         models_dir=tmp_path / "models",
         comfy_input_dir=tmp_path / "comfy-input",
+        workflow_dir=REPO_ROOT,
         web_dist=tmp_path / "web-dist",
         comfy_url="http://127.0.0.1:9",
     )

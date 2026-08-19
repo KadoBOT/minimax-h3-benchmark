@@ -11,7 +11,7 @@ import { FlaskConical, GitCompare, Layers, ListVideo, Menu, Swords, Trophy, X } 
 import { NavLink } from "react-router"
 
 import { useStatus } from "@/api/hooks"
-import { useStream } from "@/api/events"
+import { useStream } from "@/api/event-stream-context"
 import { BenchTray } from "@/components/bench-tray"
 import { LiveBadge } from "@/components/live-badge"
 import { Button } from "@/components/ui/button"

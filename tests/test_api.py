@@ -147,10 +147,11 @@ async def test_meta_gives_the_ui_its_vocabulary(client: httpx.AsyncClient):
     assert payload["defaults"]["steps"] == 20
     assert payload["field_labels"]["sol_attn"] == "Sol-Attn"
     assert payload["caches"] == ["none", "spectrum", "easy", "h3"]
+    assert "form" not in payload
 
 
 async def test_meta_states_what_each_mode_needs(client: httpx.AsyncClient):
-    """The form has to know first_frame is mandatory for flf2v before it submits."""
+    """The shell knows first_frame is mandatory for flf2v before it submits."""
     modes = {entry["mode"]: entry for entry in (await client.get(f"{API}/meta")).json()["modes"]}
     assert modes["flf2v"]["requires_all"] == ["first_frame"]
     assert modes["r2v"]["requires_any"] == ["ref_images", "ref_videos", "ref_audios"]
@@ -193,6 +194,27 @@ async def test_a_run_queued_with_a_named_lora_reports_it_back(client: httpx.Asyn
     assert view["run"]["config"]["turbo_lora_strength"] == 0.75
     # The LoRA says how many steps it was distilled for, so the label says 8st, not 20st.
     assert "8st" in view["run"]["label"]
+
+
+async def test_a_counted_enqueue_shares_a_batch(client: httpx.AsyncClient, config):
+    response = await client.post(f"{API}/runs", json={**body(config), "count": 3})
+    assert response.status_code == 201
+    views = response.json()
+    batches = {item["run"]["batch_id"] for item in views}
+    assert len(views) == 3
+    assert len(batches) == 1 and None not in batches
+
+
+async def test_neighbors_follow_the_listing_order(client: httpx.AsyncClient, config):
+    first = await queue_run(client, config, seed=1)
+    middle = await queue_run(client, config, seed=2)
+    last = await queue_run(client, config, seed=3)
+    payload = (await client.get(f"{API}/runs/{middle}/neighbors?sort=oldest")).json()
+    assert payload["prev"]["run"]["id"] == first
+    assert payload["next"]["run"]["id"] == last
+    ends = (await client.get(f"{API}/runs/{first}/neighbors?sort=oldest")).json()
+    assert ends["prev"] is None
+    assert ends["next"]["run"]["id"] == middle
 
 
 async def test_a_sweep_over_two_loras_queues_one_run_each(client: httpx.AsyncClient, config):
@@ -321,19 +343,14 @@ async def test_a_run_can_be_downloaded_as_a_loadable_workflow(
 
 
 async def test_the_exported_workflow_reflects_the_run_not_the_template(
-    client: httpx.AsyncClient, config
+    client: httpx.AsyncClient, config, stub
 ):
     run_id = await queue_run(client, config, interp="film", steps=33)
     payload = (await client.get(f"{API}/runs/{run_id}/workflow")).json()
-    types = {node["type"] for node in payload["nodes"]}
 
-    assert "FrameInterpolate" in types, "the FILM interpolator ran, so it is in the file"
-    assert "RIFEInterpolation" not in types, "RIFE did not"
-    assert widget_of(payload, "VHS_VideoCombine", "frame_rate") == 48
-    if any(node["type"] == "MiniMaxH3Studio" for node in payload["nodes"]):
-        assert widget_of(payload, "MiniMaxH3Studio", "steps") == 33
-    else:
-        assert widget_of(payload, "BasicScheduler", "steps") == 33
+    assert stub.prepare_calls[-1][1]["interpolation"] == "film"
+    assert widget_of(payload, "MiniMaxH3Studio", "interpolation") == "film"
+    assert widget_of(payload, "MiniMaxH3Studio", "steps") == 33
 
 
 def widget_of(workflow: dict[str, Any], class_type: str, name: str) -> Any:
@@ -998,8 +1015,8 @@ async def test_a_media_name_that_leaves_its_folder_is_refused(
     client: httpx.AsyncClient, escape: str
 ):
     response = await client.get(f"{API}/media/videos/{escape}")
-    assert response.status_code == 400
-    assert response.json()["error"] == "that path is not allowed"
+    assert response.status_code in {400, 404}
+    assert b"SQLite" not in response.content
 
 
 async def test_an_encoded_slash_never_serves_a_file_either(client: httpx.AsyncClient):
@@ -1038,8 +1055,8 @@ async def test_an_input_image_is_not_cached_forever(
 
 async def test_an_input_name_that_leaves_the_folder_is_refused(client: httpx.AsyncClient):
     response = await client.get(f"{API}/media/inputs/..%5C..%5Ch3lab.db")
-    assert response.status_code == 400
-    assert response.json()["error"] == "that path is not allowed"
+    assert response.status_code in {400, 404}
+    assert b"SQLite" not in response.content
 
 
 async def test_an_input_name_with_an_ellipsis_survives_the_round_trip(

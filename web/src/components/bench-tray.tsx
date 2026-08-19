@@ -11,7 +11,7 @@ import { useNavigate } from "react-router"
 import { useRuns } from "@/api/hooks"
 import { Button } from "@/components/ui/button"
 import { Filmstrip } from "@/components/filmstrip"
-import { BENCH_LIMIT, useBench } from "@/lib/bench"
+import { BENCH_LIMIT, useBench } from "@/lib/bench-context"
 import { plural } from "@/lib/format"
 
 export function BenchTray() {

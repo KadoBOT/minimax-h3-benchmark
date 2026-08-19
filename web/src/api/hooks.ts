@@ -18,6 +18,7 @@ import { toast } from "sonner"
 import { api, ApiError } from "./client"
 import { derivedKeys, keys } from "./keys"
 import { routes } from "./routes"
+import type { StudioSession } from "@/lib/studio-runtime"
 import type {
   ArenaMatchup,
   ArenaStandings,
@@ -92,6 +93,15 @@ export function useCatalog(refresh = false) {
   })
 }
 
+export function useStudioSession(mode: GenerationConfig["mode"]) {
+  return useQuery({
+    queryKey: keys.studioSession(mode ?? ""),
+    queryFn: () => api.get<StudioSession>(routes.studioSession(), { mode }),
+    enabled: Boolean(mode),
+    staleTime: Infinity,
+  })
+}
+
 export function useQueue() {
   return useQuery({
     queryKey: keys.queue,
@@ -111,6 +121,16 @@ export function useRun(id: string | undefined) {
   return useQuery({
     queryKey: keys.run(id ?? ""),
     queryFn: () => api.get<RunView>(routes.run(id as string)),
+    enabled: Boolean(id),
+  })
+}
+
+export type Neighbors = { prev?: RunView | null; next?: RunView | null }
+
+export function useNeighbors(id: string | undefined, params: RunListParams) {
+  return useQuery({
+    queryKey: keys.neighbors(id ?? "", params),
+    queryFn: () => api.get<Neighbors>(routes.runNeighbors(id as string), params as never),
     enabled: Boolean(id),
   })
 }

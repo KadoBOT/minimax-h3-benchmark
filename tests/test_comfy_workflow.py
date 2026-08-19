@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from h3lab.comfy.workflow import Graph, read, to_api_prompt
+from h3lab.comfy.workflow import Graph, executable, read, to_api_prompt
 
 MODES = ("flf2v", "t2v", "r2v")
 
@@ -131,6 +131,70 @@ def subgraph_workflow() -> dict:
     }
 
 
+def cross_instance_workflow() -> dict:
+    """Acyclic slot flow that looks cyclic when sibling instances are resolved whole."""
+    return {
+        "nodes": [
+            {"id": 1, "type": "Source", "outputs": [{"type": "VALUE", "links": [1]}]},
+            {
+                "id": 2,
+                "type": "split",
+                "inputs": [
+                    {"name": "first", "type": "VALUE", "link": 1},
+                    {"name": "second", "type": "VALUE", "link": 3},
+                ],
+                "outputs": [
+                    {"name": "first", "type": "VALUE", "links": [2]},
+                    {"name": "second", "type": "VALUE", "links": [4]},
+                ],
+            },
+            {
+                "id": 3,
+                "type": "identity",
+                "inputs": [{"name": "value", "type": "VALUE", "link": 2}],
+                "outputs": [{"name": "value", "type": "VALUE", "links": [3]}],
+            },
+            {
+                "id": 4,
+                "type": "Sink",
+                "inputs": [{"name": "value", "type": "VALUE", "link": 4}],
+                "outputs": [],
+            },
+        ],
+        "links": [
+            [1, 1, 0, 2, 0, "VALUE"],
+            [2, 2, 0, 3, 0, "VALUE"],
+            [3, 3, 0, 2, 1, "VALUE"],
+            [4, 2, 1, 4, 0, "VALUE"],
+        ],
+        "definitions": {
+            "subgraphs": [
+                {
+                    "id": "split",
+                    "inputNode": {"id": -10},
+                    "outputNode": {"id": -20},
+                    "inputs": [{"type": "VALUE"}, {"type": "VALUE"}],
+                    "outputs": [{"type": "VALUE"}, {"type": "VALUE"}],
+                    "nodes": [],
+                    "links": [
+                        [11, -10, 0, -20, 0, "VALUE"],
+                        [12, -10, 1, -20, 1, "VALUE"],
+                    ],
+                },
+                {
+                    "id": "identity",
+                    "inputNode": {"id": -10},
+                    "outputNode": {"id": -20},
+                    "inputs": [{"type": "VALUE"}],
+                    "outputs": [{"type": "VALUE"}],
+                    "nodes": [],
+                    "links": [[21, -10, 0, -20, 0, "VALUE"]],
+                },
+            ],
+        },
+    }
+
+
 # --- the subgraph shape ----------------------------------------------------
 
 
@@ -140,6 +204,12 @@ def test_a_subgraph_instance_flattens_to_comfys_execution_ids():
     assert graph.nodes["9:2"].class_type == "BasicScheduler"
     assert graph.nodes["9:2"].path == (9,)
     assert graph.nodes["9:2"].local_id == 2
+
+
+def test_sibling_subgraph_outputs_resolve_by_slot_not_whole_instance():
+    prompt = to_api_prompt(cross_instance_workflow())
+
+    assert prompt["4"]["inputs"]["value"] == ["1", 0]
 
 
 def test_a_promoted_widget_reaches_the_inner_node():
@@ -169,6 +239,55 @@ def test_bypassed_nodes_are_read_with_the_mode_the_template_gave_them():
     graph = read(subgraph_workflow())
     assert graph.nodes["9:2"].mode == 4
     assert graph.nodes["9:1"].mode == 0
+
+
+def test_executable_applies_only_generic_editor_modes():
+    workflow = {
+        "nodes": [
+            {
+                "id": 1,
+                "type": "Source",
+                "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": [1]}],
+            },
+            {
+                "id": 2,
+                "type": "Passthrough",
+                "mode": 4,
+                "inputs": [{"name": "images", "type": "IMAGE", "link": 1}],
+                "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": [2]}],
+            },
+            {
+                "id": 3,
+                "type": "Muted",
+                "mode": 2,
+                "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": []}],
+            },
+            {
+                "id": 4,
+                "type": "Sink",
+                "inputs": [{"name": "images", "type": "IMAGE", "link": 2}],
+                "outputs": [],
+            },
+        ],
+        "links": [
+            [1, 1, 0, 2, 0, "IMAGE"],
+            [2, 2, 0, 4, 0, "IMAGE"],
+        ],
+    }
+
+    prompt, _graph = executable(workflow)
+
+    assert "2" not in prompt
+    assert "3" not in prompt
+    assert prompt["4"]["inputs"]["images"] == ["1", 0]
+
+
+def test_prompt_preserves_nonempty_node_titles_as_metadata():
+    workflow = subgraph_workflow()
+    workflow["nodes"][0]["title"] = "[H3S:cache] Spectrum"
+    assert read(workflow).prompt()["5"]["_meta"] == {
+        "title": "[H3S:cache] Spectrum"
+    }
 
 
 def test_the_boundary_is_found_even_when_it_is_numbered_differently():

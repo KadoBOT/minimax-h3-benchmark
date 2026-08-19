@@ -125,6 +125,31 @@ def test_an_unknown_interpolation_is_rejected(base_config):
         base_config.merged(interp="dain")
 
 
+def test_the_studio_api_dialect_is_accepted_as_a_config(base_config):
+    """A payload that speaks MiniMaxH3Studio names still becomes a lab config."""
+    cfg = base_config.merged(
+        duration=6.5,
+        megapixels=0.9,
+        sampler_name="euler",
+        interpolation="none",
+        mode="T2V",
+        pass2_steps=7,
+        dual=True,
+    )
+    assert cfg.duration_s == 6.5
+    assert cfg.mp == 0.9
+    assert cfg.sampler == "euler"
+    assert cfg.interp == "off"
+    assert cfg.mode == "t2v"
+    assert cfg.widgets["pass2_steps"] == 7
+    assert cfg.widgets["dual"] is True
+
+
+def test_guides_count_as_media_the_input_folder_must_hold(base_config):
+    cfg = base_config.merged(widgets={"guides": '[{"time": 0.8, "image": "beat.png"}]'})
+    assert "beat.png" in cfg.media_files
+
+
 def test_cache_none_and_cache_disabled_are_one_truth(base_config):
     assert base_config.merged(cache="none").cache_enabled is False
     assert base_config.merged(cache_enabled=False).cache == "none"

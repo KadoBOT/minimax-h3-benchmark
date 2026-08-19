@@ -91,7 +91,8 @@ class Graph:
         return self.nodes.get(str(node_id))
 
     def add(self, node: Node) -> Node:
-        node.order = node.order or len(self.nodes) + 1
+        current = self.nodes.get(node.id)
+        node.order = node.order or (current.order if current else len(self.nodes) + 1)
         self.nodes[node.id] = node
         return node
 
@@ -113,10 +114,13 @@ class Graph:
         return found
 
     def prompt(self) -> Prompt:
-        return {
-            node.id: {"class_type": node.class_type, "inputs": dict(node.inputs)}
-            for node in self
-        }
+        prompt: Prompt = {}
+        for node in self:
+            spec = {"class_type": node.class_type, "inputs": dict(node.inputs)}
+            if node.title:
+                spec["_meta"] = {"title": node.title}
+            prompt[node.id] = spec
+        return prompt
 
 
 # --- widget names ----------------------------------------------------------
@@ -342,14 +346,38 @@ class _Level:
     # -- the level itself
 
     def run(self, *, output_node_id: int | None = None) -> dict[int, Any]:
+        instances: list[int] = []
         for local_id, node in self.by_local.items():
             class_type = _class_of(node)
             if not class_type:
                 continue
             if class_type in self.subgraphs:
                 self._instance_outputs(local_id)
+                instances.append(local_id)
                 continue
             if class_type in N.UI_ONLY_TYPES or class_type in _PASS_THROUGH_TYPES:
+                continue
+            self.graph.add(self._node(local_id, node, class_type))
+
+        # A sibling instance may consume one output slot while providing another. Resolving
+        # whole instances recursively makes that acyclic slot flow look cyclic on the first
+        # pass. Re-evaluate each instance after its siblings have published provisional
+        # outputs, once per possible dependency hop.
+        for _ in instances:
+            for local_id in instances:
+                node = self.by_local[local_id]
+                definition = self.subgraphs[_class_of(node)]
+                self._instances[local_id] = self._enter(local_id, node, definition)
+
+        # Inputs on ordinary nodes may have observed provisional instance outputs.
+        for local_id, node in self.by_local.items():
+            class_type = _class_of(node)
+            if (
+                not class_type
+                or class_type in self.subgraphs
+                or class_type in N.UI_ONLY_TYPES
+                or class_type in _PASS_THROUGH_TYPES
+            ):
                 continue
             self.graph.add(self._node(local_id, node, class_type))
 
@@ -487,6 +515,40 @@ def read(workflow: dict[str, Any], *, widget_names: WidgetNames | None = None) -
     )
     level.run()
     return graph
+
+
+def _passthrough_source(node: Node, slot: int) -> tuple[str, int] | None:
+    wanted = node.output_types[slot] if slot < len(node.output_types) else ""
+    links = list(node.links())
+    if wanted:
+        for name, source, source_slot in links:
+            if node.input_types.get(name) == wanted:
+                return source, source_slot
+    if len(links) == 1:
+        _name, source, source_slot = links[0]
+        return source, source_slot
+    return None
+
+
+def _drop_disabled(graph: Graph, node: Node) -> None:
+    for consumer, name, slot in graph.consumers(node.id):
+        replacement = _passthrough_source(node, slot) if node.bypassed else None
+        if replacement is None:
+            consumer.inputs.pop(name, None)
+        else:
+            consumer.inputs[name] = [replacement[0], replacement[1]]
+    graph.remove(node.id)
+
+
+def executable(
+    workflow: dict[str, Any], *, widget_names: WidgetNames | None = None
+) -> tuple[Prompt, Graph]:
+    """Flatten an editor workflow and apply ordinary muted/bypassed node modes."""
+    graph = read(workflow, widget_names=widget_names)
+    for node in list(graph):
+        if node.disabled:
+            _drop_disabled(graph, node)
+    return graph.prompt(), graph
 
 
 def to_api_prompt(

@@ -6,9 +6,11 @@
  * also the button that makes another one like it.
  */
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Download,
   Heart,
@@ -20,7 +22,7 @@ import {
   Trash2,
   X,
 } from "lucide-react"
-import { Link, useNavigate, useParams } from "react-router"
+import { Link, useNavigate, useParams, useSearchParams } from "react-router"
 import { toast } from "sonner"
 
 import { routes } from "@/api/routes"
@@ -28,6 +30,7 @@ import {
   useClearRating,
   useDeleteRun,
   useMeta,
+  useNeighbors,
   usePatchRun,
   useRate,
   useRerun,
@@ -37,20 +40,31 @@ import {
 } from "@/api/hooks"
 import type { RunView } from "@/api/schema"
 import { Filmstrip } from "@/components/filmstrip"
+import { LivePreview } from "@/components/live-preview"
+import { useLivePreview } from "@/components/use-live-preview"
+import { RunConfigList } from "@/components/run-facts"
 import { Failure, PageHeader, Section, Spinner, Stat } from "@/components/page"
+import { Progress } from "@/components/ui/progress"
 import { CriteriaRating, StarRating } from "@/components/stars"
 import { StatusChip } from "@/components/status-chip"
 import { Button } from "@/components/ui/button"
+import { buttonVariants } from "@/components/ui/button-variants"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { useBench } from "@/lib/bench"
-import { display, label as fieldLabel } from "@/lib/config"
+import { useBench } from "@/lib/bench-context"
+import { label as fieldLabel } from "@/lib/config"
+import { neighborParams } from "@/lib/run-filters"
 import { ago, bytes, elo, moment, seconds, secPerIt, shortHash } from "@/lib/format"
+import { cn } from "@/lib/utils"
 
 export function RunPage() {
   const { runId } = useParams<{ runId: string }>()
+  const [search] = useSearchParams()
+  const searchKey = search.toString()
+  const listingParams = useMemo(() => neighborParams(new URLSearchParams(searchKey)), [searchKey])
   const query = useRun(runId)
   const meta = useMeta()
+  const neighbors = useNeighbors(runId, listingParams)
 
   if (query.isLoading) return <Spinner label="Opening the run" />
   if (query.isError || !query.data) {
@@ -59,13 +73,46 @@ export function RunPage() {
     )
   }
 
-  return <RunDetail view={query.data} labels={(field: string) => fieldLabel(meta.data, field)} />
+  return (
+    <RunDetail
+      view={query.data}
+      labels={(field: string) => fieldLabel(meta.data, field)}
+      prev={neighbors.data?.prev ?? null}
+      next={neighbors.data?.next ?? null}
+      search={search.toString()}
+    />
+  )
 }
 
-function RunDetail({ view, labels }: { view: RunView; labels: (field: string) => string }) {
+function RunDetail({
+  view,
+  labels,
+  prev,
+  next,
+  search,
+}: {
+  view: RunView
+  labels: (field: string) => string
+  prev: RunView | null
+  next: RunView | null
+  search: string
+}) {
   const { run } = view
   const navigate = useNavigate()
   const bench = useBench()
+  const live = useLivePreview(run.id)
+  const suffix = search ? `?${search}` : ""
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable) return
+      if (event.key === "[" && prev) navigate(`/runs/${prev.run.id}${suffix}`)
+      if (event.key === "]" && next) navigate(`/runs/${next.run.id}${suffix}`)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [navigate, next, prev, suffix])
   const rate = useRate()
   const clearRating = useClearRating()
   const patch = usePatchRun()
@@ -85,10 +132,40 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
   return (
     <>
       <PageHeader eyebrow={`${stamp.verb} ${ago(stamp.at)}`} title={run.label}>
-        <Button variant="ghost" size="sm" onClick={() => navigate(-1)}>
+        <Link to={`/runs${suffix}`} className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
           <ArrowLeft data-icon="inline-start" className="size-3.5" />
           Back
-        </Button>
+        </Link>
+        {prev ? (
+          <Link
+            to={`/runs/${prev.run.id}${suffix}`}
+            aria-label="Previous run"
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+          >
+            <ChevronLeft data-icon="inline-start" className="size-3.5" />
+            Prev
+          </Link>
+        ) : (
+          <span className={cn(buttonVariants({ variant: "outline", size: "sm" }), "pointer-events-none opacity-50")}>
+            <ChevronLeft data-icon="inline-start" className="size-3.5" />
+            Prev
+          </span>
+        )}
+        {next ? (
+          <Link
+            to={`/runs/${next.run.id}${suffix}`}
+            aria-label="Next run"
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+          >
+            Next
+            <ChevronRight data-icon="inline-end" className="size-3.5" />
+          </Link>
+        ) : (
+          <span className={cn(buttonVariants({ variant: "outline", size: "sm" }), "pointer-events-none opacity-50")}>
+            Next
+            <ChevronRight data-icon="inline-end" className="size-3.5" />
+          </span>
+        )}
         <Button
           variant={staged ? "secondary" : "outline"}
           size="sm"
@@ -114,6 +191,8 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
                   run.artifact.poster_path ? routes.poster(run.artifact.poster_path) : undefined
                 }
                 controls
+                autoPlay
+                muted
                 loop
                 playsInline
                 className="bg-ink max-h-[55vh] sm:max-h-[65vh] w-full object-contain mx-auto"
@@ -124,11 +203,42 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
                       : "16 / 9",
                 }}
               />
+            ) : run.status === "running" && live ? (
+              <LivePreview
+                runId={run.id}
+                seq={live.seq}
+                mime={live.mime}
+                className="bg-ink max-h-[55vh] sm:max-h-[65vh]"
+              />
             ) : (
               <div className="text-muted-foreground flex aspect-video items-center justify-center text-sm">
-                {run.status === "failed" ? "This run produced nothing." : "No video yet."}
+                {run.status === "failed"
+                  ? "This run produced nothing."
+                  : run.status === "running"
+                    ? "Rendering…"
+                    : "No video yet."}
               </div>
             )}
+            {run.status === "running" && live?.step != null && live.stepTotal ? (
+              <div className="border-rule border-t px-3 py-2">
+                <Progress
+                  value={(live.step / live.stepTotal) * 100}
+                  className="[&_[data-slot=progress-track]]:bg-rule"
+                />
+                <div className="edge-code text-muted-foreground mt-1.5 flex justify-between">
+                  <span>
+                    step {live.step} of {live.stepTotal}
+                    {live.node ? ` · ${live.node}` : ""}
+                  </span>
+                  <span className="text-signal">
+                    {secPerIt(live.secPerIt)}
+                    {live.secPerIt
+                      ? ` · ${seconds((live.stepTotal - live.step) * live.secPerIt)} left`
+                      : ""}
+                  </span>
+                </div>
+              </div>
+            ) : null}
             {run.artifact?.video_path ? (
               // The player is directly above; the strip's job here is scrubbing, not replaying.
               <Filmstrip run={run} scrub preview={false} className="border-rule border-t min-h-[44px] sm:min-h-0" />
@@ -171,18 +281,7 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
             title="The config that made it"
             hint="The workflow download is the same settings as a graph ComfyUI opens."
           >
-            <dl className="grid gap-x-6 gap-y-2 grid-cols-1 sm:grid-cols-2">
-              {Object.entries(run.config)
-                .filter(([, value]) => value !== null && value !== "" && !isEmptyList(value))
-                .map(([field, value]) => (
-                  <div key={field} className="flex items-baseline justify-between gap-2 sm:gap-3 text-sm">
-                    <dt className="text-muted-foreground truncate shrink-0 max-w-[55%]">{labels(field)}</dt>
-                    <dd className="text-bone truncate text-right font-mono text-xs">
-                      {display(value)}
-                    </dd>
-                  </div>
-                ))}
-            </dl>
+            <RunConfigList config={run.config} labels={labels} />
             <div className="border-rule mt-4 flex flex-wrap items-center gap-2 border-t pt-3">
               <Input
                 value={presetName}
@@ -395,8 +494,4 @@ function RunDetail({ view, labels }: { view: RunView; labels: (field: string) =>
       </div>
     </>
   )
-}
-
-function isEmptyList(value: unknown): boolean {
-  return Array.isArray(value) && value.length === 0
 }

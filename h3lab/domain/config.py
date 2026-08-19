@@ -15,15 +15,54 @@ CacheName = Literal["none", "spectrum", "easy", "h3"]
 PresetLevel = Literal["conservative", "moderate", "aggressive", "custom"]
 CachePreset = PresetLevel
 RefImageSize = Literal["match", "max"]
-Interp = Literal["off", "film", "rife"]
+Interp = Literal["off", "film", "rife", "gmfss"]
 
 GEN_MODES: tuple[GenMode, ...] = ("flf2v", "t2v", "r2v")
 CACHE_NAMES: tuple[CacheName, ...] = ("none", "spectrum", "easy", "h3")
-INTERP_MODES: tuple[Interp, ...] = ("off", "film", "rife")
-INTERP_LABELS: dict[str, str] = {"off": "Off", "film": "FILM Net", "rife": "RIFE"}
+INTERP_MODES: tuple[Interp, ...] = ("off", "film", "rife", "gmfss")
+INTERP_LABELS: dict[str, str] = {
+    "off": "Off",
+    "film": "FILM Net",
+    "rife": "RIFE",
+    "gmfss": "GMFSS",
+}
 
 # Field names a stored config may still use. They are read and translated, never written.
 LEGACY_FIELD_ALIASES: frozenset[str] = frozenset({"rife"})
+
+# Studio / API names that mean an existing config field. A payload that speaks the
+# MiniMaxH3Studio dialect is accepted and stored in the lab's own vocabulary.
+STUDIO_FIELD_ALIASES: dict[str, str] = {
+    "duration": "duration_s",
+    "megapixels": "mp",
+    "sampler_name": "sampler",
+    "interpolation": "interp",
+    "upscale_rtx": "upscaler",
+}
+STUDIO_VALUE_ALIASES: dict[str, dict[str, str]] = {
+    "mode": {"T2V": "t2v", "FLF2V": "flf2v", "R2V": "r2v"},
+    "interp": {"none": "off"},
+}
+# Studio knobs that are not first-class config fields. A top-level payload may name
+# them; they land on `widgets`. A brand-new widget the form discovered does not
+# need to be listed here — the UI already writes it to `widgets` by name.
+STUDIO_EXTRA_FIELDS: frozenset[str] = frozenset(
+    {
+        "guides",
+        "upscale_ltx",
+        "seed_mode",
+        "post_grade",
+        "dual",
+        "shift_video",
+        "pass2_steps",
+        "pass2_denoise",
+        "pass2_scheduler",
+        "pass2_sampler_name",
+        "pass2_shift",
+        "pass2_scale",
+        "attn",
+    }
+)
 PRESET_LEVELS: tuple[PresetLevel, ...] = (
     "conservative",
     "moderate",
@@ -132,6 +171,27 @@ def basename(value: str) -> str:
     return text.lstrip("./")
 
 
+def _guide_files(raw: Any) -> list[str]:
+    """Filenames buried in a Studio `guides` JSON payload."""
+    payload: Any = raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(payload, list):
+        return []
+    names: list[str] = []
+    for clip in payload:
+        if not isinstance(clip, dict):
+            continue
+        for key in ("image", "audio"):
+            value = clip.get(key)
+            if isinstance(value, str) and value.strip():
+                names.append(basename(value))
+    return names
+
+
 def _clamp_names(values: Iterable[str] | None, limit: int) -> list[str]:
     out: list[str] = []
     for value in values or []:
@@ -188,17 +248,48 @@ class GenerationConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _accept_legacy_names(cls, data: Any) -> Any:
-        """Read `rife: bool`, the shape a config had before interpolation had three answers.
+        """Read older names, the Studio API dialect, and extra studio widgets.
 
-        Stored runs, saved presets, and the old benchmark's export all still speak it. An
-        explicit `interp` wins, so a translated row can never overwrite a current one.
+        Stored runs, saved presets, and the old benchmark's export still speak `rife`.
+        The MiniMaxH3Studio node speaks `duration` / `interpolation` / `T2V`. Unknown
+        studio knobs land on `widgets` so a new API field hashes and round-trips
+        without a model change. An explicit current name always wins over an alias.
         """
-        if not isinstance(data, dict) or "rife" not in data:
+        if not isinstance(data, dict):
             return data
         moved = dict(data)
-        legacy = moved.pop("rife")
-        if moved.get("interp") is None:
-            moved["interp"] = "rife" if legacy else "off"
+        if "rife" in moved:
+            legacy = moved.pop("rife")
+            if moved.get("interp") is None:
+                moved["interp"] = "rife" if legacy else "off"
+        for studio_name, field in STUDIO_FIELD_ALIASES.items():
+            if studio_name in moved and field not in moved:
+                moved[field] = moved.pop(studio_name)
+            elif studio_name in moved:
+                moved.pop(studio_name)
+        cache = moved.get("cache")
+        if isinstance(cache, bool):
+            moved.pop("cache")
+            if "cache_enabled" not in moved:
+                moved["cache_enabled"] = cache
+            if not cache:
+                moved["cache"] = "none"
+            elif moved.get("cache") is None:
+                moved["cache"] = "spectrum"
+        for field, mapping in STUDIO_VALUE_ALIASES.items():
+            value = moved.get(field)
+            if isinstance(value, str) and value in mapping:
+                moved[field] = mapping[value]
+        extras = {key: moved.pop(key) for key in list(moved) if key in STUDIO_EXTRA_FIELDS}
+        if extras:
+            widgets = dict(moved.get("widgets") or {})
+            widgets.update(extras)
+            moved["widgets"] = widgets
+        explicit_attn = (moved.get("widgets") or {}).get("attn")
+        if explicit_attn is not None:
+            if explicit_attn not in {"off", "sol", "comfy_kitchen"}:
+                raise ValueError(f"unsupported attention mode {explicit_attn!r}")
+            moved["sol_attn"] = explicit_attn == "sol"
         return moved
 
     @field_validator("prompt")
@@ -306,18 +397,38 @@ class GenerationConfig(BaseModel):
         names.extend(self.ref_videos)
         names.extend(self.ref_video_audios)
         names.extend(self.ref_audios)
+        names.extend(_guide_files(self.widgets.get("guides")))
         return tuple(name for name in names if name)
 
     def merged(self, **overrides: Any) -> GenerationConfig:
         """A new config with ``overrides`` applied and revalidated.
 
-        Legacy names are passed through for the model to translate, so an override written
-        against the old vocabulary changes the config instead of being quietly ignored.
+        Legacy names and Studio API names are passed through for the model to translate,
+        so an override written against either vocabulary changes the config instead of
+        being quietly ignored. Unknown studio knobs land on `widgets`.
         """
-        known = set(type(self).model_fields) | LEGACY_FIELD_ALIASES
         data = self.model_dump()
-        data.update({k: v for k, v in overrides.items() if k in known})
+        rewritten: dict[str, Any] = {}
+        for key, value in overrides.items():
+            target = STUDIO_FIELD_ALIASES.get(key)
+            if target is not None and target not in overrides:
+                rewritten[target] = value
+            else:
+                rewritten[key] = value
+        incoming_widgets = rewritten.get("widgets")
+        if isinstance(incoming_widgets, dict) and data.get("widgets"):
+            merged_widgets = dict(data["widgets"])
+            merged_widgets.update(incoming_widgets)
+            rewritten = {**rewritten, "widgets": merged_widgets}
+        data.update(rewritten)
         return type(self)(**data)
+
+
+def config_attention(config: GenerationConfig) -> str:
+    explicit = config.widgets.get("attn")
+    if isinstance(explicit, str):
+        return explicit
+    return "sol" if config.sol_attn else "off"
 
 
 # Fields that change the produced pixels. Ordered so canonical output is stable
@@ -374,7 +485,15 @@ def canonical_form(cfg: GenerationConfig, *, exclude: Iterable[str] = ()) -> str
     """Deterministic JSON over the sampling-relevant fields only."""
     skip = set(exclude)
     payload = {
-        field: _jsonable(getattr(cfg, field))
+        field: _jsonable(
+            {
+                key: value
+                for key, value in cfg.widgets.items()
+                if key != "attn" or value not in {"sol", "off"}
+            }
+            if field == "widgets"
+            else getattr(cfg, field)
+        )
         for field in HASHED_FIELDS
         if field not in skip
     }
@@ -432,6 +551,7 @@ FIELD_LABELS: dict[str, str] = {
     "sol_attn": "Sol-Attn",
     "sol_preset": "Sol preset",
     "widgets": "Widget overrides",
+    "guides": "Guides",
 }
 
 
@@ -559,7 +679,13 @@ def derive_label(seq: int, cfg: GenerationConfig) -> str:
     parts.append(cfg.cache if cfg.cache_enabled else "nocache")
     if cfg.cache_enabled and cfg.cache_preset != "custom":
         parts[-1] = f"{cfg.cache}/{cfg.cache_preset[:3]}"
-    parts.append(f"sol/{cfg.sol_preset[:3]}" if cfg.sol_attn else "nosol")
+    attention = config_attention(cfg)
+    if attention == "sol":
+        parts.append(f"sol/{cfg.sol_preset[:3]}")
+    elif attention == "comfy_kitchen":
+        parts.append("kitchen")
+    else:
+        parts.append("nosol")
     parts.append(f"{cfg.effective_steps}st")
     if cfg.turbo:
         parts.append(f"turbo/{lora_stem(cfg.turbo_lora_file)}")

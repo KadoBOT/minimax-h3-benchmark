@@ -1,6 +1,6 @@
 /** A run's status, with the live rate when it is the one on the GPU. */
 
-import { useStream } from "@/api/events"
+import { useStream } from "@/api/event-stream-context"
 import type { Run } from "@/api/schema"
 import { secPerIt } from "@/lib/format"
 import { cn } from "@/lib/utils"

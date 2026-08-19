@@ -37,6 +37,7 @@ columns, and UI labels all use the same terms.
 - Node 20+ (only to build the front end)
 - A running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) with the MiniMax H3
   models (`fl2va` for FLF2V/T2V, `ref2va` for R2V)
+- `ComfyUI-MiniMax-H3-Studio` with Studio contract major version 1
 - `ffmpeg` / `ffprobe` on `PATH` — optional; without them you get videos but no poster
   frames or filmstrips
 
@@ -61,21 +62,17 @@ Before the first run, ask what is broken:
 python -m h3lab check
 ```
 
-It reports the two failures that used to cost the most time — ComfyUI unreachable, and a
-workflow template that cannot be patched — plus every role it could find in each template, what
-the installed nodes say is wrong with the graph, the model folder, ffmpeg, and whether the front
-end is built. Exit code is non-zero only when something fatal is wrong.
-
-```bash
-python -m h3lab check --roles          # and which node plays each part
-```
+It checks ComfyUI, the installed Studio contract, every workflow template, installed node
+schemas, the fallback model folder, ffmpeg, ffprobe, and the built front end. Exit code is
+non-zero only when a fatal requirement is missing; optional fallback paths remain visible in
+the report without blocking the app.
 
 ### Commands
 
 | Command | Purpose |
 |---------|---------|
 | `serve` | Run the web app (this is the default, so bare `h3lab` works) |
-| `check` | Report what is wrong without queueing anything (`--roles` for the role table, `--json` for scripts) |
+| `check` | Report what is wrong without queueing anything (`--json` for scripts) |
 | `import-legacy` | Pull runs, ratings, and videos out of the previous lab's `benchmark.db` |
 | `routes` | List every route the API answers |
 | `openapi` | Print the OpenAPI schema the front end's types are generated from |
@@ -103,22 +100,35 @@ environment variable; flags win.
 The data directory holds `h3lab.db` plus `videos/`, `posters/`, and `strips/`. Nothing
 outside it is written.
 
+## Studio runtime contract
+
+The running MiniMax H3 Studio custom node owns the generation UI and the final workflow
+adaptation. H3 Lab proxies its unstyled ES module through `/api/studio/component.js`, mounts
+it on the Lab page, and sends the source API workflow to `/api/studio/prepare` immediately
+before validation or queueing. The returned workflow is the queue-ready artifact.
+
+H3 Lab still owns benchmark-specific model selection, cache family and preset tuning, Turbo
+LoRA strength, run identity, sweeps, and persistence. It does not carry a fallback copy of the
+Studio component or its graph-rewrite logic: a missing route or incompatible contract is an
+actionable installation error. See the custom node's
+[integration skill](../ComfyUI-MiniMax-H3-Studio/docs/SKILL.md) for the public component and
+prepare contracts.
+
 ## Generation modes
 
 | Mode | Template | Needs | Weights family |
 |------|----------|-------|----------------|
-| **FLF2V** first/last frame | `minimax_h3_flf2v_workflow.json` | first frame (last frame optional) | fl2va |
-| **T2V** text to video | `minimax_h3_t2v_workflow.json` | prompt only | fl2va |
-| **R2V** references to video | `minimax_h3_r2v_workflow.json` | at least one reference | **ref2va** |
+| **FLF2V** first/last frame | `minimax_h3_unified_guided_dual.json` | first frame (last frame optional) | fl2va |
+| **T2V** text to video | `minimax_h3_unified_guided_dual.json` | prompt only | fl2va |
+| **R2V** references to video | `minimax_h3_unified_guided_dual.json` | at least one reference | **ref2va** |
 
 R2V accepts up to **9 images**, **3 videos** (each with an optional paired soundtrack),
 and **3 standalone audio** clips. Tag them in the prompt as `<Picture 1>`, `<Video 1>`,
 `<Audio 1>` in connection order.
 
-The templates are ComfyUI editor exports. The lab converts them to API prompt format and
-patches them per run — wiring the loader implied by the weights filename, and pruning
-whole groups (LoRA, attention, caches, interpolation, upscaler) when a toggle is off. Add or
-remove model files in the models directory and refresh; nothing about them is hard-coded.
+The template is a ComfyUI editor export. H3 Lab converts it to API prompt format and selects
+benchmark-owned model/cache tuning. The Studio prepare endpoint then selects attention,
+interpolation, upscaling, cleanup, grading, dual-pass, and cache on/off paths.
 
 ## Surviving workflow changes
 
@@ -133,7 +143,7 @@ Nothing is addressed by id now. Four rules, each doing one job:
 | Read the graph ComfyUI would execute | `comfy/workflow.py` | Subgraphs, nested subgraphs, both link formats, promoted widgets, bypassed nodes. A template is flattened to the same execution ids ComfyUI's own executor uses. |
 | Ask the node what its widgets are called | `comfy/schema.py` | A node pack renaming or adding a widget. `/object_info` is the authority; the order saved in the template answers when ComfyUI is off; a required widget nobody set gets the node's own default. |
 | Find nodes by what they are | `comfy/roles.py` | Renumbering, retitling, reordering. A role is resolved from the title tag, then the class, then the wiring, then the id it once had. `MS_ROLE:duration` in a title is an override that beats every guess. |
-| Prune instead of rebuild | `comfy/graph.py` | Extra nodes, reordered chains, a branch you added. Disabled parts are removed and their links passed through by type, so a config selects a subgraph of your graph rather than reconstructing an assumed one. |
+| Prepare through Studio | `comfy/studio.py` | Tagged optional branches. H3 Lab keeps the source workflow; the custom node returns the selected queue-ready graph. |
 
 What that buys, concretely:
 
@@ -216,10 +226,10 @@ Every run can be reopened as the graph that produced it, two ways:
   `extra_data.extra_pnginfo.workflow` when it queues, which is the key ComfyUI's frontend prefers
   when you drag an image onto the canvas, so a dropped frame reopens as a readable graph.
 
-Both are built by applying the config to the template as it is on disk now, then projecting the
-patched prompt back into editor form. `to_api_prompt(export) == prompt` holds for every prompt
-`apply_config` produces, which is what makes the downloaded file, the graph in the PNG, and the
-run itself one graph rather than three descriptions of one.
+Both are built by applying benchmark-owned settings to the current source template, preparing
+it through the Studio contract, and projecting that exact prepared prompt back into editor
+form. That is what makes the downloaded file, the graph in the PNG, and the submitted run one
+graph rather than three descriptions of one.
 
 ### Picking media
 
@@ -336,12 +346,12 @@ already imported are counted and skipped, not duplicated.
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                       # 618 backend tests
+pytest -q                       # 706 backend tests
 
 cd web
 npm run dev                     # Vite on :5173, proxying /api to :8787
 npm run typecheck
-npm test                        # 120 DOM tests
+npm test                        # 128 DOM tests
 npm run build
 ```
 
@@ -359,10 +369,12 @@ reach the browser as `undefined`.
 For an end-to-end check against a real browser:
 
 ```bash
-python scripts/smoke.py         # boots a server on a seeded temp DB, drives it with Playwright
+python scripts/smoke.py         # seeded temp DB + the live Studio contract, driven by Playwright
 ```
 
-It walks every page, fails on console errors, on horizontal overflow, and on the specific
+It never submits a generation, but it does load the Studio v1 component and call its prepare
+endpoint from the configured ComfyUI (override with `--comfy-url`). It walks every page, fails
+on console errors, on horizontal overflow, and on the specific
 regressions that have bitten before (a disabled sweep that queued anyway, a leaderboard
 label overlapping its score, a thumbnail whose `src` resolved but never decoded, a live
 stream that stayed open and delivered nothing, a hover preview that autoplay policy refused

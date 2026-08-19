@@ -102,6 +102,9 @@ class Run(BaseModel):
     started_at: str | None = None
     finished_at: str | None = None
 
+    # Runs created by one enqueue or sweep share this. A lone run has its own id.
+    batch_id: str | None = None
+
     @property
     def mode(self) -> str:
         return self.config.mode
