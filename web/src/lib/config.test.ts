@@ -6,12 +6,20 @@ import {
   changedFields,
   display,
   inertFields,
+  installedModel,
   mediaDefaults,
   missingInputs,
 } from "./config"
 import type { Draft } from "./config"
 
-const BASE: Draft = { mode: "t2v", steps: 20, seed: 1, cache: "none", sol_attn: false }
+const BASE: Draft = {
+  mode: "t2v",
+  diffusion_model: "model.safetensors",
+  steps: 20,
+  seed: 1,
+  cache: "none",
+  sol_attn: false,
+}
 
 describe("draft configs", () => {
   it("greys out steps once turbo fixes the schedule", () => {
@@ -39,27 +47,51 @@ describe("draft configs", () => {
   })
 
   it("names what a mode is still missing, in the label the API uses", () => {
-    expect(missingInputs({ mode: "t2v" }, META)).toEqual([])
-    expect(missingInputs({ mode: "flf2v" }, META)).toEqual(["First frame"])
-    expect(missingInputs({ mode: "flf2v", first_frame: "a.png" }, META)).toEqual([])
+    expect(missingInputs({ mode: "t2v" }, META)).toEqual(["Weights"])
+    expect(missingInputs({ ...BASE, mode: "flf2v" }, META)).toEqual(["First frame"])
+    expect(missingInputs({ ...BASE, mode: "flf2v", first_frame: "a.png" }, META)).toEqual([])
   })
 
   it("treats a requires-any mode as satisfied by either input", () => {
-    expect(missingInputs({ mode: "r2v" }, META)).toEqual(["Ref images or Ref videos"])
-    expect(missingInputs({ mode: "r2v", ref_images: ["a.png"] }, META)).toEqual([])
-    expect(missingInputs({ mode: "r2v", ref_videos: ["clip.mp4"] }, META)).toEqual([])
+    expect(missingInputs({ ...BASE, mode: "r2v" }, META)).toEqual(["Ref images or Ref videos"])
+    expect(missingInputs({ ...BASE, mode: "r2v", ref_images: ["a.png"] }, META)).toEqual([])
+    expect(missingInputs({ ...BASE, mode: "r2v", ref_videos: ["clip.mp4"] }, META)).toEqual([])
   })
 
   it("falls back to a readable name for a field the API did not label", () => {
     const bare = { ...META, field_labels: {} }
-    expect(missingInputs({ mode: "flf2v" }, bare)).toEqual(["first frame"])
+    expect(missingInputs({ ...BASE, mode: "flf2v" }, bare)).toEqual(["first frame"])
   })
 
   it("does not count whitespace or an empty list as an answer", () => {
-    expect(missingInputs({ mode: "flf2v", first_frame: "   " }, META)).toEqual(["First frame"])
-    expect(missingInputs({ mode: "r2v", ref_images: [] }, META)).toEqual([
+    expect(missingInputs({ ...BASE, mode: "flf2v", first_frame: "   " }, META)).toEqual([
+      "First frame",
+    ])
+    expect(missingInputs({ ...BASE, mode: "r2v", ref_images: [] }, META)).toEqual([
       "Ref images or Ref videos",
     ])
+  })
+
+  it("replaces a stale model with the installed default", () => {
+    const offered = [
+      "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors",
+      "minimax-h3/custom_variant.safetensors",
+    ]
+    expect(
+      installedModel(
+        "minimax_h3_fl2va_pruned_nvfp4.safetensors",
+        offered,
+        offered[0]
+      )
+    ).toBe(offered[0])
+  })
+
+  it("normalizes a unique model basename to its ComfyUI combo value", () => {
+    const offered = [
+      "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors",
+      "minimax-h3/custom_variant.safetensors",
+    ]
+    expect(installedModel("custom_variant.safetensors", offered, offered[0])).toBe(offered[1])
   })
 
   it("offers only the fields a mode reads", () => {

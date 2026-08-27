@@ -97,7 +97,7 @@ export function shortHash(hash: string | null | undefined, length = 6): string {
 /** Trim a model filename to the part that distinguishes it. */
 export function modelStem(filename: string | null | undefined): string {
   if (!filename) return "default"
-  let stem = filename.replace(/\.[^.]+$/, "")
+  let stem = (filename.replaceAll("\\", "/").split("/").at(-1) ?? filename).replace(/\.[^.]+$/, "")
   for (const noise of ["minimax_h3_", "minimax-h3-", "minimax_"]) {
     if (stem.toLowerCase().startsWith(noise)) {
       stem = stem.slice(noise.length)

@@ -14,7 +14,14 @@ import type { GenerationConfig } from "@/api/schema"
 import { Failure, PageHeader, Section, Spinner, Stat } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { changedFields, display, label as fieldLabel, missingInputs, type Draft } from "@/lib/config"
+import {
+  changedFields,
+  display,
+  installedModel,
+  label as fieldLabel,
+  missingInputs,
+  type Draft,
+} from "@/lib/config"
 import { plural, shortHash } from "@/lib/format"
 import { BenchmarkControls } from "./benchmark-controls"
 import { QueuePanel } from "./queue-panel"
@@ -57,10 +64,19 @@ export function LabPage() {
   // strongest layer, so a late query result cannot overwrite something already changed.
   const draft = useMemo<Draft | null>(() => {
     if (!meta.data || catalog.isLoading) return null
+    const catalogDefaults = (catalog.data?.defaults ?? {}) as Partial<Draft>
+    const overrides = { ...draftOverrides }
+    if (catalog.data) {
+      overrides.diffusion_model = installedModel(
+        draftOverrides.diffusion_model,
+        catalog.data.diffusion_models,
+        catalog.data.default_diffusion_model
+      )
+    }
     return {
       ...(meta.data.defaults as Draft),
-      ...((catalog.data?.defaults ?? {}) as Partial<Draft>),
-      ...draftOverrides,
+      ...catalogDefaults,
+      ...overrides,
     }
   }, [meta.data, catalog.data, catalog.isLoading, draftOverrides])
 

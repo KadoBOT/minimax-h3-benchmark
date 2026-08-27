@@ -20,6 +20,9 @@ from h3lab.storage.runs import RunRepository
 from tests.conftest import unified_workflow_path
 
 
+TEST_MODEL = "minimax-h3/test-model.safetensors"
+
+
 class RecordingPrepare:
     def __init__(self) -> None:
         self.calls = []
@@ -226,7 +229,14 @@ def test_runner_prepares_the_current_untagged_live_save(
         lab_settings.with_overrides(workflow_dir=workflow_dir),
         stub,
     )
-    run = runs.create(GenerationConfig(mode="t2v", prompt="live", upscaler=True))
+    run = runs.create(
+        GenerationConfig(
+            mode="t2v",
+            diffusion_model=TEST_MODEL,
+            prompt="live",
+            upscaler=True,
+        )
+    )
     try:
         runner.start()
         assert _wait_for(lambda: runs.require(run.id).status == "succeeded")
@@ -258,7 +268,9 @@ def test_runner_fails_when_comfyui_emits_no_video(lab_settings, stub):
         return outcome
 
     stub.execute = still_only
-    run = runs.create(GenerationConfig(mode="t2v", prompt="no video"))
+    run = runs.create(
+        GenerationConfig(mode="t2v", diffusion_model=TEST_MODEL, prompt="no video")
+    )
     try:
         runner.start()
         assert _wait_for(lambda: runs.require(run.id).status == "failed")
@@ -279,7 +291,9 @@ def test_structured_contract_error_fails_without_submission(lab_settings, stub):
         )
 
     stub.prepare_studio = reject
-    run = runs.create(GenerationConfig(mode="t2v", prompt="reject"))
+    run = runs.create(
+        GenerationConfig(mode="t2v", diffusion_model=TEST_MODEL, prompt="reject")
+    )
     try:
         runner.start()
         assert _wait_for(lambda: runs.require(run.id).status == "failed")
@@ -298,7 +312,9 @@ def test_prepare_transport_failure_requeues_without_submission(lab_settings, stu
         raise ComfyError("temporary prepare failure")
 
     stub.prepare_studio = offline
-    run = runs.create(GenerationConfig(mode="t2v", prompt="retry"))
+    run = runs.create(
+        GenerationConfig(mode="t2v", diffusion_model=TEST_MODEL, prompt="retry")
+    )
     claimed = runs.claim_next()
     runner._stop.set()
     try:

@@ -206,6 +206,17 @@ describe("the lab", () => {
     expect(screen.getByRole("button", { name: "1.91:1 (Landscape)" })).toBeInTheDocument()
   })
 
+  it("offers every installed model as a sweep axis value", async () => {
+    fakeApi({ ...BASELINE_ROUTES })
+    renderApp(<LabPage />)
+
+    await userEvent.click(await screen.findByRole("combobox", { name: "Add a sweep axis" }))
+    await userEvent.click(await screen.findByRole("option", { name: /diffusion model/i }))
+
+    expect(await screen.findByRole("button", { name: "fp8" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "bf16" })).toBeInTheDocument()
+  })
+
   it("shows the frame ComfyUI is drawing while a run is in flight", async () => {
     const active = makeView({ run: { id: "r-live", label: "#9 r2v · 4st", status: "running" } })
     fakeApi({
@@ -311,5 +322,36 @@ describe("the lab", () => {
     renderApp(<LabPage />)
     await waitFor(() => expect(studio.mounts).toHaveLength(2))
     expect(latestMount().inputs).toMatchObject({ prompt: "held across a reload" })
+  })
+
+  it("replaces a persisted model that is no longer installed", async () => {
+    const installed = "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors"
+    window.localStorage.setItem(
+      "h3lab.draft",
+      JSON.stringify({
+        ...CATALOG.defaults,
+        mode: "t2v",
+        diffusion_model: "minimax_h3_fl2va_pruned_nvfp4.safetensors",
+      })
+    )
+    fakeApi({
+      ...BASELINE_ROUTES,
+      "/api/catalog": {
+        ...CATALOG,
+        diffusion_models: [installed, "minimax-h3/custom_variant.safetensors"],
+        default_diffusion_model: installed,
+        defaults: { ...CATALOG.defaults, diffusion_model: installed },
+      },
+    })
+
+    renderApp(<LabPage />)
+
+    const weights = await screen.findByRole("combobox", { name: "Weights" })
+    expect(weights).toHaveTextContent("FL2VA_pruned_int8_convrot")
+    expect(weights).not.toHaveTextContent("nvfp4")
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem("h3lab.draft") ?? "{}")
+      expect(saved.diffusion_model).toBe(installed)
+    })
   })
 })

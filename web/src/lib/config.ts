@@ -42,15 +42,36 @@ export function turboSteps(config: Draft, catalog: Catalog | undefined): number 
   return catalog?.turbo_lora_steps?.[turboLora(config, catalog)]
 }
 
+/** Map persisted model names onto a value the current ComfyUI can load. */
+export function installedModel(
+  wanted: string | undefined,
+  offered: string[],
+  fallback: string
+): string {
+  const defaultModel = offered.includes(fallback) ? fallback : (offered[0] ?? "")
+  const name = wanted?.trim()
+  if (!name) return defaultModel
+  if (offered.includes(name)) return name
+
+  const basename = name.replaceAll("\\", "/").split("/").at(-1)?.toLowerCase()
+  const matches = offered.filter(
+    (item) =>
+      item.replaceAll("\\", "/").split("/").at(-1)?.toLowerCase() === basename
+  )
+  return matches.length === 1 ? matches[0] : defaultModel
+}
+
 export function needsOf(meta: Meta | undefined, mode: string | undefined): ModeNeeds | undefined {
   return meta?.modes.find((needs) => needs.mode === mode)
 }
 
 /** What is still missing before this config could be queued. */
 export function missingInputs(config: Draft, meta: Meta | undefined): string[] {
-  const needs = needsOf(meta, config.mode)
-  if (!needs) return []
   const missing: string[] = []
+  if (isEmpty(config.diffusion_model)) missing.push("Weights")
+
+  const needs = needsOf(meta, config.mode)
+  if (!needs) return missing
 
   for (const field of needs.requires_all ?? []) {
     if (isEmpty(config[field as keyof Draft])) missing.push(label(meta, field))

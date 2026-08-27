@@ -123,6 +123,8 @@ def preflight(
 ) -> list[str]:
     """Check only files the consumer must transport into ComfyUI."""
     problems: list[str] = []
+    if not config.diffusion_model.strip():
+        problems.append("no diffusion model selected")
     input_dir = settings.comfy_input_dir
     if config.media_files and input_dir.is_dir():
         for name in config.media_files:

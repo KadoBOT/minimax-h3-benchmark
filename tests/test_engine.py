@@ -321,6 +321,11 @@ def test_preflight_reports_a_missing_input_file(lab_settings, base_config):
     assert problems == ["absent.png is not in ComfyUI's input folder"]
 
 
+def test_preflight_requires_an_explicit_diffusion_model(lab_settings, base_config):
+    problems = preflight(base_config.merged(diffusion_model=""), lab_settings)
+    assert problems == ["no diffusion model selected"]
+
+
 def test_the_worker_runs_a_queued_run_to_completion(runner_setup, base_config, stub):
     runner, runs, bus = runner_setup
     subscription = bus.subscribe()

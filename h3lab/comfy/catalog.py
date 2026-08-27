@@ -21,7 +21,6 @@ from h3lab.domain.config import (
     BASELINE_PROMPT,
     BASELINE_REF_IMAGES,
     DEFAULT_ASPECT,
-    DEFAULT_GGUF_UNET,
     DEFAULT_SAMPLER,
     DEFAULT_SCHEDULER,
     DEFAULT_TURBO_LORA,
@@ -75,6 +74,7 @@ FALLBACK_ASPECTS: Final[tuple[str, ...]] = (
 MODEL_SUFFIXES: Final[frozenset[str]] = frozenset(
     {".safetensors", ".gguf", ".sft", ".ckpt", ".pt", ".pth"}
 )
+MINIMAX_H3_FOLDER: Final[str] = "minimax-h3"
 IMAGE_SUFFIXES: Final[frozenset[str]] = frozenset(
     {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 )
@@ -89,6 +89,11 @@ CACHE_TTL_S = 45.0
 
 def is_h3_model(name: str) -> bool:
     return bool(_MINIMAX.search(name) and _H3.search(name))
+
+
+def _in_minimax_h3_folder(name: str) -> bool:
+    normalized = name.replace("\\", "/")
+    return normalized.lower().startswith(f"{MINIMAX_H3_FOLDER}/")
 
 
 def _listdir(directory: Path, suffixes: frozenset[str], *, limit: int = 4000) -> list[str]:
@@ -108,7 +113,15 @@ def _listdir(directory: Path, suffixes: frozenset[str], *, limit: int = 4000) ->
 
 
 def list_models(directory: Path) -> list[str]:
-    return [name for name in _listdir(directory, MODEL_SUFFIXES) if is_h3_model(name)]
+    folder = (
+        directory
+        if directory.name.lower() == MINIMAX_H3_FOLDER
+        else directory / MINIMAX_H3_FOLDER
+    )
+    return [
+        f"{MINIMAX_H3_FOLDER}/{name}"
+        for name in _listdir(folder, MODEL_SUFFIXES)
+    ]
 
 
 def list_turbo_loras(directory: Path) -> list[str]:
@@ -203,7 +216,7 @@ def default_model(names: list[str]) -> str:
     for name in names:
         if name.lower().endswith(".safetensors"):
             return name
-    return names[0] if names else DEFAULT_UNET
+    return names[0] if names else ""
 
 
 def default_first_frame(images: list[str]) -> str:
@@ -284,27 +297,24 @@ class _Live(NamedTuple):
 
 
 def _comfy_unets(client: ComfyClient) -> list[str]:
-    """What the UNET / GGUF loaders will accept, filtered to this model."""
+    """What diffusion-model loaders accept from the MiniMax H3 folder."""
     names: list[str] = []
     seen: set[str] = set()
     for class_type, input_name in (
         ("UNETLoader", "unet_name"),
-        ("UnetLoaderGGUF", "unet_name"),
-        ("UnetLoaderGGUF", "gguf_name"),
         ("DiffusionModelLoader", "unet_name"),
         ("DiffusionModelLoader", "model_name"),
     ):
         for name in client.combo_options(class_type, input_name):
-            if name in seen or not is_h3_model(name):
+            if name in seen or not _in_minimax_h3_folder(name):
                 continue
             seen.add(name)
             names.append(name)
-    for folder in ("diffusion_models", "unet_gguf", "checkpoints", "unet"):
-        for name in client.models(folder):
-            if name in seen or not is_h3_model(name):
-                continue
-            seen.add(name)
-            names.append(name)
+    for name in client.models("diffusion_models"):
+        if name in seen or not _in_minimax_h3_folder(name):
+            continue
+        seen.add(name)
+        names.append(name)
     return names
 
 
@@ -358,16 +368,17 @@ def build_catalog(settings: Settings, client: ComfyClient | None = None) -> Cata
             client.close()
     loras = live.loras if live is not None else []
 
+    disk_models = list_models(settings.diffusion_models_dir)
     live_unets = live.unets if live is not None else []
-    if live_unets:
+    if disk_models:
+        models = disk_models
+        models_source = "disk"
+    elif live_unets:
         models = live_unets
         models_source = "comfy"
     else:
-        models = list_models(settings.diffusion_models_dir)
-        models_source = "disk"
-        if not models:
-            models = [DEFAULT_UNET, DEFAULT_GGUF_UNET]
-            models_source = "fallback"
+        models = []
+        models_source = "unavailable"
 
     loras_source = "comfy"
     if not loras:

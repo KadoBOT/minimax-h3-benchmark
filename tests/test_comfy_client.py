@@ -435,26 +435,32 @@ def test_model_names_must_mention_both_minimax_and_h3():
 
 
 def test_models_are_listed_from_disk_and_a_default_is_chosen(tmp_path: Path):
-    directory = tmp_path / "models"
-    directory.mkdir()
+    directory = tmp_path / "diffusion_models"
+    h3 = directory / "minimax-h3"
+    other = directory / "other"
+    h3.mkdir(parents=True)
+    other.mkdir()
     for name in (
-        "minimax_h3_fl2va_pruned_nvfp4.safetensors",
-        "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
-        "MiniMax-H3-FL2VA-Q4_K_M.gguf",
-        "unrelated_model.safetensors",
+        "MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors",
+        "custom_variant.safetensors",
         "notes.txt",
     ):
-        (directory / name).write_bytes(b"")
+        (h3 / name).write_bytes(b"")
+    (other / "minimax_h3_wrong_folder.safetensors").write_bytes(b"")
     found = list_models(directory)
-    assert "unrelated_model.safetensors" not in found
-    assert "notes.txt" not in found
-    assert len(found) == 3
-    assert default_model(found) == "minimax_h3_fl2va_pruned_nvfp4.safetensors"
+    assert found == [
+        "minimax-h3/custom_variant.safetensors",
+        "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors",
+    ]
+    assert list_models(h3) == found
+    assert default_model(found) == (
+        "minimax-h3/custom_variant.safetensors"
+    )
 
 
 def test_a_missing_models_folder_is_not_an_error(tmp_path: Path):
     assert list_models(tmp_path / "nope") == []
-    assert default_model([]).endswith(".safetensors")
+    assert default_model([]) == ""
 
 
 def test_the_catalog_falls_back_when_comfy_is_offline(tmp_path: Path):
@@ -468,9 +474,37 @@ def test_the_catalog_falls_back_when_comfy_is_offline(tmp_path: Path):
     assert catalog.comfy_online is False
     assert catalog.source == "fallback"
     assert "euler" in catalog.samplers
-    assert catalog.diffusion_models_source == "fallback"
-    assert catalog.defaults["diffusion_model"].endswith(".safetensors")
+    assert catalog.diffusion_models_source == "unavailable"
+    assert catalog.diffusion_models == []
+    assert catalog.default_diffusion_model == ""
+    assert catalog.defaults["diffusion_model"] == ""
+    assert "nvfp4" not in str(catalog.model_dump()).lower()
     assert catalog.reference_limits == {"images": 9, "videos": 3, "audios": 3}
+
+
+def test_an_offline_catalog_reads_the_minimax_h3_subfolder(tmp_path: Path):
+    models = tmp_path / "diffusion_models"
+    h3 = models / "minimax-h3"
+    h3.mkdir(parents=True)
+    (h3 / "MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors").write_bytes(b"")
+    (h3 / "creator_variant.safetensors").write_bytes(b"")
+
+    catalog = build_catalog(
+        Settings(
+            data_dir=tmp_path / "data",
+            models_dir=models,
+            comfy_input_dir=tmp_path / "input",
+            comfy_url="http://127.0.0.1:9",
+        )
+    )
+
+    assert catalog.diffusion_models_source == "disk"
+    assert catalog.diffusion_models == [
+        "minimax-h3/creator_variant.safetensors",
+        "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors",
+    ]
+    assert catalog.default_diffusion_model in catalog.diffusion_models
+    assert catalog.defaults["diffusion_model"] == catalog.default_diffusion_model
 
 
 def test_match_installed_keeps_a_folder_prefixed_combo_value():
@@ -509,6 +543,7 @@ def test_the_catalog_takes_unet_names_from_the_running_server(comfy, tmp_path: P
                     "unet_name": [
                         [
                             "krea2/krea2_turbo-int4_convrot.safetensors",
+                            "other/minimax_h3_wrong_folder.safetensors",
                             "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors",
                         ],
                         {},
@@ -542,6 +577,48 @@ def test_the_catalog_takes_unet_names_from_the_running_server(comfy, tmp_path: P
         "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors"
     )
     assert catalog.defaults["diffusion_model"] == catalog.default_diffusion_model
+
+
+def test_the_local_minimax_h3_folder_wins_over_stale_live_entries(comfy, tmp_path: Path):
+    state, url = comfy
+    state.object_info["UNETLoader"] = {
+        "UNETLoader": {
+            "input": {
+                "required": {
+                    "unet_name": [
+                        [
+                            "minimax-h3/remote_stale.safetensors",
+                            "other/minimax_h3_wrong_folder.safetensors",
+                        ],
+                        {},
+                    ]
+                }
+            }
+        }
+    }
+    state.object_info["BasicScheduler"] = {
+        "BasicScheduler": {"input": {"required": {"scheduler": [["beta57"], {}]}}}
+    }
+    state.object_info["KSamplerSelect"] = {
+        "KSamplerSelect": {"input": {"required": {"sampler_name": [["euler"], {}]}}}
+    }
+    models = tmp_path / "diffusion_models"
+    h3 = models / "minimax-h3"
+    h3.mkdir(parents=True)
+    (h3 / "local_current.safetensors").write_bytes(b"")
+
+    catalog = build_catalog(
+        Settings(
+            data_dir=tmp_path / "data",
+            models_dir=models,
+            comfy_input_dir=tmp_path / "input",
+            comfy_url=url,
+        )
+    )
+
+    assert catalog.diffusion_models_source == "disk"
+    assert catalog.diffusion_models == ["minimax-h3/local_current.safetensors"]
+    assert catalog.default_diffusion_model == "minimax-h3/local_current.safetensors"
 
 
 def test_the_catalog_prefers_the_live_lists_and_scans_input_media(comfy, tmp_path: Path):

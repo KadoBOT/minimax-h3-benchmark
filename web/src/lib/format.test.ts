@@ -44,6 +44,9 @@ describe("formatting", () => {
 
   it("trims a model filename to the part that distinguishes it", () => {
     expect(modelStem("minimax_h3_fp8_scaled.safetensors")).toBe("fp8_scaled")
+    expect(
+      modelStem("minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors")
+    ).toBe("FL2VA_pruned_int8_convrot")
     expect(modelStem("some_other_model.safetensors")).toBe("some_other_model")
     expect(modelStem(null)).toBe("default")
   })
