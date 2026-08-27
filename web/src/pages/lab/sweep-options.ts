@@ -1,5 +1,76 @@
 import type { Meta } from "@/api/schema"
 import { loraStem, modelStem } from "@/lib/format"
+import type { StudioTemplate, StudioTemplateCatalog } from "@/lib/studio-runtime"
+
+export const CURRENT_TEMPLATE_ID = "__current__"
+export const TEMPLATE_CONFLICT_FIELDS: ReadonlySet<string> = new Set([
+  "steps",
+  "scheduler",
+  "sampler",
+  "sampler_name",
+  "cache_enabled",
+  "cache",
+  "cache_preset",
+  "turbo",
+  "turbo_lora",
+  "turbo_lora_strength",
+  "attn",
+  "sol_attn",
+  "sol_preset",
+  "clean_vram",
+  "fp16_accum",
+  "derope",
+  "post_grade",
+  "interp",
+  "interpolation",
+  "upscaler",
+  "upscale_rtx",
+  "upscale_ltx",
+  "shift_video",
+  "shift_audio",
+  "sla",
+  "sla_sparsity",
+  "sla_block_size",
+  "sla_dense_last_steps",
+  "sla_protect_audio",
+  "sla_stabilize_motion",
+  "adaln",
+  "er_sde",
+  "er_sde_solver",
+  "er_sde_max_stage",
+  "er_sde_eta",
+  "er_sde_s_noise",
+])
+
+export function templateIdFromState(raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw.trim()) return null
+  try {
+    const state = JSON.parse(raw) as {
+      version?: unknown
+      template_id?: unknown
+    }
+    return state.version === 1 && typeof state.template_id === "string"
+      ? state.template_id
+      : null
+  } catch {
+    return null
+  }
+}
+
+export function templateRequirementFailures(
+  template: StudioTemplate,
+  inputs: Record<string, unknown>,
+  capabilities: Record<string, unknown>
+): string[] {
+  return template.requirements.flatMap((requirement) => {
+    const expected = requirement.value ?? true
+    const failed =
+      requirement.kind === "input_not"
+        ? inputs[requirement.key] == null || inputs[requirement.key] === expected
+        : capabilities[requirement.key] !== expected
+    return failed ? [requirement.message] : []
+  })
+}
 
 export type Sweepable = {
   field: string
@@ -18,7 +89,8 @@ export type SweepCatalog = {
 export function sweepable(
   meta: Meta | undefined,
   catalog: SweepCatalog,
-  inputOptions: Record<string, unknown[]> = {}
+  inputOptions: Record<string, unknown[]> = {},
+  templateCatalog: StudioTemplateCatalog | null | undefined = null
 ): Sweepable[] {
   const axes: Sweepable[] = [
     { field: "cache_enabled", values: [true, false] },
@@ -69,6 +141,20 @@ export function sweepable(
     { field: "er_sde_eta", values: [0, 0.5, 1] },
     { field: "er_sde_s_noise", values: [0.5, 1] },
   ]
+  if (templateCatalog?.version === 1 && templateCatalog.templates.length) {
+    axes.unshift({
+      field: "template",
+      values: [
+        CURRENT_TEMPLATE_ID,
+        ...templateCatalog.templates.map((template) => template.id),
+      ],
+      render: (value) =>
+        value === CURRENT_TEMPLATE_ID
+          ? "Current settings"
+          : (templateCatalog.templates.find((template) => template.id === value)?.name ??
+            String(value)),
+    })
+  }
   return axes.filter((axis) => axis.values.length > 1)
 }
 

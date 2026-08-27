@@ -2,7 +2,7 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { StudioMountOptions } from "@/lib/studio-runtime"
+import type { StudioMountOptions, StudioTemplateCatalog } from "@/lib/studio-runtime"
 import { LabPage } from "@/pages/lab"
 import {
   BASELINE_ROUTES,
@@ -33,6 +33,42 @@ const DRY_RUN = {
   recipe_hash: "fedcba0987654321",
   duplicate_of: null,
 }
+
+const TEMPLATE_CATALOG = {
+  version: 1,
+  managed_keys: ["steps", "sampler_name", "derope"],
+  selector: { label: "Template", placeholder: "Search templates" },
+  categories: [
+    { id: "essentials", name: "Essentials" },
+    { id: "motion", name: "Motion profiles" },
+  ],
+  templates: [
+    {
+      id: "essentials/balanced",
+      category: "essentials",
+      name: "Balanced",
+      description: "A balanced starting point.",
+      tradeoff: "Moderate speed and detail.",
+      evidence: "curated",
+      evidence_ref: null,
+      tags: ["general"],
+      requirements: [],
+      values: { steps: 20, sampler_name: "euler", derope: false },
+    },
+    {
+      id: "motion/extreme-action-derope",
+      category: "motion",
+      name: "Extreme Action",
+      description: "Maximum camera and subject motion.",
+      tradeoff: "More temporal risk.",
+      evidence: "experimental",
+      evidence_ref: null,
+      tags: ["action", "motion", "derope"],
+      requirements: [],
+      values: { steps: 28, sampler_name: "res_multistep", derope: true },
+    },
+  ],
+} satisfies StudioTemplateCatalog
 
 function latestMount(): StudioMountOptions {
   return studio.mounts.at(-1) as StudioMountOptions
@@ -215,6 +251,118 @@ describe("the lab", () => {
 
     expect(await screen.findByRole("button", { name: "fp8" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "bf16" })).toBeInTheDocument()
+  })
+
+  it("previews selected Template arms by their catalog ids", async () => {
+    const { calls } = fakeApi({
+      ...BASELINE_ROUTES,
+      "/api/studio/session": {
+        ...STUDIO_SESSION,
+        template_catalog: TEMPLATE_CATALOG,
+        capabilities: {},
+      },
+      "POST /api/sweeps/preview": {
+        count: 2,
+        combinations: 2,
+        repeats: 1,
+        new_count: 2,
+        duplicate_count: 0,
+        items: [],
+      },
+    })
+    renderApp(<LabPage />)
+
+    await userEvent.click(await screen.findByRole("combobox", { name: "Add a sweep axis" }))
+    await userEvent.click(await screen.findByRole("option", { name: "Template" }))
+    await userEvent.click(screen.getByRole("button", { name: /balanced/i }))
+    await userEvent.type(
+      screen.getByRole("searchbox", { name: "Search template axis" }),
+      "Extreme Action"
+    )
+    await userEvent.click(screen.getByRole("button", { name: /extreme action/i }))
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }))
+
+    await waitFor(() => {
+      const request = calls.find(
+        (call) => call.method === "POST" && call.path === "/api/sweeps/preview"
+      )
+      expect(request?.body).toMatchObject({
+        axes: [
+          {
+            field: "template",
+            values: ["__current__", "motion/extreme-action-derope"],
+          },
+        ],
+      })
+    })
+  })
+
+  it("keeps Template mutually exclusive with managed axes", async () => {
+    fakeApi({
+      ...BASELINE_ROUTES,
+      "/api/studio/session": {
+        ...STUDIO_SESSION,
+        template_catalog: TEMPLATE_CATALOG,
+        capabilities: {},
+      },
+    })
+    renderApp(<LabPage />)
+
+    await userEvent.click(await screen.findByRole("combobox", { name: "Add a sweep axis" }))
+    await userEvent.click(await screen.findByRole("option", { name: "Template" }))
+    await userEvent.click(screen.getByRole("combobox", { name: "Add a sweep axis" }))
+    expect(screen.queryByRole("option", { name: "Steps" })).not.toBeInTheDocument()
+
+    await userEvent.keyboard("{Escape}")
+    await userEvent.click(screen.getByRole("button", { name: "Stop varying Template" }))
+    await userEvent.click(screen.getByRole("combobox", { name: "Add a sweep axis" }))
+    expect(await screen.findByRole("option", { name: "Steps" })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("option", { name: "Steps" }))
+    await userEvent.click(screen.getByRole("combobox", { name: "Add a sweep axis" }))
+    expect(screen.queryByRole("option", { name: "Template" })).not.toBeInTheDocument()
+  })
+
+  it("seeds Template from the draft's sweep provenance", async () => {
+    window.localStorage.setItem(
+      "h3lab.draft",
+      JSON.stringify({
+        ...CATALOG.defaults,
+        mode: "t2v",
+        diffusion_model: CATALOG.default_diffusion_model,
+        widgets: {
+          h3s_ui: JSON.stringify({
+            version: 1,
+            template_id: "motion/extreme-action-derope",
+            source: "sweep",
+          }),
+        },
+      })
+    )
+    fakeApi({
+      ...BASELINE_ROUTES,
+      "/api/studio/session": {
+        ...STUDIO_SESSION,
+        template_catalog: TEMPLATE_CATALOG,
+        capabilities: {},
+      },
+    })
+    renderApp(<LabPage />)
+
+    await userEvent.click(await screen.findByRole("combobox", { name: "Add a sweep axis" }))
+    await userEvent.click(await screen.findByRole("option", { name: "Template" }))
+
+    expect(screen.getByRole("button", { name: /current settings/i })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    )
+    expect(screen.getByRole("button", { name: /extreme action/i })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    )
+    expect(screen.getByRole("button", { name: /balanced/i })).toHaveAttribute(
+      "aria-pressed",
+      "false"
+    )
   })
 
   it("shows the frame ComfyUI is drawing while a run is in flight", async () => {

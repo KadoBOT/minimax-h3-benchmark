@@ -19,13 +19,22 @@ import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { display, label as fieldLabel } from "@/lib/config"
 import { plural } from "@/lib/format"
-import { sweepable, type SweepCatalog } from "./sweep-options"
+import { studioInputsFromDraft } from "@/lib/studio-runtime"
+import {
+  CURRENT_TEMPLATE_ID,
+  TEMPLATE_CONFLICT_FIELDS,
+  sweepable,
+  templateIdFromState,
+  type SweepCatalog,
+} from "./sweep-options"
+import { TemplateSweepPicker } from "./template-sweep-picker"
 
 /** Axes that only mean something while another setting is on, and what turns them on. */
 const NEEDS_TURBO = new Set(["turbo_lora", "turbo_lora_strength"])
 const SWEEP_LABELS: Record<string, string> = {
   attn: "Attention",
   cache_enabled: "Cache",
+  template: "Template",
 }
 
 function sweepLabel(meta: Meta | undefined, field: string): string {
@@ -54,9 +63,21 @@ export function SweepBuilder({
   const preview = useSweepPreview()
   const start = useRunSweep()
   const studio = useStudioSession(base.mode)
+  const templateCatalog = studio.data?.template_catalog
   const available = useMemo(
-    () => sweepable(meta, catalog, studio.data?.input_options ?? {}),
-    [meta, catalog, studio.data?.input_options]
+    () => sweepable(meta, catalog, studio.data?.input_options ?? {}, templateCatalog),
+    [meta, catalog, studio.data?.input_options, templateCatalog]
+  )
+  const templateActive = axes.some((axis) => axis.field === "template")
+  const conflictingActive = axes.some((axis) => TEMPLATE_CONFLICT_FIELDS.has(axis.field))
+  const addable = available.filter((candidate) => {
+    if (axes.some((picked) => picked.field === candidate.field)) return false
+    if (candidate.field === "template") return !conflictingActive
+    return !templateActive || !TEMPLATE_CONFLICT_FIELDS.has(candidate.field)
+  })
+  const templateInputs = useMemo(
+    () => (studio.data ? studioInputsFromDraft(studio.data, base) : {}),
+    [studio.data, base]
   )
 
   const request: SweepRequest = {
@@ -75,6 +96,27 @@ export function SweepBuilder({
   const addAxis = (field: string) => {
     const found = available.find((axis) => axis.field === field)
     if (!found || axes.some((axis) => axis.field === field)) return
+    if (field === "template") {
+      const provenance = templateIdFromState(base.widgets?.h3s_ui)
+      const initial =
+        provenance &&
+        provenance !== CURRENT_TEMPLATE_ID &&
+        templateCatalog?.templates.some((template) => template.id === provenance)
+          ? provenance
+          : (templateCatalog?.templates.find(
+              (template) => template.id === "essentials/balanced"
+            )?.id ?? templateCatalog?.templates[0]?.id)
+      setAxes([
+        ...axes,
+        {
+          field,
+          values: [CURRENT_TEMPLATE_ID, initial].filter(
+            (value): value is string => value !== undefined
+          ),
+        },
+      ])
+      return
+    }
     // Seed with the base value plus one alternative, which is the smallest useful comparison.
     const current =
       field === "attn"
@@ -91,7 +133,7 @@ export function SweepBuilder({
       actions={
         <Choice
           value=""
-          options={available.filter((a) => !axes.some((b) => b.field === a.field)).map((a) => a.field)}
+          options={addable.map((axis) => axis.field)}
           render={(field) => sweepLabel(meta, field)}
           onChange={addAxis}
           label="Add a sweep axis"
@@ -121,38 +163,54 @@ export function SweepBuilder({
                     <X className="size-3" />
                   </Button>
                 </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {(found?.values ?? []).map((value) => {
-                    const on = axis.values.includes(value)
-                    return (
-                      <button
-                        key={String(value)}
-                        onClick={() =>
-                          setAxes(
-                            axes.map((item) =>
-                              item.field === axis.field
-                                ? {
-                                    ...item,
-                                    values: on
-                                      ? item.values.filter((v) => v !== value)
-                                      : [...item.values, value],
-                                  }
-                                : item
+                {axis.field === "template" && templateCatalog ? (
+                  <TemplateSweepPicker
+                    catalog={templateCatalog}
+                    selected={axis.values}
+                    inputs={templateInputs}
+                    capabilities={studio.data?.capabilities ?? {}}
+                    onChange={(values) =>
+                      setAxes(
+                        axes.map((item) =>
+                          item.field === "template" ? { ...item, values } : item
+                        )
+                      )
+                    }
+                  />
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {(found?.values ?? []).map((value) => {
+                      const on = axis.values.includes(value)
+                      return (
+                        <button
+                          key={String(value)}
+                          onClick={() =>
+                            setAxes(
+                              axes.map((item) =>
+                                item.field === axis.field
+                                  ? {
+                                      ...item,
+                                      values: on
+                                        ? item.values.filter((v) => v !== value)
+                                        : [...item.values, value],
+                                    }
+                                  : item
+                              )
                             )
-                          )
-                        }
-                        aria-pressed={on}
-                        className={
-                          on
-                            ? "border-signal/60 bg-signal/15 text-signal rounded-sm border px-2 py-1 font-mono text-xs"
-                            : "border-rule text-muted-foreground hover:border-rule/80 hover:text-bone rounded-sm border px-2 py-1 font-mono text-xs"
-                        }
-                      >
-                        {found?.render ? found.render(value) : display(value)}
-                      </button>
-                    )
-                  })}
-                </div>
+                          }
+                          aria-pressed={on}
+                          className={
+                            on
+                              ? "border-signal/60 bg-signal/15 text-signal rounded-sm border px-2 py-1 font-mono text-xs"
+                              : "border-rule text-muted-foreground hover:border-rule/80 hover:text-bone rounded-sm border px-2 py-1 font-mono text-xs"
+                          }
+                        >
+                          {found?.render ? found.render(value) : display(value)}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
                 {NEEDS_TURBO.has(axis.field) && !base.turbo ? (
                   <p className="text-signal mt-1.5 text-xs">
                     Turbo is off, so no LoRA is loaded and every run here is the same run. Turn
