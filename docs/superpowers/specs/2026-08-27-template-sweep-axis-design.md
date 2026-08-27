@@ -135,6 +135,12 @@ the template, while retaining model, content, canvas, duration, seed, and other
 unmanaged settings. This lets two template arms at the same seed form a
 controlled pair instead of being rejected as 27 unrelated differences.
 
+Template speed comparisons use total wall time, not seconds per sampling step.
+Step count, interpolation, upscaling, and post-processing are part of a
+template, so per-step timing would hide much of the cost the axis is meant to
+compare. Existing scalar-axis speed comparisons keep their current per-step
+metric.
+
 Runs without template-axis provenance are not mislabeled as a packaged
 template. They appear as `Current settings` only when that sentinel was
 explicitly used; otherwise they remain outside Template-axis analysis.
