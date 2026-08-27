@@ -317,6 +317,7 @@ describe("the lab", () => {
     await userEvent.click(screen.getByRole("button", { name: "Stop varying Template" }))
     await userEvent.click(screen.getByRole("combobox", { name: "Add a sweep axis" }))
     expect(await screen.findByRole("option", { name: "Steps" })).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: "ER-SDE" })).toBeInTheDocument()
     await userEvent.click(screen.getByRole("option", { name: "Steps" }))
     await userEvent.click(screen.getByRole("combobox", { name: "Add a sweep axis" }))
     expect(screen.queryByRole("option", { name: "Template" })).not.toBeInTheDocument()

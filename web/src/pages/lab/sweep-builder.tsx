@@ -34,6 +34,7 @@ const NEEDS_TURBO = new Set(["turbo_lora", "turbo_lora_strength"])
 const SWEEP_LABELS: Record<string, string> = {
   attn: "Attention",
   cache_enabled: "Cache",
+  er_sde: "ER-SDE",
   template: "Template",
 }
 
