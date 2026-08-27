@@ -53,6 +53,21 @@ export function sweepable(
     },
     { field: "steps", values: [4, 8, 12, 16, 20, 28, 36] },
     { field: "mp", values: [0.25, 0.5, 0.75, 1, 1.5] },
+    { field: "shift_audio", values: [1, 3, 6, 9] },
+    { field: "derope", values: [true, false] },
+    { field: "sla", values: [true, false] },
+    { field: "sla_sparsity", values: [0.8, 0.85, 0.9, 0.95] },
+    { field: "sla_block_size", values: choices(inputOptions, "sla_block_size", []) },
+    { field: "sla_dense_last_steps", values: [0, 1, 2] },
+    { field: "sla_protect_audio", values: [true, false] },
+    { field: "sla_stabilize_motion", values: [true, false] },
+    { field: "adaln", values: choices(inputOptions, "adaln", []) },
+    { field: "fp16_accum", values: [true, false] },
+    { field: "er_sde", values: [true, false] },
+    { field: "er_sde_solver", values: choices(inputOptions, "er_sde_solver", []) },
+    { field: "er_sde_max_stage", values: [1, 2, 3] },
+    { field: "er_sde_eta", values: [0, 0.5, 1] },
+    { field: "er_sde_s_noise", values: [0.5, 1] },
   ]
   return axes.filter((axis) => axis.values.length > 1)
 }
