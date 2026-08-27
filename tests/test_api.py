@@ -24,6 +24,57 @@ from h3lab.settings import Settings
 pytestmark = pytest.mark.anyio
 
 API = "/api"
+TEMPLATE_CATALOG = {
+    "version": 1,
+    "managed_keys": [
+        "steps",
+        "scheduler",
+        "sampler_name",
+        "turbo",
+        "cache",
+        "attn",
+    ],
+    "categories": [{"id": "essentials", "name": "Essentials"}],
+    "templates": [
+        {
+            "id": "essentials/balanced",
+            "name": "Balanced",
+            "requirements": [],
+            "values": {
+                "steps": 24,
+                "scheduler": "simple",
+                "sampler_name": "euler",
+                "turbo": False,
+                "cache": True,
+                "attn": "sol",
+            },
+        },
+        {
+            "id": "essentials/turbo",
+            "name": "Turbo",
+            "requirements": [
+                {
+                    "kind": "input_not",
+                    "key": "turbo_lora",
+                    "value": "none",
+                    "message": "Select a Turbo LoRA first.",
+                }
+            ],
+            "values": {
+                "steps": 4,
+                "scheduler": "simple",
+                "sampler_name": "euler",
+                "turbo": True,
+                "cache": True,
+                "attn": "sol",
+            },
+        },
+    ],
+}
+STUDIO_MANIFEST = {
+    "template_catalog": TEMPLATE_CATALOG,
+    "capabilities": {"turbo": True},
+}
 
 
 @pytest.fixture
@@ -33,6 +84,7 @@ def anyio_backend() -> str:
 
 @pytest.fixture
 def lab(lab_settings: Settings, stub) -> Iterator[Lab]:
+    stub.studio_manifest = lambda: STUDIO_MANIFEST
     made = Lab(lab_settings, client=stub, start_worker=False)  # type: ignore[arg-type]
     try:
         yield made
@@ -554,6 +606,101 @@ async def test_a_sweep_preview_counts_the_matrix_before_running_it(
     assert payload["new_count"] == 6
     assert payload["duplicate_count"] == 0
     assert {item["config"]["cache"] for item in payload["items"]} == {"none", "spectrum", "h3"}
+
+
+async def test_a_template_sweep_previews_current_and_concrete_template_values(
+    client: httpx.AsyncClient,
+    config,
+):
+    response = await client.post(
+        f"{API}/sweeps/preview",
+        json={
+            "base": config.model_dump(mode="json"),
+            "axes": [
+                {
+                    "field": "template",
+                    "values": ["__current__", "essentials/balanced"],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["count"] == 2
+    current, balanced = [item["config"] for item in payload["items"]]
+    assert current["steps"] == config.steps
+    assert balanced["steps"] == 24
+    assert balanced["scheduler"] == "simple"
+    assert balanced["sampler"] == "euler"
+    for field in ("prompt", "mode", "duration_s", "aspect_ratio", "seed"):
+        assert balanced[field] == current[field]
+    assert json.loads(current["widgets"]["h3s_ui"])["template_id"] == "__current__"
+    assert (
+        json.loads(balanced["widgets"]["h3s_ui"])["template_id"]
+        == "essentials/balanced"
+    )
+
+
+async def test_running_a_template_sweep_queues_each_selected_arm(
+    client: httpx.AsyncClient,
+    config,
+):
+    response = await client.post(
+        f"{API}/sweeps",
+        json={
+            "base": config.model_dump(mode="json"),
+            "axes": [
+                {
+                    "field": "template",
+                    "values": ["__current__", "essentials/balanced"],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    queued = response.json()
+    assert [view["run"]["config"]["steps"] for view in queued] == [20, 24]
+    assert [
+        json.loads(view["run"]["config"]["widgets"]["h3s_ui"])["template_id"]
+        for view in queued
+    ] == ["__current__", "essentials/balanced"]
+
+
+@pytest.mark.parametrize(
+    ("axes", "message"),
+    [
+        (
+            [
+                {"field": "template", "values": ["essentials/balanced"]},
+                {"field": "steps", "values": [12, 20]},
+            ],
+            "steps",
+        ),
+        (
+            [{"field": "template", "values": ["missing/template"]}],
+            "missing/template",
+        ),
+        (
+            [{"field": "template", "values": ["essentials/turbo"]}],
+            "Turbo LoRA",
+        ),
+    ],
+)
+async def test_an_invalid_template_sweep_fails_before_queueing(
+    client: httpx.AsyncClient,
+    config,
+    axes,
+    message,
+):
+    response = await client.post(
+        f"{API}/sweeps/preview",
+        json={"base": config.model_dump(mode="json"), "axes": axes},
+    )
+
+    assert response.status_code == 422
+    assert message in response.text
 
 
 async def test_a_sweep_preview_marks_what_has_already_been_run(client: httpx.AsyncClient, config):

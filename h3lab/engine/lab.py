@@ -17,6 +17,7 @@ from h3lab.comfy.editor import run_provenance, to_editor_workflow
 from h3lab.comfy.graph import describe
 from h3lab.comfy.progress import Preview
 from h3lab.comfy.studio import prepare_prompt, studio_session_prompt
+from h3lab.comfy.template_sweeps import make_template_resolver
 from h3lab.domain.arena import (
     ArenaRun,
     ArenaStandings,
@@ -27,6 +28,7 @@ from h3lab.domain.arena import (
 from h3lab.domain.config import (
     FieldDiff,
     GenMode,
+    TEMPLATE_AXIS_FIELD,
     GenerationConfig,
     config_diff,
     config_hash,
@@ -44,7 +46,7 @@ from h3lab.domain.insights import (
 from h3lab.domain.rating import CRITERIA, EloEntry, Rating, Vote
 from h3lab.domain.run import Run
 from h3lab.domain.scoring import ScoreInput, ScoredRun, ScoreWeights, score_runs
-from h3lab.domain.sweeps import SweepPreview, SweepSpec, expand, preview
+from h3lab.domain.sweeps import SweepPreview, SweepSpec, TemplateResolver, expand, preview
 from h3lab.engine.events import EventBus
 from h3lab.engine.runner import Runner, WorkflowCache, preflight
 from h3lab.settings import Settings
@@ -419,13 +421,25 @@ class Lab:
         self.runs.patch_flags(created.run.id, notes=note)
         return self.get_run(created.run.id)
 
+    def _template_resolver(self, spec: SweepSpec) -> TemplateResolver | None:
+        if not any(axis.field == TEMPLATE_AXIS_FIELD for axis in spec.axes):
+            return None
+        return make_template_resolver(self.client.studio_manifest(), spec)
+
     def preview_sweep(self, spec: SweepSpec) -> SweepPreview:
-        return preview(spec, existing=self.runs.hashes())
+        return preview(
+            spec,
+            existing=self.runs.hashes(),
+            template_resolver=self._template_resolver(spec),
+        )
 
     def run_sweep(self, spec: SweepSpec, *, skip_duplicates: bool = True) -> list[RunView]:
         known = self.runs.hashes() if skip_duplicates else {}
+        resolver = self._template_resolver(spec)
         wanted = [
-            config for config in expand(spec) if config_hash(config) not in known
+            config
+            for config in expand(spec, template_resolver=resolver)
+            if config_hash(config) not in known
         ]
         return self.enqueue_many(wanted)
 

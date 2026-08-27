@@ -8,16 +8,24 @@ twenty-minute queue.
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from typing import Annotated, Any, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from h3lab.domain.config import STUDIO_EXTRA_FIELDS, GenerationConfig, config_hash
+from h3lab.domain.config import (
+    STUDIO_EXTRA_FIELDS,
+    TEMPLATE_AXIS_FIELD,
+    GenerationConfig,
+    config_hash,
+)
 
 SeedStrategy = Literal["fixed", "increment", "random"]
 SEED_STRATEGIES: tuple[SeedStrategy, ...] = ("fixed", "increment", "random")
 
 MAX_EXPANSION = 512
+TemplateResolver = Callable[[GenerationConfig, str], GenerationConfig]
+VIRTUAL_AXIS_FIELDS = frozenset({TEMPLATE_AXIS_FIELD})
 
 
 class SweepAxis(BaseModel):
@@ -29,7 +37,11 @@ class SweepAxis(BaseModel):
     @field_validator("field")
     @classmethod
     def _known_field(cls, value: str) -> str:
-        if value not in GenerationConfig.model_fields and value not in STUDIO_EXTRA_FIELDS:
+        if (
+            value not in GenerationConfig.model_fields
+            and value not in STUDIO_EXTRA_FIELDS
+            and value not in VIRTUAL_AXIS_FIELDS
+        ):
             raise ValueError(f"unknown config field {value!r}")
         if value == "seed":
             raise ValueError("vary the seed with repeats and seed_strategy, not as an axis")
@@ -85,25 +97,37 @@ def _product(axes: Sequence[SweepAxis]) -> list[dict[str, Any]]:
     return combos
 
 
-def expand(spec: SweepSpec, *, rng: random.Random | None = None) -> list[GenerationConfig]:
+def expand(
+    spec: SweepSpec,
+    *,
+    rng: random.Random | None = None,
+    template_resolver: TemplateResolver | None = None,
+) -> list[GenerationConfig]:
     """Every config the sweep asks for, in declared axis order then repeat order."""
     generator = rng or random.Random()
     configs: list[GenerationConfig] = []
     used_seeds: set[int] = set()
 
     for combo in _product(spec.axes):
+        overrides = dict(combo)
+        template_id = overrides.pop(TEMPLATE_AXIS_FIELD, None)
+        base = spec.base
+        if template_id is not None:
+            if template_resolver is None:
+                raise ValueError("template axis requires the Studio template catalog")
+            base = template_resolver(base, str(template_id))
         for repeat in range(spec.repeats):
-            overrides = dict(combo)
+            run_overrides = dict(overrides)
             if spec.seed_strategy == "increment":
-                overrides["seed"] = spec.base.seed + repeat
+                run_overrides["seed"] = base.seed + repeat
             elif spec.seed_strategy == "random":
                 while True:
                     candidate = generator.randrange(0, 2**31 - 1)
                     if candidate not in used_seeds:
                         used_seeds.add(candidate)
                         break
-                overrides["seed"] = candidate
-            configs.append(spec.base.merged(**overrides))
+                run_overrides["seed"] = candidate
+            configs.append(base.merged(**run_overrides))
     return configs
 
 
@@ -132,11 +156,12 @@ def preview(
     *,
     existing: dict[str, str] | None = None,
     rng: random.Random | None = None,
+    template_resolver: TemplateResolver | None = None,
 ) -> SweepPreview:
     """Expand and mark which configs the lab has already produced."""
     known = existing or {}
     items: list[SweepPreviewItem] = []
-    for cfg in expand(spec, rng=rng):
+    for cfg in expand(spec, rng=rng, template_resolver=template_resolver):
         digest = config_hash(cfg)
         run_id = known.get(digest)
         items.append(
