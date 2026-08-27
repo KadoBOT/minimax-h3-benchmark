@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import random
 
 import pytest
@@ -275,6 +276,78 @@ def test_available_axes_only_offers_axes_that_actually_vary(base_config):
     fields = {axis.field for axis in available_axes(runs)}
     assert "cache" in fields
     assert "sampler" not in fields
+
+
+def template_state(template_id: str, name: str) -> str:
+    return json.dumps(
+        {
+            "version": 1,
+            "template_id": template_id,
+            "template_name": name,
+            "source": "sweep",
+        },
+        separators=(",", ":"),
+    )
+
+
+def test_template_is_a_compound_seed_matched_insight(base_config):
+    runs = []
+    for seed in (1, 2):
+        stem = base_config.merged(seed=seed)
+        balanced = stem.merged(
+            steps=20,
+            scheduler="simple",
+            widgets={
+                "derope": False,
+                "h3s_ui": template_state("essentials/balanced", "Balanced"),
+            },
+        )
+        action = stem.merged(
+            steps=28,
+            scheduler="beta57",
+            widgets={
+                "derope": True,
+                "h3s_ui": template_state(
+                    "motion/extreme-action-derope",
+                    "Extreme Action De-rope",
+                ),
+            },
+        )
+        runs.extend(
+            [
+                make_run(f"b{seed}", balanced, stars=6, rate=5),
+                make_run(f"a{seed}", action, stars=8, rate=9),
+            ]
+        )
+
+    insight = analyse(runs, "template")
+    comparison = insight.paired[0]
+    assert set(insight.values) == {"Balanced", "Extreme Action De-rope"}
+    assert comparison.pair_groups == 2
+    assert comparison.matched_on == "seed"
+    assert insight.quality_verdict.value == "Extreme Action De-rope"
+    assert insight.speed_verdict.value == "Balanced"
+    assert "end to end" in insight.speed_verdict.reason
+
+
+def test_template_axis_ignores_runs_without_sweep_provenance(base_config):
+    ordinary = make_run(
+        "ordinary",
+        base_config.merged(
+            widgets={"h3s_ui": '{"version":1,"template_id":"essentials/balanced"}'}
+        ),
+    )
+    current = make_run(
+        "current",
+        base_config.merged(
+            widgets={"h3s_ui": template_state("__current__", "Current settings")}
+        ),
+    )
+
+    assert marginal([ordinary, current], "template")[0].value == "Current settings"
+    assert "template" not in {
+        axis.field for axis in available_axes([ordinary, current])
+    }
 
 
 # --- sweeps ----------------------------------------------------------------

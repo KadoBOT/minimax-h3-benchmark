@@ -26,10 +26,13 @@ from h3lab.domain.config import (
     DERIVED_FROM,
     FIELD_LABELS,
     STUDIO_EXTRA_FIELDS,
+    TEMPLATE_AXIS_FIELD,
+    TEMPLATE_TOP_LEVEL_FIELDS,
+    TEMPLATE_WIDGET_FIELDS,
     GenerationConfig,
     canonical_form,
     field_display,
-    recipe_hash,
+    template_provenance,
 )
 
 AxisKind = Literal["categorical", "numeric", "boolean"]
@@ -65,6 +68,7 @@ AXES: tuple[AxisDef, ...] = (
     AxisDef(field="duration_s", label="Duration", kind="numeric"),
     AxisDef(field="aspect_ratio", label="Aspect", kind="categorical"),
     AxisDef(field="mode", label="Mode", kind="categorical"),
+    AxisDef(field=TEMPLATE_AXIS_FIELD, label="Template", kind="categorical"),
     AxisDef(field="shift_audio", label="Audio shift", kind="numeric"),
     AxisDef(field="derope", label="De-rope", kind="boolean"),
     AxisDef(field="sla", label="SLA", kind="boolean"),
@@ -185,7 +189,10 @@ class AxisInsight(BaseModel):
     )
 
 
-def axis_value(cfg: GenerationConfig, axis: str) -> str:
+def axis_value(cfg: GenerationConfig, axis: str) -> str | None:
+    if axis == TEMPLATE_AXIS_FIELD:
+        provenance = template_provenance(cfg)
+        return provenance[1] if provenance is not None else None
     if axis in STUDIO_EXTRA_FIELDS:
         return field_display(axis, cfg.widgets.get(axis))
     return field_display(axis, getattr(cfg, axis))
@@ -204,7 +211,9 @@ def _stderr(values: Sequence[float]) -> float | None:
 def marginal(runs: Sequence[InsightRun], axis: str) -> list[MarginalCell]:
     buckets: dict[str, list[InsightRun]] = {}
     for run in runs:
-        buckets.setdefault(axis_value(run.config, axis), []).append(run)
+        value = axis_value(run.config, axis)
+        if value is not None:
+            buckets.setdefault(value, []).append(run)
 
     cells: list[MarginalCell] = []
     for value, group in buckets.items():
@@ -242,14 +251,29 @@ def _held_apart(axis: str) -> set[str]:
     }
 
 
+def _matched_key(cfg: GenerationConfig, axis: str, *, include_seed: bool) -> str:
+    exclude = _held_apart(axis)
+    exclude_widgets: set[str] = set()
+    if axis == TEMPLATE_AXIS_FIELD:
+        exclude |= set(TEMPLATE_TOP_LEVEL_FIELDS)
+        exclude_widgets |= set(TEMPLATE_WIDGET_FIELDS)
+    if not include_seed:
+        exclude.add("seed")
+    return canonical_form(
+        cfg,
+        exclude=exclude,
+        exclude_widgets=exclude_widgets,
+    )
+
+
 def _seed_matched_key(cfg: GenerationConfig, axis: str) -> str:
     """Identity of everything except the axis — the seed included."""
-    return canonical_form(cfg, exclude=_held_apart(axis))
+    return _matched_key(cfg, axis, include_seed=True)
 
 
 def _recipe_matched_key(cfg: GenerationConfig, axis: str) -> str:
     """Identity of everything except the axis and the seed."""
-    return recipe_hash(cfg, also_exclude=_held_apart(axis))
+    return _matched_key(cfg, axis, include_seed=False)
 
 
 def _delta_stat(
@@ -280,13 +304,14 @@ def _compare_within(
 ) -> dict[tuple[str, str], PairedComparison]:
     groups: dict[str, dict[str, list[InsightRun]]] = {}
     for run in runs:
-        groups.setdefault(key(run.config, axis), {}).setdefault(
-            axis_value(run.config, axis), []
-        ).append(run)
+        value = axis_value(run.config, axis)
+        if value is not None:
+            groups.setdefault(key(run.config, axis), {}).setdefault(value, []).append(run)
 
     star_deltas: dict[tuple[str, str], list[float]] = {}
     speed_deltas: dict[tuple[str, str], list[float]] = {}
     group_counts: dict[tuple[str, str], int] = {}
+    timing_field = "wall_s" if axis == TEMPLATE_AXIS_FIELD else "sec_per_it"
 
     for by_value in groups.values():
         values = sorted(by_value)
@@ -304,8 +329,16 @@ def _compare_within(
                         statistics.fmean(stars_a) - statistics.fmean(stars_b)
                     )
 
-                rate_a = [r.sec_per_it for r in by_value[value_a] if r.sec_per_it]
-                rate_b = [r.sec_per_it for r in by_value[value_b] if r.sec_per_it]
+                rate_a = [
+                    value
+                    for run in by_value[value_a]
+                    if (value := getattr(run, timing_field)) is not None
+                ]
+                rate_b = [
+                    value
+                    for run in by_value[value_b]
+                    if (value := getattr(run, timing_field)) is not None
+                ]
                 if rate_a and rate_b:
                     mean_a = statistics.fmean([float(x) for x in rate_a])
                     mean_b = statistics.fmean([float(x) for x in rate_b])
@@ -355,6 +388,7 @@ def paired(runs: Sequence[InsightRun], axis: str) -> list[PairedComparison]:
 def _verdict_from(
     comparisons: Sequence[PairedComparison],
     metric: Literal["stars", "speed"],
+    axis: str,
     axis_label: str,
 ) -> Verdict:
     stats = [(c, c.stars if metric == "stars" else c.speed_pct) for c in comparisons]
@@ -413,7 +447,12 @@ def _verdict_from(
     ranked = sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))
     best, margin = ranked[0]
     runner_up = ranked[1][0] if len(ranked) > 1 else None
-    unit = "★" if metric == "stars" else "% faster per step"
+    if metric == "stars":
+        unit = "★"
+    elif axis == TEMPLATE_AXIS_FIELD:
+        unit = "% faster end to end"
+    else:
+        unit = "% faster per step"
     level: MatchLevel = (
         "seed" if any(c.matched_on == "seed" for c, _ in conclusive) else "recipe"
     )
@@ -442,7 +481,11 @@ def analyse(
     if definition is None:
         raise KeyError(f"unknown axis {axis!r}; expected one of {sorted(AXES_BY_FIELD)}")
 
-    rows = [run for run in runs]
+    rows = [
+        run
+        for run in runs
+        if axis != TEMPLATE_AXIS_FIELD or axis_value(run.config, axis) is not None
+    ]
     cells = marginal(rows, axis)
     comparisons = paired(rows, axis)
     return AxisInsight(
@@ -453,8 +496,8 @@ def analyse(
         values=[cell.value for cell in cells],
         marginal=cells,
         paired=comparisons,
-        quality_verdict=_verdict_from(comparisons, "stars", definition.label),
-        speed_verdict=_verdict_from(comparisons, "speed", definition.label),
+        quality_verdict=_verdict_from(comparisons, "stars", axis, definition.label),
+        speed_verdict=_verdict_from(comparisons, "speed", axis, definition.label),
     )
 
 
@@ -462,7 +505,11 @@ def available_axes(runs: Sequence[InsightRun]) -> list[AxisDef]:
     """Axes on which the recorded runs actually vary — the only ones worth offering."""
     out: list[AxisDef] = []
     for definition in AXES:
-        seen = {axis_value(run.config, definition.field) for run in runs}
+        seen = {
+            value
+            for run in runs
+            if (value := axis_value(run.config, definition.field)) is not None
+        }
         if len(seen) > 1:
             out.append(definition)
     return out

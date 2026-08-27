@@ -46,6 +46,45 @@ STUDIO_VALUE_ALIASES: dict[str, dict[str, str]] = {
 TEMPLATE_AXIS_FIELD = "template"
 CURRENT_TEMPLATE_ID = "__current__"
 TEMPLATE_STATE_KEY = "h3s_ui"
+TEMPLATE_TOP_LEVEL_FIELDS = frozenset(
+    {
+        "steps",
+        "scheduler",
+        "sampler",
+        "cache_enabled",
+        "cache",
+        "turbo",
+        "turbo_lora",
+        "turbo_lora_strength",
+        "sol_attn",
+        "clean_vram",
+        "interp",
+        "upscaler",
+    }
+)
+TEMPLATE_WIDGET_FIELDS = frozenset(
+    {
+        "attn",
+        "shift_video",
+        "shift_audio",
+        "derope",
+        "post_grade",
+        "upscale_ltx",
+        "sla",
+        "sla_sparsity",
+        "sla_block_size",
+        "sla_dense_last_steps",
+        "sla_protect_audio",
+        "sla_stabilize_motion",
+        "adaln",
+        "fp16_accum",
+        "er_sde",
+        "er_sde_solver",
+        "er_sde_max_stage",
+        "er_sde_eta",
+        "er_sde_s_noise",
+    }
+)
 # Studio knobs that are not first-class config fields. A top-level payload may name
 # them; they land on `widgets`. A brand-new widget the form discovered does not
 # need to be listed here — the UI already writes it to `widgets` by name.
