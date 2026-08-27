@@ -1336,6 +1336,211 @@ Add searchable Template sweep controls
 
 ---
 
+### Task 4A: Installed MiniMax H3 model catalog
+
+**Files:**
+- Modify: `h3lab/comfy/catalog.py`
+- Modify: `tests/test_comfy_client.py`
+- Modify: `web/src/lib/config.ts`
+- Modify: `web/src/lib/config.test.ts`
+- Modify: `web/src/pages/lab/index.tsx`
+- Modify: `web/src/pages/lab/lab.test.tsx`
+- Modify: `web/src/pages/lab/sweep-builder.test.ts`
+
+**Interfaces:**
+- `list_models(diffusion_models_dir: Path) -> list[str]` reads only the
+  `minimax-h3` child and returns prefixed combo values.
+- `installedModel(wanted: string | undefined, offered: string[], fallback:
+  string) -> string` normalizes persisted draft state.
+- The Weights picker and `diffusion_model` sweep axis consume the same catalog
+  list.
+
+- [ ] **Step 1: Write failing Python catalog tests**
+
+Change the disk catalog fixture to create:
+
+```text
+models/diffusion_models/minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors
+models/diffusion_models/minimax-h3/custom_variant.safetensors
+models/diffusion_models/other/minimax_h3_wrong_folder.safetensors
+```
+
+Assert:
+
+```python
+assert list_models(diffusion_models) == [
+    "minimax-h3/custom_variant.safetensors",
+    "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors",
+]
+```
+
+Add an offline `build_catalog` test asserting the list/default come from that
+folder, and change the empty-folder test to:
+
+```python
+assert catalog.diffusion_models == []
+assert catalog.default_diffusion_model == ""
+assert catalog.defaults["diffusion_model"] == ""
+assert "nvfp4" not in str(catalog.model_dump()).lower()
+```
+
+Add a live-server test where local folder entries win. Preserve the existing
+remote-server test with an empty local folder.
+
+- [ ] **Step 2: Run Python catalog tests and verify RED**
+
+```bash
+cd /home/kadobot/Projects/minimax-h3-benchmark
+.venv/bin/python -m pytest tests/test_comfy_client.py -q
+```
+
+Expected: nested files are missed and the empty case still fabricates NVFP4.
+
+- [ ] **Step 3: Correct catalog discovery**
+
+In `h3lab/comfy/catalog.py`:
+
+```python
+MINIMAX_H3_FOLDER = "minimax-h3"
+
+
+def _in_minimax_h3_folder(name: str) -> bool:
+    normalized = name.replace("\\", "/").lstrip("./")
+    return normalized.lower().startswith(f"{MINIMAX_H3_FOLDER}/")
+
+
+def list_models(directory: Path) -> list[str]:
+    folder = directory / MINIMAX_H3_FOLDER
+    return [
+        f"{MINIMAX_H3_FOLDER}/{name}"
+        for name in _listdir(folder, MODEL_SUFFIXES)
+    ]
+```
+
+Filter live values with `_in_minimax_h3_folder`. In `build_catalog`, choose
+`disk_models` first, then live values, then an empty list. Set the source to
+`disk`, `comfy`, or `unavailable`. Change `default_model([])` to return `""`.
+
+Do not change historical explicit-name matching or Turbo LoRA discovery.
+
+- [ ] **Step 4: Write failing persisted-draft tests**
+
+Add to `web/src/lib/config.test.ts`:
+
+```typescript
+describe("installedModel", () => {
+  const models = [
+    "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors",
+    "minimax-h3/custom_variant.safetensors",
+  ]
+
+  it("replaces a stale fallback with the installed default", () => {
+    expect(
+      installedModel(
+        "minimax_h3_fl2va_pruned_nvfp4.safetensors",
+        models,
+        models[0]
+      )
+    ).toBe(models[0])
+  })
+
+  it("normalizes a unique basename to its combo value", () => {
+    expect(
+      installedModel(
+        "custom_variant.safetensors",
+        models,
+        models[0]
+      )
+    ).toBe(models[1])
+  })
+})
+```
+
+Add a Lab page test that seeds `h3lab.draft` with the phantom NVFP4 name,
+renders against the installed catalog, and asserts the Weights combobox and
+persisted draft now contain the real default.
+
+- [ ] **Step 5: Run web tests and verify RED**
+
+```bash
+cd /home/kadobot/Projects/minimax-h3-benchmark/web
+npx vitest run src/lib/config.test.ts src/pages/lab/lab.test.tsx
+```
+
+Expected: missing helper and the stale value remains selected.
+
+- [ ] **Step 6: Normalize only the model override**
+
+In `web/src/lib/config.ts`:
+
+```typescript
+export function installedModel(
+  wanted: string | undefined,
+  offered: string[],
+  fallback: string
+): string {
+  const name = wanted?.trim()
+  if (!name) return fallback
+  if (offered.includes(name)) return name
+  const basename = name.replaceAll("\\", "/").split("/").at(-1)?.toLowerCase()
+  const matches = offered.filter(
+    (item) =>
+      item.replaceAll("\\", "/").split("/").at(-1)?.toLowerCase() === basename
+  )
+  return matches.length === 1 ? matches[0] : fallback
+}
+```
+
+In the Lab page's draft `useMemo`, resolve the catalog layer before spreading
+the other stored overrides:
+
+```typescript
+const defaults = (catalog.data?.defaults ?? {}) as Partial<Draft>
+const overrides = { ...draftOverrides }
+if (catalog.data) {
+  overrides.diffusion_model = installedModel(
+    draftOverrides.diffusion_model,
+    catalog.data.diffusion_models,
+    catalog.data.default_diffusion_model
+  )
+}
+return {
+  ...(meta.data.defaults as Draft),
+  ...defaults,
+  ...overrides,
+}
+```
+
+If the resulting model is empty, include `Weights` in `missingInputs`.
+
+- [ ] **Step 7: Prove model sweep parity**
+
+Extend `sweep-builder.test.ts` with a two-model catalog and assert the
+`diffusion_model` axis values are exactly those two prefixed values. Extend the
+Lab test to add `Weights` as an axis and assert both model buttons render.
+
+- [ ] **Step 8: Run focused and full tests**
+
+```bash
+cd /home/kadobot/Projects/minimax-h3-benchmark
+.venv/bin/python -m pytest tests/test_comfy_client.py tests/test_domain_config.py -q
+cd web
+npx vitest run src/lib/config.test.ts src/pages/lab/sweep-builder.test.ts src/pages/lab/lab.test.tsx
+npm run build
+```
+
+Expected: all pass.
+
+- [ ] **Step 9: Commit**
+
+Commit only these files as:
+
+```text
+Use the installed MiniMax H3 model catalog
+```
+
+---
+
 ### Task 5: Live acceptance, regressions, and persistence
 
 **Files:**
