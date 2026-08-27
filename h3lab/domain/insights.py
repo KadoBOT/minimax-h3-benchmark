@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 from h3lab.domain.config import (
     DERIVED_FROM,
     FIELD_LABELS,
+    STUDIO_EXTRA_FIELDS,
     GenerationConfig,
     canonical_form,
     field_display,
@@ -64,6 +65,21 @@ AXES: tuple[AxisDef, ...] = (
     AxisDef(field="duration_s", label="Duration", kind="numeric"),
     AxisDef(field="aspect_ratio", label="Aspect", kind="categorical"),
     AxisDef(field="mode", label="Mode", kind="categorical"),
+    AxisDef(field="shift_audio", label="Audio shift", kind="numeric"),
+    AxisDef(field="derope", label="De-rope", kind="boolean"),
+    AxisDef(field="sla", label="SLA", kind="boolean"),
+    AxisDef(field="sla_sparsity", label="SLA sparsity", kind="numeric"),
+    AxisDef(field="sla_block_size", label="SLA block", kind="categorical"),
+    AxisDef(field="sla_dense_last_steps", label="SLA dense tail", kind="numeric"),
+    AxisDef(field="sla_protect_audio", label="SLA audio guard", kind="boolean"),
+    AxisDef(field="sla_stabilize_motion", label="SLA motion guard", kind="boolean"),
+    AxisDef(field="adaln", label="AdaLN LoRA", kind="categorical"),
+    AxisDef(field="fp16_accum", label="fp16 accum", kind="boolean"),
+    AxisDef(field="er_sde", label="ER-SDE", kind="boolean"),
+    AxisDef(field="er_sde_solver", label="ER-SDE solver", kind="categorical"),
+    AxisDef(field="er_sde_max_stage", label="ER-SDE stage", kind="numeric"),
+    AxisDef(field="er_sde_eta", label="ER-SDE eta", kind="numeric"),
+    AxisDef(field="er_sde_s_noise", label="ER-SDE s_noise", kind="numeric"),
 )
 
 AXES_BY_FIELD: dict[str, AxisDef] = {axis.field: axis for axis in AXES}
@@ -170,6 +186,8 @@ class AxisInsight(BaseModel):
 
 
 def axis_value(cfg: GenerationConfig, axis: str) -> str:
+    if axis in STUDIO_EXTRA_FIELDS:
+        return field_display(axis, cfg.widgets.get(axis))
     return field_display(axis, getattr(cfg, axis))
 
 

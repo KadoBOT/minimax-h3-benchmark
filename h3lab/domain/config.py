@@ -61,6 +61,23 @@ STUDIO_EXTRA_FIELDS: frozenset[str] = frozenset(
         "pass2_shift",
         "pass2_scale",
         "attn",
+        # Experiment toggles. Each drives a node the workflow keeps inert at its
+        # default, so naming one here is what makes it a sweepable axis.
+        "shift_audio",
+        "derope",
+        "sla",
+        "sla_sparsity",
+        "sla_block_size",
+        "sla_dense_last_steps",
+        "sla_protect_audio",
+        "sla_stabilize_motion",
+        "adaln",
+        "fp16_accum",
+        "er_sde",
+        "er_sde_solver",
+        "er_sde_max_stage",
+        "er_sde_eta",
+        "er_sde_s_noise",
     }
 )
 PRESET_LEVELS: tuple[PresetLevel, ...] = (
@@ -631,6 +648,15 @@ DERIVED_FROM: dict[str, tuple[str, ...]] = {
     "turbo_lora": ("turbo",),
     "turbo_lora_strength": ("turbo",),
     "steps": ("turbo", "turbo_lora"),
+    "sla_sparsity": ("sla",),
+    "sla_block_size": ("sla",),
+    "sla_dense_last_steps": ("sla",),
+    "sla_protect_audio": ("sla",),
+    "sla_stabilize_motion": ("sla",),
+    "er_sde_solver": ("er_sde",),
+    "er_sde_max_stage": ("er_sde",),
+    "er_sde_eta": ("er_sde",),
+    "er_sde_s_noise": ("er_sde",),
 }
 
 
