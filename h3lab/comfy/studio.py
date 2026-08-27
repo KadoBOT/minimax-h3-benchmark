@@ -12,6 +12,8 @@ from h3lab.comfy.workflow import Graph, Prompt, executable
 from h3lab.domain.config import DEFAULT_ASPECT, GenerationConfig
 
 STUDIO_CONTRACT_VERSION = 1
+STUDIO_UI_SCHEMA_VERSION = 1
+STUDIO_TEMPLATE_CATALOG_VERSION = 1
 STUDIO_API_ROOT = "/minimax_h3_studio/v1"
 STUDIO_CLASS = "MiniMaxH3Studio"
 _MODE_TO_STUDIO = {"t2v": "T2V", "flf2v": "FLF2V", "r2v": "R2V"}
@@ -90,6 +92,40 @@ def validate_manifest(payload: Any) -> dict[str, Any]:
             raise StudioContractError(
                 "contract_unavailable",
                 f"Studio manifest has no {field}",
+            )
+    ui_schema = payload.get("ui_schema")
+    if not isinstance(ui_schema, Mapping):
+        raise StudioContractError(
+            "contract_unavailable",
+            "Studio manifest has no UI schema",
+        )
+    if ui_schema.get("version") != STUDIO_UI_SCHEMA_VERSION:
+        raise StudioContractError(
+            "contract_unavailable",
+            f"unsupported Studio UI schema version {ui_schema.get('version')!r}; "
+            f"expected {STUDIO_UI_SCHEMA_VERSION}",
+        )
+    template_catalog = payload.get("template_catalog")
+    if template_catalog is not None:
+        if not isinstance(template_catalog, Mapping):
+            raise StudioContractError(
+                "contract_unavailable",
+                "Studio template catalog must be a JSON object",
+            )
+        if template_catalog.get("version") != STUDIO_TEMPLATE_CATALOG_VERSION:
+            raise StudioContractError(
+                "contract_unavailable",
+                f"unsupported Studio template catalog version "
+                f"{template_catalog.get('version')!r}; "
+                f"expected {STUDIO_TEMPLATE_CATALOG_VERSION}",
+            )
+        if (
+            not isinstance(template_catalog.get("categories"), list)
+            or not isinstance(template_catalog.get("templates"), list)
+        ):
+            raise StudioContractError(
+                "contract_unavailable",
+                "Studio template catalog is malformed",
             )
     return dict(payload)
 

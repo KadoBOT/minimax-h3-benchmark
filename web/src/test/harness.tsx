@@ -98,6 +98,19 @@ export const STUDIO_SESSION: StudioSession = {
   node_class: "MiniMaxH3Studio",
   module_url: "/api/studio/component.js",
   prepare_url: "/api/studio/prepare",
+  ui_schema: {
+    version: 1,
+    specialized: ["mode", "prompt"],
+    internal: ["h3s_ui"],
+    sections: [],
+  },
+  template_catalog: {
+    version: 1,
+    managed_keys: ["steps"],
+    selector: { label: "Template", placeholder: "Search templates" },
+    categories: [{ id: "essentials", name: "Essentials" }],
+    templates: [],
+  },
   input_options: {
     sampler_name: ["euler", "res_multistep"],
     scheduler: ["simple", "beta"],

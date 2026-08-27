@@ -27,7 +27,15 @@ def session(lab: LabDep, mode: GenMode = "flf2v") -> JSONResponse:
 
 @router.get("/component.js")
 def component(lab: LabDep) -> Response:
-    source, content_type = lab.client.studio_component()
+    return _javascript_response(*lab.client.studio_component())
+
+
+@router.get("/template_runtime.mjs")
+def template_runtime(lab: LabDep) -> Response:
+    return _javascript_response(*lab.client.studio_template_runtime())
+
+
+def _javascript_response(source: bytes, content_type: str) -> Response:
     return Response(
         source,
         headers={

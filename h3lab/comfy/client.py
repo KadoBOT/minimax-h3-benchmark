@@ -239,7 +239,13 @@ class ComfyClient:
         return validate_manifest(payload)
 
     def studio_component(self) -> tuple[bytes, str]:
-        path = f"{STUDIO_API_ROOT}/component.js"
+        return self._studio_javascript("component.js")
+
+    def studio_template_runtime(self) -> tuple[bytes, str]:
+        return self._studio_javascript("template_runtime.mjs")
+
+    def _studio_javascript(self, filename: str) -> tuple[bytes, str]:
+        path = f"{STUDIO_API_ROOT}/{filename}"
         response = self._request_raw("GET", path)
         self._raise_studio_http_error(response, path)
         return response.content, response.headers.get(

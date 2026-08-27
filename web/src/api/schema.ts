@@ -573,6 +573,7 @@ export const API_PATHS = [
   "/api/studio/component.js",
   "/api/studio/prepare",
   "/api/studio/session",
+  "/api/studio/template_runtime.mjs",
   "/api/sweeps",
   "/api/sweeps/preview",
   "/api/tags",

@@ -7,6 +7,7 @@ import type {
   StudioController,
   StudioMountOptions,
   StudioSession,
+  StudioTemplateCatalog,
 } from "@/lib/studio-runtime"
 import { BASELINE_ROUTES, CONFIG, fakeApi, renderApp } from "@/test/harness"
 import { StudioHost } from "./studio-host"
@@ -20,12 +21,27 @@ vi.mock("@/lib/studio-runtime", async (importOriginal) => {
   return { ...actual, loadStudioRuntime: runtime.load }
 })
 
+const TEMPLATE_CATALOG = {
+  version: 1,
+  managed_keys: ["steps"],
+  selector: { label: "Template", placeholder: "Search templates" },
+  categories: [{ id: "essentials", name: "Essentials" }],
+  templates: [],
+} satisfies StudioTemplateCatalog
+
 const SESSION: StudioSession = {
   contract_version: 1,
   component_version: "1.1.0",
   node_class: "MiniMaxH3Studio",
   module_url: "/api/studio/component.js",
   prepare_url: "/api/studio/prepare",
+  ui_schema: {
+    version: 1,
+    specialized: ["mode", "prompt"],
+    internal: ["h3s_ui"],
+    sections: [],
+  },
+  template_catalog: TEMPLATE_CATALOG,
   workflow: {
     "42": {
       class_type: "MiniMaxH3Studio",
@@ -102,12 +118,26 @@ describe("Studio host", () => {
         attn: "comfy_kitchen",
         references: "{}",
         future_control: 3,
+        sla: true,
+        sla_sparsity: 0.85,
+        er_sde: true,
+        er_sde_eta: 0.5,
+        h3s_ui: '{"version":1,"template_id":"motion/extreme-action-derope"}',
       })
     })
     expect(onChange).toHaveBeenCalledWith({
       prompt: "changed in Studio",
       duration_s: 9,
-      widgets: { attn: "comfy_kitchen", future_control: 3 },
+      widgets: {
+        attn: "comfy_kitchen",
+        future_control: 3,
+        sla: true,
+        sla_sparsity: 0.85,
+        er_sde: true,
+        er_sde_eta: 0.5,
+        h3s_ui:
+          '{"version":1,"template_id":"motion/extreme-action-derope"}',
+      },
     })
 
     act(() => setDraft({ ...CONFIG, prompt: "outside change" }))

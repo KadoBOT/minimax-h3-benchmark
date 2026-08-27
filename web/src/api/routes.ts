@@ -50,6 +50,7 @@ export const routes = {
 
   studioSession: () => `/api/studio/session`,
   studioComponent: () => `/api/studio/component.js`,
+  studioTemplateRuntime: () => `/api/studio/template_runtime.mjs`,
   studioPrepare: () => `/api/studio/prepare`,
 
   events: () => `/api/events`,

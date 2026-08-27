@@ -16,6 +16,20 @@ from tests.conftest import unified_workflow_path
 
 pytestmark = pytest.mark.anyio
 
+UI_SCHEMA = {
+    "version": 1,
+    "specialized": ["mode"],
+    "internal": ["h3s_ui"],
+    "sections": [],
+}
+TEMPLATE_CATALOG = {
+    "version": 1,
+    "managed_keys": ["steps"],
+    "selector": {"label": "Template", "placeholder": "Search templates"},
+    "categories": [{"id": "essentials", "name": "Essentials"}],
+    "templates": [],
+}
+
 
 @pytest.fixture
 def anyio_backend() -> str:
@@ -30,9 +44,15 @@ def lab(lab_settings: Settings, stub) -> Iterator[Lab]:
         "module_url": "/minimax_h3_studio/v1/component.js",
         "prepare_url": "/minimax_h3_studio/v1/prepare",
         "input_options": {"scheduler": ["simple", "beta57"]},
+        "ui_schema": UI_SCHEMA,
+        "template_catalog": TEMPLATE_CATALOG,
     }
     stub.studio_component = lambda: (
         b"export const studio = true;\n",
+        "application/javascript; charset=utf-8",
+    )
+    stub.studio_template_runtime = lambda: (
+        b"export const runtime = true;\n",
         "application/javascript; charset=utf-8",
     )
     stub.prepare_studio = lambda workflow, inputs: {
@@ -66,6 +86,8 @@ async def test_session_rewrites_urls_and_preserves_manifest_metadata(
     assert payload["module_url"] == "/api/studio/component.js"
     assert payload["prepare_url"] == "/api/studio/prepare"
     assert payload["input_options"] == {"scheduler": ["simple", "beta57"]}
+    assert payload["ui_schema"] == UI_SCHEMA
+    assert payload["template_catalog"] == TEMPLATE_CATALOG
     studios = [
         node
         for node in payload["workflow"].values()
@@ -114,6 +136,14 @@ async def test_component_is_proxied_unchanged(client: httpx.AsyncClient):
     response = await client.get("/api/studio/component.js")
     assert response.status_code == 200
     assert response.content == b"export const studio = true;\n"
+    assert response.headers["content-type"].startswith("application/javascript")
+    assert response.headers["cache-control"] == "no-cache"
+
+
+async def test_template_runtime_is_proxied_unchanged(client: httpx.AsyncClient):
+    response = await client.get("/api/studio/template_runtime.mjs")
+    assert response.status_code == 200
+    assert response.content == b"export const runtime = true;\n"
     assert response.headers["content-type"].startswith("application/javascript")
     assert response.headers["cache-control"] == "no-cache"
 

@@ -12,6 +12,33 @@ from h3lab.comfy.studio import (
     find_studio_node,
 )
 
+UI_SCHEMA = {
+    "version": 1,
+    "specialized": ["mode"],
+    "internal": ["h3s_ui"],
+    "sections": [],
+}
+TEMPLATE_CATALOG = {
+    "version": 1,
+    "managed_keys": ["steps"],
+    "selector": {"label": "Template", "placeholder": "Search templates"},
+    "categories": [{"id": "essentials", "name": "Essentials"}],
+    "templates": [
+        {
+            "id": "essentials/balanced",
+            "category": "essentials",
+            "name": "Balanced",
+            "description": "Balanced defaults.",
+            "tradeoff": "None.",
+            "evidence": "curated",
+            "evidence_ref": None,
+            "tags": ["balanced"],
+            "requirements": [],
+            "values": {"steps": 20},
+        }
+    ],
+}
+
 
 def client_for(handler) -> ComfyClient:
     client = ComfyClient("http://comfy.test")
@@ -39,11 +66,15 @@ def test_manifest_get_preserves_additive_fields():
             "module_url": "/minimax_h3_studio/v1/component.js",
             "prepare_url": "/minimax_h3_studio/v1/prepare",
             "input_options": {"scheduler": ["simple"]},
+            "ui_schema": UI_SCHEMA,
+            "template_catalog": TEMPLATE_CATALOG,
         })
 
     with client_for(handler) as client:
         manifest = client.studio_manifest()
     assert manifest["input_options"] == {"scheduler": ["simple"]}
+    assert manifest["ui_schema"] == UI_SCHEMA
+    assert manifest["template_catalog"] == TEMPLATE_CATALOG
 
 
 def test_component_returns_exact_bytes_and_content_type():
@@ -59,6 +90,23 @@ def test_component_returns_exact_bytes_and_content_type():
 
     with client_for(handler) as client:
         body, content_type = client.studio_component()
+    assert body == source
+    assert content_type == "application/javascript; charset=utf-8"
+
+
+def test_template_runtime_returns_exact_bytes_and_content_type():
+    source = b"export const runtime = true;\n"
+
+    def handler(request):
+        assert request.url.path == "/minimax_h3_studio/v1/template_runtime.mjs"
+        return response(
+            200,
+            content=source,
+            content_type="application/javascript; charset=utf-8",
+        )
+
+    with client_for(handler) as client:
+        body, content_type = client.studio_template_runtime()
     assert body == source
     assert content_type == "application/javascript; charset=utf-8"
 
@@ -123,6 +171,65 @@ def test_unknown_major_is_definitive():
         with pytest.raises(StudioContractError) as caught:
             client.studio_manifest()
     assert caught.value.code == "contract_unavailable"
+
+
+@pytest.mark.parametrize(
+    "ui_schema",
+    [
+        None,
+        [],
+        {"version": 2, "specialized": [], "internal": [], "sections": []},
+    ],
+)
+def test_manifest_requires_a_supported_ui_schema(ui_schema):
+    payload = {
+        "contract_version": 1,
+        "module_url": "/component.js",
+        "prepare_url": "/prepare",
+    }
+    if ui_schema is not None:
+        payload["ui_schema"] = ui_schema
+
+    with client_for(lambda _request: response(200, payload)) as client:
+        with pytest.raises(StudioContractError, match="UI schema") as caught:
+            client.studio_manifest()
+    assert caught.value.code == "contract_unavailable"
+
+
+@pytest.mark.parametrize(
+    "catalog",
+    [
+        [],
+        {"version": 2, "categories": [], "templates": []},
+        {"version": 1, "categories": {}, "templates": []},
+        {"version": 1, "categories": [], "templates": {}},
+    ],
+)
+def test_manifest_rejects_an_invalid_template_catalog(catalog):
+    payload = {
+        "contract_version": 1,
+        "module_url": "/component.js",
+        "prepare_url": "/prepare",
+        "ui_schema": UI_SCHEMA,
+        "template_catalog": catalog,
+    }
+
+    with client_for(lambda _request: response(200, payload)) as client:
+        with pytest.raises(StudioContractError, match="template catalog") as caught:
+            client.studio_manifest()
+    assert caught.value.code == "contract_unavailable"
+
+
+def test_manifest_accepts_an_absent_template_catalog():
+    payload = {
+        "contract_version": 1,
+        "module_url": "/component.js",
+        "prepare_url": "/prepare",
+        "ui_schema": UI_SCHEMA,
+    }
+
+    with client_for(lambda _request: response(200, payload)) as client:
+        assert "template_catalog" not in client.studio_manifest()
 
 
 def test_transport_failure_remains_retryable_comfy_error():

@@ -6,7 +6,83 @@ import {
   projectStudioInputs,
   studioInputsFromDraft,
   type StudioSession,
+  type StudioTemplateCatalog,
 } from "./studio-runtime"
+
+const UI_SCHEMA = {
+  version: 1 as const,
+  specialized: ["mode", "prompt"],
+  internal: ["h3s_ui"],
+  sections: [
+    {
+      id: "experiments",
+      title: "Experiments",
+      controls: [
+        {
+          key: "sla",
+          label: "Sparse linear attention",
+          kind: "boolean" as const,
+        },
+        {
+          key: "sla_sparsity",
+          label: "Sparsity",
+          kind: "number" as const,
+          when: "sla",
+        },
+        {
+          key: "sla_block_size",
+          label: "Block size",
+          kind: "combo" as const,
+          when: "sla",
+        },
+        {
+          key: "derope",
+          label: "De-rope pass",
+          kind: "boolean" as const,
+        },
+      ],
+    },
+  ],
+}
+
+const TEMPLATE_CATALOG = {
+  version: 1,
+  managed_keys: ["steps"],
+  selector: { label: "Template", placeholder: "Search templates" },
+  categories: [{ id: "essentials", name: "Essentials" }],
+  templates: [
+    {
+      id: "essentials/balanced",
+      category: "essentials",
+      name: "Balanced",
+      description: "Balanced defaults.",
+      tradeoff: "None.",
+      evidence: "curated",
+      evidence_ref: null,
+      tags: ["balanced"],
+      requirements: [],
+      values: { steps: 20 },
+    },
+  ],
+} satisfies StudioTemplateCatalog
+
+const EXPERIMENT_INPUTS = {
+  shift_audio: 6,
+  derope: false,
+  sla: true,
+  sla_sparsity: 0.85,
+  sla_block_size: "128",
+  sla_dense_last_steps: 2,
+  sla_protect_audio: false,
+  sla_stabilize_motion: false,
+  adaln: "port",
+  fp16_accum: true,
+  er_sde: true,
+  er_sde_solver: "ODE",
+  er_sde_max_stage: 2,
+  er_sde_eta: 0.5,
+  er_sde_s_noise: 0.5,
+}
 
 function session(overrides: Partial<StudioSession> = {}): StudioSession {
   return {
@@ -15,6 +91,8 @@ function session(overrides: Partial<StudioSession> = {}): StudioSession {
     node_class: "MiniMaxH3Studio",
     module_url: "/api/studio/component.js",
     prepare_url: "/api/studio/prepare",
+    ui_schema: UI_SCHEMA,
+    template_catalog: TEMPLATE_CATALOG,
     workflow: {},
     bindings: {},
     ...overrides,
@@ -30,6 +108,31 @@ describe("Studio runtime", () => {
         importer
       )
     ).rejects.toThrow("contract version")
+    expect(importer).not.toHaveBeenCalled()
+  })
+
+  it("rejects a missing UI schema before importing code", async () => {
+    const importer = vi.fn()
+    await expect(
+      loadStudioRuntime(
+        { ...session(), ui_schema: undefined } as unknown as StudioSession,
+        importer
+      )
+    ).rejects.toThrow("UI schema")
+    expect(importer).not.toHaveBeenCalled()
+  })
+
+  it("rejects an unsupported UI schema version before importing code", async () => {
+    const importer = vi.fn()
+    await expect(
+      loadStudioRuntime(
+        {
+          ...session(),
+          ui_schema: { ...UI_SCHEMA, version: 2 },
+        } as unknown as StudioSession,
+        importer
+      )
+    ).rejects.toThrow("UI schema version")
     expect(importer).not.toHaveBeenCalled()
   })
 
@@ -80,6 +183,80 @@ describe("Studio runtime", () => {
 })
 
 describe("Studio input persistence", () => {
+  it("round-trips template provenance through ordinary widgets", () => {
+    const source = session({
+      workflow: {
+        "42": {
+          class_type: "MiniMaxH3Studio",
+          inputs: {
+            steps: 20,
+            h3s_ui:
+              '{"version":1,"template_id":"essentials/balanced"}',
+          },
+        },
+      },
+    })
+    const draft: Draft = { mode: "t2v", widgets: { steps: 24 } }
+    const inputs = studioInputsFromDraft(source, draft)
+
+    expect(inputs.h3s_ui).toBe(
+      '{"version":1,"template_id":"essentials/balanced"}'
+    )
+    expect(projectStudioInputs(inputs, source.bindings, draft).widgets).toMatchObject({
+      h3s_ui: '{"version":1,"template_id":"essentials/balanced"}',
+      steps: 24,
+    })
+  })
+
+  it("uses source literals for unbound controls without a draft override", () => {
+    const source = session({
+      workflow: {
+        "42": {
+          class_type: "MiniMaxH3Studio",
+          inputs: {
+            sla: false,
+            sla_sparsity: 0.9,
+            sla_block_size: "64",
+            derope: true,
+          },
+        },
+      },
+    })
+
+    expect(
+      studioInputsFromDraft(source, { mode: "t2v", widgets: {} })
+    ).toEqual({
+      sla: false,
+      sla_sparsity: 0.9,
+      sla_block_size: "64",
+      derope: true,
+    })
+  })
+
+  it("round-trips every experiment through ordinary single-run widgets", () => {
+    const source = session({
+      workflow: {
+        "42": {
+          class_type: "MiniMaxH3Studio",
+          inputs: EXPERIMENT_INPUTS,
+        },
+      },
+    })
+
+    const patch = projectStudioInputs(
+      EXPERIMENT_INPUTS,
+      {},
+      { mode: "t2v", widgets: {} }
+    )
+    expect(patch).toEqual({ widgets: EXPERIMENT_INPUTS })
+    expect(
+      studioInputsFromDraft(source, {
+        mode: "t2v",
+        widgets: EXPERIMENT_INPUTS,
+      })
+    ).toMatchObject(EXPERIMENT_INPUTS)
+  })
+
   it("projects a draft into the names the mounted component owns", () => {
     const source = session({
       workflow: {

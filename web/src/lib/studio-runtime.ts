@@ -15,6 +15,65 @@ export type StudioBinding = {
   values?: Record<string, unknown>
 }
 
+export type StudioUiControl = {
+  key: string
+  label: string
+  kind: "boolean" | "combo" | "number"
+  when?: string
+  help?: string
+  min?: number
+  max?: number
+  step?: number
+}
+
+export type StudioUiSection = {
+  id: string
+  title: string
+  columns?: number
+  controls: StudioUiControl[]
+}
+
+export type StudioUiSchema = {
+  version: 1
+  specialized: string[]
+  internal: string[]
+  sections: StudioUiSection[]
+}
+
+export type StudioTemplateRequirement = {
+  kind: "input_not" | "capability"
+  key: string
+  value?: unknown
+  message: string
+}
+
+export type StudioTemplate = {
+  id: string
+  category: string
+  name: string
+  description: string
+  tradeoff: string
+  evidence: "measured" | "curated" | "experimental"
+  evidence_ref: string | null
+  tags: string[]
+  requirements: StudioTemplateRequirement[]
+  values: Record<string, boolean | number | string>
+}
+
+export type StudioTemplateCatalog = {
+  version: 1
+  managed_keys: string[]
+  selector: {
+    label: string
+    placeholder: string
+  }
+  categories: {
+    id: string
+    name: string
+  }[]
+  templates: StudioTemplate[]
+}
+
 export type StudioManifest = {
   contract_version: 1
   component_version: string
@@ -22,6 +81,10 @@ export type StudioManifest = {
   module_url: string
   prepare_url: string
   input_options?: Record<string, unknown[]>
+  ui_schema: StudioUiSchema
+  capabilities?: Record<string, unknown>
+  template_catalog?: StudioTemplateCatalog | null
+  template_catalog_error?: string | null
   [key: string]: unknown
 }
 
@@ -115,6 +178,14 @@ export async function loadStudioRuntime(
       `Unsupported Studio contract version ${session.contract_version}; expected 1`
     )
   }
+  if (!session.ui_schema || typeof session.ui_schema !== "object") {
+    throw new Error("Studio session has no UI schema")
+  }
+  if (session.ui_schema.version !== 1) {
+    throw new Error(
+      `Unsupported Studio UI schema version ${String(session.ui_schema.version)}; expected 1`
+    )
+  }
   if (!session.module_url || !session.component_version) {
     throw new Error("Studio session has no component module or version")
   }
@@ -205,7 +276,22 @@ export function studioInputsFromDraft(
     )
   }
 
-  const projected: Record<string, unknown> = { ...(draft.widgets ?? {}) }
+  const userFacing = new Set([
+    ...session.ui_schema.specialized,
+    ...session.ui_schema.sections.flatMap((section) =>
+      section.controls.map((control) => control.key)
+    ),
+    "h3s_ui",
+  ])
+  const sourceInputs = Object.fromEntries(
+    Object.entries(studioNodes[0].inputs).filter(([name]) =>
+      userFacing.has(name)
+    )
+  )
+  const projected: Record<string, unknown> = {
+    ...sourceInputs,
+    ...(draft.widgets ?? {}),
+  }
   for (const name of Object.keys(studioNodes[0].inputs)) {
     const binding = session.bindings[name]
     if (binding?.store === "references") {
