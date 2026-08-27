@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from h3lab.domain.config import (
+    CURRENT_TEMPLATE_ID,
     DEFAULT_TURBO_LORA,
     GenerationConfig,
     canonical_form,
@@ -14,6 +15,7 @@ from h3lab.domain.config import (
     derive_label,
     field_display,
     recipe_hash,
+    template_provenance,
 )
 
 
@@ -36,6 +38,53 @@ def test_canonical_form_is_sorted_compact_json_of_hashed_fields_only(base_config
     assert list(payload) == sorted(payload)
     assert "seed" in payload
     assert "seed" not in json.loads(canonical_form(base_config, exclude={"seed"}))
+
+
+def test_template_provenance_does_not_change_pixel_or_recipe_identity(base_config):
+    state = json.dumps(
+        {
+            "version": 1,
+            "template_id": "motion/extreme-action-derope",
+            "template_name": "Extreme Action De-rope",
+            "source": "sweep",
+        },
+        separators=(",", ":"),
+    )
+    tagged = base_config.merged(widgets={"h3s_ui": state})
+
+    assert config_hash(tagged) == config_hash(base_config)
+    assert recipe_hash(tagged) == recipe_hash(base_config)
+    assert template_provenance(tagged) == (
+        "motion/extreme-action-derope",
+        "Extreme Action De-rope",
+    )
+
+
+def test_only_sweep_provenance_participates_in_template_insights(base_config):
+    ordinary = base_config.merged(
+        widgets={"h3s_ui": '{"version":1,"template_id":"essentials/balanced"}'}
+    )
+    current = base_config.merged(
+        widgets={
+            "h3s_ui": (
+                '{"version":1,"template_id":"__current__",'
+                '"template_name":"Current settings","source":"sweep"}'
+            )
+        }
+    )
+
+    assert template_provenance(ordinary) is None
+    assert template_provenance(current) == (
+        CURRENT_TEMPLATE_ID,
+        "Current settings",
+    )
+
+
+def test_canonical_form_can_exclude_selected_widget_keys(base_config):
+    cfg = base_config.merged(widgets={"sla": True, "other": 3})
+    payload = json.loads(canonical_form(cfg, exclude_widgets={"sla"}))
+
+    assert payload["widgets"] == {"other": 3}
 
 
 def test_hash_is_stable_across_equivalent_float_spellings(base_config):

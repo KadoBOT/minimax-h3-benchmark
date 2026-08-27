@@ -43,6 +43,9 @@ STUDIO_VALUE_ALIASES: dict[str, dict[str, str]] = {
     "mode": {"T2V": "t2v", "FLF2V": "flf2v", "R2V": "r2v"},
     "interp": {"none": "off"},
 }
+TEMPLATE_AXIS_FIELD = "template"
+CURRENT_TEMPLATE_ID = "__current__"
+TEMPLATE_STATE_KEY = "h3s_ui"
 # Studio knobs that are not first-class config fields. A top-level payload may name
 # them; they land on `widgets`. A brand-new widget the form discovered does not
 # need to be listed here — the UI already writes it to `widgets` by name.
@@ -441,6 +444,26 @@ class GenerationConfig(BaseModel):
         return type(self)(**data)
 
 
+def template_provenance(config: GenerationConfig) -> tuple[str, str] | None:
+    raw = config.widgets.get(TEMPLATE_STATE_KEY)
+    if not isinstance(raw, str):
+        return None
+    try:
+        state = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if (
+        not isinstance(state, dict)
+        or state.get("version") != 1
+        or state.get("source") != "sweep"
+        or not isinstance(state.get("template_id"), str)
+    ):
+        return None
+    template_id = state["template_id"]
+    name = state.get("template_name")
+    return template_id, name if isinstance(name, str) and name else template_id
+
+
 def config_attention(config: GenerationConfig) -> str:
     explicit = config.widgets.get("attn")
     if isinstance(explicit, str):
@@ -498,15 +521,22 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def canonical_form(cfg: GenerationConfig, *, exclude: Iterable[str] = ()) -> str:
+def canonical_form(
+    cfg: GenerationConfig,
+    *,
+    exclude: Iterable[str] = (),
+    exclude_widgets: Iterable[str] = (),
+) -> str:
     """Deterministic JSON over the sampling-relevant fields only."""
     skip = set(exclude)
+    skipped_widgets = {TEMPLATE_STATE_KEY, *exclude_widgets}
     payload = {
         field: _jsonable(
             {
                 key: value
                 for key, value in cfg.widgets.items()
-                if key != "attn" or value not in {"sol", "off"}
+                if key not in skipped_widgets
+                and (key != "attn" or value not in {"sol", "off"})
             }
             if field == "widgets"
             else getattr(cfg, field)
