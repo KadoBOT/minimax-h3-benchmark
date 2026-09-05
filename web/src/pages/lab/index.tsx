@@ -6,8 +6,9 @@
  */
 
 import { useEffect, useMemo, useState } from "react"
-import { AlertTriangle, CheckCircle2, Play, Save, Trash2 } from "lucide-react"
+import { AlertTriangle, CheckCircle2, Play, RotateCcw, Save, Trash2 } from "lucide-react"
 import { Link } from "react-router"
+import { toast } from "sonner"
 
 import { useCatalog, useDeletePreset, useDryRun, useEnqueue, useMeta, usePresets, useSavePreset } from "@/api/hooks"
 import type { GenerationConfig } from "@/api/schema"
@@ -105,6 +106,16 @@ export function LabPage() {
     diffusion_model: draft.diffusion_model || model || "",
   }
 
+  const handleResetDraft = () => {
+    try {
+      window.localStorage.removeItem(DRAFT_KEY)
+    } catch {
+      // ignore
+    }
+    setDraftOverrides({})
+    toast.success("Draft reset to defaults")
+  }
+
   return (
     <>
       <PageHeader
@@ -112,6 +123,15 @@ export function LabPage() {
         title="Set up a run"
         lede="One config, or a matrix of them. Check it first if you are unsure — a dry run builds the graph without spending a minute of GPU time."
       >
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleResetDraft}
+          title="Reset draft to system and catalog defaults"
+        >
+          <RotateCcw data-icon="inline-start" className="size-3.5" />
+          Reset draft
+        </Button>
         <Button
           variant="outline"
           size="sm"
