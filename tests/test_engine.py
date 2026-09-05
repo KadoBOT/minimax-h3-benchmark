@@ -1042,3 +1042,13 @@ def test_patching_a_run_sets_flags_notes_and_tags(lab, base_config):
     assert patched.run.label == "hero"
     assert patched.run.tags == ("night",)
     assert lab.tags() == ["night"]
+
+
+def test_workflow_cache_falls_back_to_bundled_repo_workflow(tmp_path: Path):
+    from h3lab.engine.runner import WorkflowCache
+
+    nonexistent = tmp_path / "nowhere"
+    settings = Settings(workflow_dir=nonexistent)
+    cache = WorkflowCache(settings)
+    loaded = cache.get("t2v")
+    assert loaded["nodes"]

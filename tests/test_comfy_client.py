@@ -799,3 +799,17 @@ def test_with_nothing_to_read_the_picker_still_names_the_shipped_lora(tmp_path: 
     assert catalog.turbo_loras_source == "fallback"
     assert catalog.turbo_loras == [DEFAULT_TURBO_LORA]
     assert catalog.default_turbo_lora == DEFAULT_TURBO_LORA
+
+
+def test_comfy_client_verify_ssl_defaults_to_false():
+    import ssl
+
+    client = ComfyClient("https://example.test:8443")
+    assert client.verify_ssl is False
+    assert client._http._transport._pool._ssl_context.verify_mode == ssl.CERT_NONE
+    client.close()
+
+    verified_client = ComfyClient("https://example.test:8443", verify_ssl=True)
+    assert verified_client.verify_ssl is True
+    assert verified_client._http._transport._pool._ssl_context.verify_mode == ssl.CERT_REQUIRED
+    verified_client.close()

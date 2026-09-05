@@ -14,7 +14,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Sequence, TextIO
 
-from h3lab.settings import Settings
+from h3lab.settings import REPO_ROOT, Settings, UNIFIED_WORKFLOW_NAME
 
 EXIT_OK = 0
 EXIT_PROBLEM = 1
@@ -119,9 +119,13 @@ def _checks(settings: Settings) -> Report:
     for mode in GEN_MODES:
         path = settings.workflow_path(mode)
         if not path.is_file():
-            record(f"workflow {mode}", False, f"missing at {path}")
-            record(f"studio {mode}", False, f"missing at {path}")
-            continue
+            fallback = REPO_ROOT / UNIFIED_WORKFLOW_NAME
+            if fallback.is_file():
+                path = fallback
+            else:
+                record(f"workflow {mode}", False, f"missing at {path}")
+                record(f"studio {mode}", False, f"missing at {path}")
+                continue
         try:
             template = load_workflow(path)
             prompt, _graph = executable(

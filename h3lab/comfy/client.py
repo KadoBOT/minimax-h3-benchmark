@@ -130,18 +130,21 @@ class ComfyClient:
         request_timeout_s: float = 60.0,
         connect_timeout_s: float = 3.0,
         client_id: str | None = None,
+        verify_ssl: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.run_timeout_s = run_timeout_s
         self.request_timeout_s = request_timeout_s
         self.connect_timeout_s = connect_timeout_s
         self.client_id = client_id or f"h3lab-{int(time.time() * 1000):x}"
+        self.verify_ssl = verify_ssl
         # Connecting and reading get separate budgets. A model that takes two minutes to
         # load still needs a long read, but a ComfyUI that is simply not there should be
         # reported in seconds rather than blocking the whole page.
         self._http = httpx.Client(
             base_url=self.base_url,
             timeout=httpx.Timeout(request_timeout_s, connect=connect_timeout_s),
+            verify=self.verify_ssl,
         )
         self._active_prompt: str | None = None
 
@@ -597,7 +600,16 @@ class _ProgressListener:
 
         async def listen() -> None:
             try:
-                async with websockets.connect(self._url, max_size=8 << 20) as socket:
+                ssl_context = None
+                if self._url.startswith("wss://"):
+                    import ssl
+
+                    ssl_context = ssl.create_default_context()
+                    ssl_context.check_hostname = False
+                    ssl_context.verify_mode = ssl.CERT_NONE
+                async with websockets.connect(
+                    self._url, max_size=8 << 20, ssl=ssl_context
+                ) as socket:
                     while not self._stop.is_set():
                         try:
                             raw = await asyncio.wait_for(socket.recv(), timeout=0.5)

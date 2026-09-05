@@ -25,7 +25,7 @@ from h3lab.domain.config import GenerationConfig, spectrum_cache_compatible
 from h3lab.domain.run import Artifact, Run, RunMetrics
 from h3lab.engine import artifacts
 from h3lab.engine.events import EventBus
-from h3lab.settings import Settings
+from h3lab.settings import REPO_ROOT, Settings, UNIFIED_WORKFLOW_NAME
 from h3lab.storage.runs import RunNotFound, RunRepository
 
 IDLE_SLEEP_S = 0.4
@@ -77,7 +77,11 @@ class WorkflowCache:
     def get(self, mode: str) -> dict[str, Any]:
         path = self._settings.workflow_path(mode)
         if not path.is_file():
-            raise WorkflowError(f"no workflow template for mode {mode!r} at {path}")
+            fallback = REPO_ROOT / UNIFIED_WORKFLOW_NAME
+            if fallback.is_file():
+                path = fallback
+            else:
+                raise WorkflowError(f"no workflow template for mode {mode!r} at {path}")
         try:
             stamp = self._stamp(path)
         except OSError:
@@ -114,7 +118,12 @@ class WorkflowCache:
     @property
     def path(self) -> Path:
         """The template currently used for every mode (unified) or t2v."""
-        return self._settings.workflow_path("t2v")
+        path = self._settings.workflow_path("t2v")
+        if not path.is_file():
+            fallback = REPO_ROOT / UNIFIED_WORKFLOW_NAME
+            if fallback.is_file():
+                return fallback
+        return path
 
 
 def preflight(

@@ -8,6 +8,8 @@ Every refusal here becomes a `Problem`: a short `error` to show, a `detail` to e
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -20,6 +22,8 @@ from h3lab.comfy.studio import StudioContractError
 from h3lab.settings import Settings
 from h3lab.storage.library import PresetNameTaken
 from h3lab.storage.runs import RunNotFound
+
+logger = logging.getLogger("h3lab.api")
 
 
 # Declared on every router so the schema — and the front end's generated types — carry the
@@ -86,10 +90,12 @@ def install(app: FastAPI, settings: Settings) -> None:
 
     @app.exception_handler(WorkflowError)
     async def _workflow_broken(_request: Request, exc: WorkflowError) -> JSONResponse:
+        logger.error("Workflow error on %s: %s", _request.url.path, exc)
         return problem(422, "workflow", "the workflow cannot run this config", str(exc))
 
     @app.exception_handler(StudioContractError)
     async def _studio_contract(_request: Request, exc: StudioContractError) -> JSONResponse:
+        logger.error("Studio contract error on %s: %s", _request.url.path, exc)
         return problem(422, "workflow", "the Studio integration is unavailable", str(exc))
 
     @app.exception_handler(ComfyUnreachable)
