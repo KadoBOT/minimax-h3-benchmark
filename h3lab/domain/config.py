@@ -266,6 +266,11 @@ BASELINE_REF_IMAGES: tuple[str, ...] = (
     "cinderrail_establishing.jpeg",
     "hearth_bol_hero_21x9.png",
 )
+BASELINE_GUIDES: tuple[dict[str, Any], ...] = (
+    {"time": 0.0, "image": "orrery_guide_shot_1.jpeg"},
+    {"time": 1.8, "image": "orrery_guide_shot_2.jpeg"},
+    {"time": 3.4, "image": "orrery_guide_shot_3.jpeg"},
+)
 
 
 def basename(value: str) -> str:

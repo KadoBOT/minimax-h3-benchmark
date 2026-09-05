@@ -7,6 +7,7 @@ guesses via the `source` fields.
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -18,6 +19,7 @@ from pydantic import BaseModel, ConfigDict
 from h3lab.comfy.client import ComfyClient, ComfyError
 from h3lab.domain.config import (
     BASELINE_FIRST_FRAME,
+    BASELINE_GUIDES,
     BASELINE_PROMPT,
     BASELINE_REF_IMAGES,
     DEFAULT_ASPECT,
@@ -439,6 +441,9 @@ def build_catalog(settings: Settings, client: ComfyClient | None = None) -> Cata
         "cache_preset": "moderate",
         "sol_attn": True,
         "sol_preset": "moderate",
+        "widgets": {
+            "guides": json.dumps(list(BASELINE_GUIDES), separators=(",", ":")),
+        },
     }
 
     if live is None or not live.usable:
