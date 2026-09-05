@@ -18,6 +18,7 @@ def test_config_projects_complete_component_inputs(base_config):
     assert inputs["upscale_rtx"] is False
     assert inputs["cache"] is True
     assert inputs["sol_attn"] is True
+    assert inputs["turbo_lora_strength"] == base_config.turbo_lora_strength
     assert "attn" not in inputs
 
 
@@ -30,6 +31,7 @@ def test_complete_inputs_become_a_minimal_config_patch(base_config):
             "sampler_name": "heun",
             "interpolation": "film",
             "upscale_rtx": True,
+            "turbo_lora_strength": 0.6,
         }
     )
     patch = studio_patch(base_config, inputs)
@@ -39,6 +41,7 @@ def test_complete_inputs_become_a_minimal_config_patch(base_config):
         "sampler": "heun",
         "interp": "film",
         "upscaler": True,
+        "turbo_lora_strength": 0.6,
     }
 
 

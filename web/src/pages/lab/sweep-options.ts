@@ -125,6 +125,8 @@ export function sweepable(
     },
     { field: "steps", values: [4, 8, 12, 16, 20, 28, 36] },
     { field: "mp", values: [0.25, 0.5, 0.75, 1, 1.5] },
+    { field: "duration_s", values: [3, 5, 8, 10] },
+    { field: "shift_video", values: [3, 6, 9] },
     { field: "shift_audio", values: [1, 3, 6, 9] },
     { field: "derope", values: [true, false] },
     { field: "sla", values: [true, false] },

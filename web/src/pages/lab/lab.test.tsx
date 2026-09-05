@@ -503,4 +503,55 @@ describe("the lab", () => {
       expect(saved.diffusion_model).toBe(installed)
     })
   })
+
+  it("allows entering arbitrary custom values for numeric sweep axes like turbo strength", async () => {
+    const { calls } = fakeApi({
+      ...BASELINE_ROUTES,
+      "POST /api/sweeps/preview": {
+        count: 2,
+        combinations: 2,
+        repeats: 1,
+        new_count: 2,
+        duplicate_count: 0,
+        items: [],
+      },
+    })
+    renderApp(<LabPage />)
+
+    await userEvent.click(await screen.findByRole("combobox", { name: "Add a sweep axis" }))
+    await userEvent.click(await screen.findByRole("option", { name: /turbo strength/i }))
+
+    const input = screen.getByRole("textbox", { name: /custom value for turbo strength/i })
+    await userEvent.type(input, "0.6")
+    await userEvent.click(screen.getByRole("button", { name: /^add$/i }))
+
+    const pill = await screen.findByRole("button", { name: "0.6" })
+    expect(pill).toBeInTheDocument()
+    expect(pill).toHaveAttribute("aria-pressed", "true")
+
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }))
+
+    await waitFor(() => {
+      const request = calls.find(
+        (call) => call.method === "POST" && call.path === "/api/sweeps/preview"
+      )
+      expect(request?.body).toMatchObject({
+        axes: [
+          {
+            field: "turbo_lora_strength",
+            values: expect.arrayContaining([0.6]),
+          },
+        ],
+      })
+    })
+
+    // Can toggle it off
+    await userEvent.click(pill)
+    expect(pill).toHaveAttribute("aria-pressed", "false")
+
+    // Can remove the custom value completely
+    await userEvent.click(screen.getByRole("button", { name: "Remove custom value 0.6" }))
+    expect(screen.queryByRole("button", { name: "0.6" })).not.toBeInTheDocument()
+  })
 })
+

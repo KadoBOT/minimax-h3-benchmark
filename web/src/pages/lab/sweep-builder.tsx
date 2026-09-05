@@ -7,13 +7,14 @@
  */
 
 import { useMemo, useState } from "react"
-import { Layers, X } from "lucide-react"
+import { Layers, Plus, X } from "lucide-react"
 
 import { useRunSweep, useStudioSession, useSweepPreview } from "@/api/hooks"
 import type { GenerationConfig, Meta, SweepRequest } from "@/api/schema"
 import { Choice } from "@/components/choice"
 import { Section, Stat } from "@/components/page"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -26,6 +27,7 @@ import {
   sweepable,
   templateIdFromState,
   type SweepCatalog,
+  type Sweepable,
 } from "./sweep-options"
 import { TemplateSweepPicker } from "./template-sweep-picker"
 
@@ -36,10 +38,58 @@ const SWEEP_LABELS: Record<string, string> = {
   cache_enabled: "Cache",
   er_sde: "ER-SDE",
   template: "Template",
+  duration_s: "Duration",
+  shift_video: "Video shift",
+  shift_audio: "Audio shift",
 }
 
 function sweepLabel(meta: Meta | undefined, field: string): string {
   return SWEEP_LABELS[field] ?? fieldLabel(meta, field)
+}
+
+const NUMERIC_BOUNDS: Record<
+  string,
+  { min: number; max: number; integer?: boolean }
+> = {
+  turbo_lora_strength: { min: 0.0, max: 3.0 },
+  steps: { min: 1, max: 200, integer: true },
+  mp: { min: 0.05, max: 8.0 },
+  duration_s: { min: 0.5, max: 60.0 },
+  shift_audio: { min: 0, max: 100, integer: true },
+  shift_video: { min: 0, max: 100, integer: true },
+  sla_sparsity: { min: 0.0, max: 1.0 },
+  sla_dense_last_steps: { min: 0, max: 50, integer: true },
+  er_sde_max_stage: { min: 1, max: 10, integer: true },
+  er_sde_eta: { min: 0, max: 10 },
+  er_sde_s_noise: { min: 0, max: 10 },
+}
+
+function isNumericAxis(meta: Meta | undefined, field: string, found?: Sweepable): boolean {
+  const def = meta?.axes?.find((axis) => axis.field === field)
+  if (def?.kind === "numeric") return true
+  if (def?.kind === "boolean" || def?.kind === "categorical") return false
+  if (!found || found.values.length === 0) return false
+  return found.values.every((value) => typeof value === "number")
+}
+
+function examplePlaceholder(field: string): string {
+  switch (field) {
+    case "turbo_lora_strength":
+      return "Custom (e.g. 0.6)"
+    case "steps":
+      return "Custom (e.g. 10, 14)"
+    case "mp":
+      return "Custom (e.g. 0.75)"
+    case "duration_s":
+      return "Custom (e.g. 6.5)"
+    case "shift_audio":
+    case "shift_video":
+      return "Custom (e.g. 4)"
+    case "sla_sparsity":
+      return "Custom (e.g. 0.88)"
+    default:
+      return "Custom (e.g. 0.6)"
+  }
 }
 
 type Picked = { field: string; values: (string | number | boolean)[] }
@@ -60,6 +110,9 @@ export function SweepBuilder({
   const [repeats, setRepeats] = useState(1)
   const [seedStrategy, setSeedStrategy] = useState<SweepRequest["seed_strategy"]>("fixed")
   const [skipDuplicates, setSkipDuplicates] = useState(true)
+  const [customOptions, setCustomOptions] = useState<Record<string, (string | number)[]>>({})
+  const [customInputs, setCustomInputs] = useState<Record<string, string>>({})
+  const [inputErrors, setInputErrors] = useState<Record<string, string>>({})
 
   const preview = useSweepPreview()
   const start = useRunSweep()
@@ -122,9 +175,107 @@ export function SweepBuilder({
     const current =
       field === "attn"
         ? ((base.widgets?.attn as string | undefined) ?? (base.sol_attn ? "sol" : "off"))
-        : (base[field as keyof GenerationConfig] as string | number | boolean)
+        : ((base[field as keyof GenerationConfig] ?? base.widgets?.[field]) as
+            | string
+            | number
+            | boolean
+            | undefined)
+
+    if (
+      current !== undefined &&
+      current !== null &&
+      current !== "" &&
+      !found.values.includes(current)
+    ) {
+      setCustomOptions((prev) => ({
+        ...prev,
+        [field]: Array.from(new Set([...(prev[field] ?? []), current as string | number])),
+      }))
+    }
+
     const others = found.values.filter((value) => value !== current)
-    setAxes([...axes, { field, values: [current, others[0]].filter((v) => v !== undefined) }])
+    setAxes([
+      ...axes,
+      {
+        field,
+        values: [current, others[0]].filter(
+          (v): v is string | number | boolean => v !== undefined
+        ),
+      },
+    ])
+  }
+
+  const addCustomValue = (field: string) => {
+    const raw = customInputs[field]?.trim()
+    if (!raw) return
+    const found = available.find((item) => item.field === field)
+    const isNumeric = isNumericAxis(meta, field, found)
+
+    if (isNumeric) {
+      const tokens = raw.split(/[, ]+/).filter(Boolean)
+      const parsed: number[] = []
+      const bounds = NUMERIC_BOUNDS[field]
+
+      for (const token of tokens) {
+        const num = Number(token)
+        if (!Number.isFinite(num)) {
+          setInputErrors((prev) => ({ ...prev, [field]: `"${token}" is not a number` }))
+          return
+        }
+        if (bounds) {
+          if (num < bounds.min || num > bounds.max) {
+            setInputErrors((prev) => ({
+              ...prev,
+              [field]: `Must be between ${bounds.min} and ${bounds.max}`,
+            }))
+            return
+          }
+        }
+        const val = bounds?.integer ? Math.round(num) : Math.round(num * 10000) / 10000
+        parsed.push(val)
+      }
+
+      if (parsed.length === 0) return
+
+      const nonDefaultValues = parsed.filter((val) => !found?.values.includes(val))
+      if (nonDefaultValues.length > 0) {
+        setCustomOptions((prev) => ({
+          ...prev,
+          [field]: Array.from(new Set([...(prev[field] ?? []), ...nonDefaultValues])),
+        }))
+      }
+
+      setAxes((prevAxes) =>
+        prevAxes.map((item) =>
+          item.field === field
+            ? {
+                ...item,
+                values: Array.from(new Set([...item.values, ...parsed])),
+              }
+            : item
+        )
+      )
+
+      setCustomInputs((prev) => ({ ...prev, [field]: "" }))
+      setInputErrors((prev) => ({ ...prev, [field]: "" }))
+    }
+  }
+
+  const removeCustomValue = (field: string, value: string | number | boolean) => {
+    setCustomOptions((prev) => ({
+      ...prev,
+      [field]: (prev[field] ?? []).filter((v) => v !== value),
+    }))
+    setAxes((prevAxes) =>
+      prevAxes.map((item) =>
+        item.field === field
+          ? {
+              ...item,
+              values: item.values.filter((v) => v !== value),
+            }
+          : item
+      )
+    )
   }
 
   return (
@@ -151,6 +302,17 @@ export function SweepBuilder({
         <div className="space-y-3">
           {axes.map((axis) => {
             const found = available.find((item) => item.field === axis.field)
+            const isNumeric = isNumericAxis(meta, axis.field, found)
+            const defaults = found?.values ?? []
+            const custom = customOptions[axis.field] ?? []
+            const fromAxis = axis.values.filter(
+              (v) => !defaults.includes(v) && !custom.includes(v as string | number)
+            )
+            const allOptions = Array.from(new Set([...defaults, ...custom, ...fromAxis]))
+            if (isNumeric) {
+              allOptions.sort((a, b) => Number(a) - Number(b))
+            }
+
             return (
               <div key={axis.field}>
                 <div className="mb-1.5 flex items-center justify-between">
@@ -179,37 +341,114 @@ export function SweepBuilder({
                     }
                   />
                 ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {(found?.values ?? []).map((value) => {
-                      const on = axis.values.includes(value)
-                      return (
-                        <button
-                          key={String(value)}
-                          onClick={() =>
-                            setAxes(
-                              axes.map((item) =>
-                                item.field === axis.field
-                                  ? {
-                                      ...item,
-                                      values: on
-                                        ? item.values.filter((v) => v !== value)
-                                        : [...item.values, value],
-                                    }
-                                  : item
-                              )
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap gap-1.5">
+                      {allOptions.map((value) => {
+                        const on = axis.values.includes(value)
+                        const isCustom = !defaults.includes(value)
+                        const toggle = () =>
+                          setAxes(
+                            axes.map((item) =>
+                              item.field === axis.field
+                                ? {
+                                    ...item,
+                                    values: on
+                                      ? item.values.filter((v) => v !== value)
+                                      : [...item.values, value],
+                                  }
+                                : item
                             )
-                          }
-                          aria-pressed={on}
-                          className={
-                            on
-                              ? "border-signal/60 bg-signal/15 text-signal rounded-sm border px-2 py-1 font-mono text-xs"
-                              : "border-rule text-muted-foreground hover:border-rule/80 hover:text-bone rounded-sm border px-2 py-1 font-mono text-xs"
-                          }
-                        >
-                          {found?.render ? found.render(value) : display(value)}
-                        </button>
-                      )
-                    })}
+                          )
+
+                        if (!isCustom) {
+                          return (
+                            <button
+                              key={String(value)}
+                              type="button"
+                              onClick={toggle}
+                              aria-pressed={on}
+                              className={
+                                on
+                                  ? "border-signal/60 bg-signal/15 text-signal rounded-sm border px-2 py-1 font-mono text-xs cursor-pointer"
+                                  : "border-rule text-muted-foreground hover:border-rule/80 hover:text-bone rounded-sm border px-2 py-1 font-mono text-xs cursor-pointer"
+                              }
+                            >
+                              {found?.render ? found.render(value) : display(value)}
+                            </button>
+                          )
+                        }
+
+                        return (
+                          <div
+                            key={String(value)}
+                            className={
+                              on
+                                ? "border-signal/60 bg-signal/15 text-signal inline-flex items-center rounded-sm border font-mono text-xs"
+                                : "border-rule text-muted-foreground hover:border-rule/80 hover:text-bone inline-flex items-center rounded-sm border font-mono text-xs"
+                            }
+                          >
+                            <button
+                              type="button"
+                              onClick={toggle}
+                              aria-pressed={on}
+                              className="px-2 py-1 cursor-pointer pr-1"
+                            >
+                              {found?.render ? found.render(value) : display(value)}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                removeCustomValue(axis.field, value)
+                              }}
+                              aria-label={`Remove custom value ${value}`}
+                              className="pr-1.5 pl-0.5 py-1 text-muted-foreground hover:text-signal cursor-pointer transition-colors"
+                            >
+                              <X className="size-2.5" />
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {isNumeric ? (
+                      <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                        <div className="flex items-center gap-1.5">
+                          <Input
+                            type="text"
+                            placeholder={examplePlaceholder(axis.field)}
+                            value={customInputs[axis.field] ?? ""}
+                            onChange={(e) => {
+                              setCustomInputs({ ...customInputs, [axis.field]: e.target.value })
+                              if (inputErrors[axis.field]) {
+                                setInputErrors({ ...inputErrors, [axis.field]: "" })
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault()
+                                addCustomValue(axis.field)
+                              }
+                            }}
+                            className="h-7 w-36 sm:w-44 font-mono text-xs"
+                            aria-label={`Custom value for ${sweepLabel(meta, axis.field)}`}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="xs"
+                            onClick={() => addCustomValue(axis.field)}
+                            disabled={!customInputs[axis.field]?.trim()}
+                            className="h-7 px-2 text-xs cursor-pointer"
+                          >
+                            <Plus className="size-3 mr-0.5" />
+                            Add
+                          </Button>
+                        </div>
+                        {inputErrors[axis.field] ? (
+                          <span className="text-signal text-xs">{inputErrors[axis.field]}</span>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 )}
                 {NEEDS_TURBO.has(axis.field) && !base.turbo ? (

@@ -95,4 +95,10 @@ describe("Studio sweep choices", () => {
     }
     expect(TEMPLATE_CONFLICT_FIELDS.has("mp")).toBe(false)
   })
+
+  it("offers duration_s and shift_video as sweepable axes", () => {
+    const axes = sweepable(META, CATALOG, {})
+    expect(axes.find((axis) => axis.field === "duration_s")?.values).toEqual([3, 5, 8, 10])
+    expect(axes.find((axis) => axis.field === "shift_video")?.values).toEqual([3, 6, 9])
+  })
 })
