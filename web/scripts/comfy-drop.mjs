@@ -17,7 +17,7 @@ import { basename } from "node:path"
 import { chromium } from "playwright"
 
 const file = process.argv[2]
-const base = process.argv[3] ?? "http://127.0.0.1:8188"
+const base = process.argv[3] ?? "https://olares.hake-skink.ts.net:8443"
 if (!file) {
   console.error("usage: node scripts/comfy-drop.mjs <png-or-json> [comfy-url]")
   process.exit(2)

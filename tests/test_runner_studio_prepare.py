@@ -5,20 +5,16 @@ import json
 import re
 import time
 
-import pytest
-
 from h3lab.comfy.client import ComfyError
-from h3lab.comfy.graph import load_workflow
+from h3lab.comfy.graph import apply_config, load_workflow
 from h3lab.comfy.schema import static_schemas
 from h3lab.comfy.studio import StudioContractError, prepare_prompt
-from h3lab.comfy.workflow import executable
 from h3lab.domain.config import GenerationConfig
 from h3lab.engine.events import EventBus
 from h3lab.engine.runner import Runner
 from h3lab.storage import open_store
 from h3lab.storage.runs import RunRepository
 from tests.conftest import unified_workflow_path
-
 
 TEST_MODEL = "minimax-h3/test-model.safetensors"
 
@@ -103,7 +99,7 @@ def test_prepare_helper_returns_the_exact_contract_workflow():
     assert prepared.inputs["prepared"] is True
 
 
-def test_source_is_the_generic_prompt_and_only_studio_inputs_are_requested():
+def test_source_is_configured_before_the_studio_contract_is_requested():
     client = RecordingPrepare()
     config = GenerationConfig(
         mode="t2v",
@@ -124,9 +120,10 @@ def test_source_is_the_generic_prompt_and_only_studio_inputs_are_requested():
         schemas=static_schemas(),
     )
     source, inputs = client.calls[0]
-    expected, _graph = executable(
+    expected = apply_config(
         workflow,
-        widget_names=static_schemas().widget_names,
+        config,
+        schemas=static_schemas(),
     )
     assert source == expected
     assert inputs["turbo_lora"] == "custom_8step.safetensors"
@@ -137,14 +134,16 @@ def test_source_is_the_generic_prompt_and_only_studio_inputs_are_requested():
 
 def test_prepare_preserves_every_non_studio_node(stub):
     workflow = load_workflow(unified_workflow_path())
-    source, _graph = executable(
+    config = GenerationConfig(mode="t2v", prompt="opaque", widgets={"attn": "sol"})
+    source = apply_config(
         workflow,
-        widget_names=static_schemas().widget_names,
+        config,
+        schemas=static_schemas(),
     )
     prepared = prepare_prompt(
         stub,
         workflow,
-        GenerationConfig(mode="t2v", prompt="opaque", widgets={"attn": "sol"}),
+        config,
         schemas=static_schemas(),
     )
 
@@ -241,9 +240,11 @@ def test_runner_prepares_the_current_untagged_live_save(
         runner.start()
         assert _wait_for(lambda: runs.require(run.id).status == "succeeded")
         source, _inputs = stub.prepare_calls[0]
-        expected, _graph = executable(
+        expected = apply_config(
             live,
-            widget_names=static_schemas().widget_names,
+            run.config,
+            output_tag=run.id,
+            schemas=static_schemas(),
         )
         assert source == expected
     finally:

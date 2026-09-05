@@ -141,7 +141,10 @@ export function sweepable(
     { field: "er_sde_eta", values: [0, 0.5, 1] },
     { field: "er_sde_s_noise", values: [0.5, 1] },
   ]
-  if (templateCatalog?.version === 1 && templateCatalog.templates.length) {
+  if (
+    (templateCatalog?.version === 1 || templateCatalog?.version === 2) &&
+    templateCatalog.templates.length
+  ) {
     axes.unshift({
       field: "template",
       values: [

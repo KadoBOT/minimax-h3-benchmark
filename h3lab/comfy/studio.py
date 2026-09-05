@@ -7,13 +7,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from h3lab.comfy.graph import build
 from h3lab.comfy.schema import Schemas
 from h3lab.comfy.workflow import Graph, Prompt, executable
 from h3lab.domain.config import DEFAULT_ASPECT, GenerationConfig
 
 STUDIO_CONTRACT_VERSION = 1
 STUDIO_UI_SCHEMA_VERSION = 1
-STUDIO_TEMPLATE_CATALOG_VERSION = 1
+STUDIO_TEMPLATE_CATALOG_VERSION = 2
+STUDIO_SUPPORTED_TEMPLATE_CATALOG_VERSIONS = {1, 2}
 STUDIO_API_ROOT = "/minimax_h3_studio/v1"
 STUDIO_CLASS = "MiniMaxH3Studio"
 _MODE_TO_STUDIO = {"t2v": "T2V", "flf2v": "FLF2V", "r2v": "R2V"}
@@ -112,12 +114,12 @@ def validate_manifest(payload: Any) -> dict[str, Any]:
                 "contract_unavailable",
                 "Studio template catalog must be a JSON object",
             )
-        if template_catalog.get("version") != STUDIO_TEMPLATE_CATALOG_VERSION:
+        if template_catalog.get("version") not in STUDIO_SUPPORTED_TEMPLATE_CATALOG_VERSIONS:
             raise StudioContractError(
                 "contract_unavailable",
                 f"unsupported Studio template catalog version "
                 f"{template_catalog.get('version')!r}; "
-                f"expected {STUDIO_TEMPLATE_CATALOG_VERSION}",
+                f"expected one of {sorted(STUDIO_SUPPORTED_TEMPLATE_CATALOG_VERSIONS)}",
             )
         if (
             not isinstance(template_catalog.get("categories"), list)
@@ -335,8 +337,14 @@ def prepare_prompt(
     config: GenerationConfig,
     *,
     schemas: Schemas,
+    output_tag: str = "run",
 ) -> PreparedPrompt:
-    prompt, graph = executable(workflow, widget_names=schemas.widget_names)
+    prompt, graph, _roles = build(
+        workflow,
+        config,
+        output_tag=output_tag,
+        schemas=schemas,
+    )
     find_studio_node(prompt)
     result = client.prepare_studio(prompt, studio_inputs(config))
     return PreparedPrompt(

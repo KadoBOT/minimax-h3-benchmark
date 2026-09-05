@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+from collections.abc import AsyncIterator, Iterable, Iterator
 from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import AsyncIterator, Iterator
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,7 +37,8 @@ def create_app(lab: Lab | None = None, settings: Settings | None = None) -> Fast
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Opening the store and starting the worker both block; keep startup off the loop.
         started = await asyncio.to_thread(resolve_lab, app)
-        await asyncio.to_thread(started.reconcile)
+        if not started.runner.running:
+            await asyncio.to_thread(started.reconcile)
         try:
             yield
         finally:

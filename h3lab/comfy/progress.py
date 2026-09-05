@@ -7,8 +7,9 @@ because of that: a node's clock starts once and only from an early event, an imp
 fast reading is discarded rather than reported, and on a tie the slower reading wins
 because a longer wall clock is the harder thing to fake.
 
-The unit is the same one ComfyUI's own tqdm bar prints, so the numbers are comparable with
-what the console shows.
+The unit is one sigma step in the primary sampler's queued schedule. Wrappers may report
+additional internal work, such as Spectrum's capture and replay passes, but that must not
+change either the executed step count or the seconds-per-configured-step denominator.
 """
 
 from __future__ import annotations
@@ -18,8 +19,9 @@ import binascii
 import json
 import threading
 import time
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 # A multi-step node cannot finish this fast; below the floor it is burst delivery.
 MIN_SECONDS_PER_STEP = 0.05
@@ -119,6 +121,126 @@ def sampler_nodes(prompt: Mapping[str, Any]) -> frozenset[str]:
     )
 
 
+def primary_sampler_nodes(prompt: Mapping[str, Any]) -> frozenset[str]:
+    """Prefer the sampler fed by Studio over optional secondary sampling passes."""
+    samplers = sampler_nodes(prompt)
+    if len(samplers) <= 1:
+        return samplers
+    studios = {
+        str(node_id)
+        for node_id, node in prompt.items()
+        if str((node or {}).get("class_type") or "") == "MiniMaxH3Studio"
+    }
+    direct = {
+        node_id
+        for node_id in samplers
+        if (
+            isinstance((prompt[node_id].get("inputs") or {}).get("latent_image"), list)
+            and str(prompt[node_id]["inputs"]["latent_image"][0]) in studios
+        )
+    }
+    if direct:
+        return frozenset(direct)
+    schedulers = {
+        str(node_id)
+        for node_id, node in prompt.items()
+        if str((node or {}).get("class_type") or "") == "BasicScheduler"
+    }
+    scheduled = {
+        node_id
+        for node_id in samplers
+        if (
+            isinstance((prompt[node_id].get("inputs") or {}).get("sigmas"), list)
+            and str(prompt[node_id]["inputs"]["sigmas"][0]) in schedulers
+        )
+    }
+    return frozenset(scheduled or samplers)
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)) and int(value) == value and value > 0:
+        return int(value)
+    return None
+
+
+def _linked_node(
+    prompt: Mapping[str, Any], value: Any
+) -> tuple[Mapping[str, Any], int] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    node = prompt.get(str(value[0]))
+    slot = _positive_int(value[1]) if value[1] != 0 else 0
+    if not isinstance(node, Mapping) or slot is None:
+        return None
+    return node, slot
+
+
+def _step_value(prompt: Mapping[str, Any], value: Any) -> int | None:
+    direct = _positive_int(value)
+    if direct is not None:
+        return direct
+    linked = _linked_node(prompt, value)
+    if linked is None:
+        return None
+    node, _slot = linked
+    inputs = node.get("inputs") or {}
+    for name in ("steps", "value"):
+        found = _step_value(prompt, inputs.get(name))
+        if found is not None:
+            return found
+    return None
+
+
+def _schedule_steps(
+    prompt: Mapping[str, Any], value: Any, seen: set[str]
+) -> int | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    node_id = str(value[0])
+    if node_id in seen:
+        return None
+    node = prompt.get(node_id)
+    if not isinstance(node, Mapping):
+        return None
+    seen.add(node_id)
+    inputs = node.get("inputs") or {}
+    class_type = str(node.get("class_type") or "")
+    if class_type == "SplitSigmas":
+        total = _schedule_steps(prompt, inputs.get("sigmas"), seen)
+        split = _step_value(prompt, inputs.get("step"))
+        if split is None:
+            return None
+        if value[1] == 0:
+            return min(total, split) if total is not None else split
+        if value[1] == 1 and total is not None:
+            return max(total - split, 0) or None
+        return None
+    steps = _step_value(prompt, inputs.get("steps"))
+    if steps is not None:
+        return steps
+    return _schedule_steps(prompt, inputs.get("sigmas"), seen)
+
+
+def primary_schedule_steps(
+    prompt: Mapping[str, Any], samplers: Iterable[str] | None = None
+) -> int | None:
+    """Resolve the primary sampler's actual sigma count from the queued graph."""
+    found: set[int] = set()
+    for node_id in samplers if samplers is not None else primary_sampler_nodes(prompt):
+        node = prompt.get(str(node_id))
+        if not isinstance(node, Mapping):
+            continue
+        inputs = node.get("inputs") or {}
+        steps = _step_value(prompt, inputs.get("steps"))
+        if steps is None:
+            steps = _schedule_steps(prompt, inputs.get("sigmas"), set())
+        if steps is not None:
+            found.add(steps)
+    return next(iter(found)) if len(found) == 1 else None
+
+
 @dataclass(frozen=True, slots=True)
 class Preview:
     """The newest picture ComfyUI drew of the latent it is sampling."""
@@ -158,7 +280,7 @@ def decode_preview_message(data: Mapping[str, Any]) -> tuple[bytes, str] | None:
     if not isinstance(raw, str) or not raw:
         return None
     kind = str(data.get("mime") or "image/jpeg")
-    if not (kind.startswith("image/") or kind.startswith("video/")):
+    if not kind.startswith(("image/", "video/")):
         return None
     try:
         image = base64.b64decode(raw, validate=True)
@@ -182,9 +304,11 @@ class ProgressTracker:
         labels: Mapping[str, str] | None = None,
         *,
         preferred: Iterable[str] = (),
+        scheduled_steps: int | None = None,
     ) -> None:
         self.labels: dict[str, str] = dict(labels or {})
         self.preferred: frozenset[str] = frozenset(preferred)
+        self.scheduled_steps = scheduled_steps
         self._lock = threading.Lock()
         self.current_node: str | None = None
         self.step: int | None = None
@@ -194,6 +318,7 @@ class ProgressTracker:
         self._finalized: set[str] = set()
         self._best_rate: float | None = None
         self._best_steps: int = 0
+        self._best_preferred = False
         self._live_rate: float | None = None
         self._preview: Preview | None = None
 
@@ -202,12 +327,17 @@ class ProgressTracker:
         """A tracker that can name the nodes of the graph about to run."""
         if not prompt:
             return cls()
-        return cls(labels_for(prompt), preferred=sampler_nodes(prompt))
+        preferred = primary_sampler_nodes(prompt)
+        return cls(
+            labels_for(prompt),
+            preferred=preferred,
+            scheduled_steps=primary_schedule_steps(prompt, preferred),
+        )
 
     # --- plausibility ------------------------------------------------------
 
     @staticmethod
-    def is_plausible(duration_s: float, steps: int) -> bool:
+    def is_plausible(duration_s: float, steps: float) -> bool:
         if steps <= 0 or duration_s <= 0:
             return False
         if steps >= BURST_STEP_THRESHOLD:
@@ -219,13 +349,21 @@ class ProgressTracker:
 
     def _consider(self, node: str, ended_at: float) -> None:
         entered = self._entered_at.get(node)
-        steps = self._max_steps.get(node) or 0
-        if entered is None or steps <= 0:
+        reported_steps = self._max_steps.get(node) or 0
+        if entered is None or reported_steps <= 0:
             return
+        steps = (
+            self.scheduled_steps
+            if node in self.preferred and self.scheduled_steps is not None
+            else reported_steps
+        )
         duration = ended_at - entered
         if not self.is_plausible(duration, steps):
             return
         candidate = duration / steps
+        preferred = node in self.preferred
+        preferred_over_fallback = preferred and not self._best_preferred
+        same_priority = preferred == self._best_preferred
         more_steps = steps > self._best_steps
         # On an equal step count keep the slower reading: burst finalisation is what makes
         # a reading too fast, never too slow.
@@ -234,16 +372,17 @@ class ProgressTracker:
             and self._best_rate is not None
             and candidate > self._best_rate
         )
-        if self._best_rate is None or more_steps or same_steps_slower:
+        if (
+            self._best_rate is None
+            or preferred_over_fallback
+            or (same_priority and (more_steps or same_steps_slower))
+        ):
             self._best_rate = candidate
             self._best_steps = steps
-        elif node in self.preferred and steps >= self._best_steps:
-            self._best_rate = candidate
-            self._best_steps = steps
+            self._best_preferred = preferred
 
     def _finalize(self, node: str, ended_at: float) -> None:
         if node in self._finalized:
-            self._consider(node, ended_at)
             return
         self._consider(node, ended_at)
         entered = self._entered_at.get(node)
@@ -275,14 +414,26 @@ class ProgressTracker:
             if node not in self._entered_at and value <= 1:
                 self._entered_at[node] = now
             self.current_node = node
-            self.step = value
-            self.step_total = maximum
+            rate_step = float(value)
+            if node in self.preferred and self.scheduled_steps is not None:
+                rate_step = value * self.scheduled_steps / maximum
+                self.step = min(
+                    self.scheduled_steps,
+                    max(1, round(rate_step)) if value > 0 else 0,
+                )
+                self.step_total = self.scheduled_steps
+            else:
+                self.step = value
+                self.step_total = maximum
             self._max_steps[node] = max(self._max_steps.get(node, 0), maximum)
             entered = self._entered_at.get(node)
-            if entered is not None and value > 0 and now > entered:
+            if entered is not None and rate_step > 0 and now > entered:
                 elapsed = now - entered
-                if self.is_plausible(elapsed, max(value, 1)) or value < BURST_STEP_THRESHOLD:
-                    self._live_rate = elapsed / value
+                if (
+                    self.is_plausible(elapsed, max(rate_step, 1))
+                    or rate_step < BURST_STEP_THRESHOLD
+                ):
+                    self._live_rate = elapsed / rate_step
             # Deliberately not finalising on value == max: a burst reaches max with almost
             # no wall clock. Finalisation happens when execution leaves the node.
 
@@ -317,7 +468,11 @@ class ProgressTracker:
                 return
             node = str(raw)
             self.current_node = node
-            if node not in self._entered_at:
+            if node in self._finalized:
+                self._finalized.remove(node)
+                self._max_steps.pop(node, None)
+                self._entered_at[node] = now
+            elif node not in self._entered_at:
                 self._entered_at[node] = now
 
     # --- reading -----------------------------------------------------------
@@ -352,9 +507,10 @@ class ProgressTracker:
         now = time.perf_counter()
         with self._lock:
             if self.current_node is not None:
-                self._finalize(self.current_node, now)
+                self._consider(self.current_node, now)
             for node in list(self._entered_at):
-                self._consider(node, now)
+                if node != self.current_node and node not in self._finalized:
+                    self._consider(node, now)
             best = self._best_rate
             steps = self._best_steps
             live = self._live_rate

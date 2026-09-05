@@ -454,6 +454,7 @@ class Lab:
                 workflow,
                 config,
                 schemas=self.runner.schemas(),
+                output_tag="dry-run",
             ).prompt
         except Exception as exc:  # noqa: BLE001 - a broken template is a reportable answer
             return DryRun(ok=False, problems=[*problems, str(exc)], **identity)
@@ -480,6 +481,7 @@ class Lab:
             workflow,
             run.config,
             schemas=self.runner.schemas(),
+            output_tag=run.id,
         ).prompt
         return to_editor_workflow(workflow, prompt, provenance=run_provenance(run))
 

@@ -6,9 +6,9 @@ not want is switched off, and switching a node off means its consumers are recon
 whatever fed it — exactly what ComfyUI's own bypass does. Nothing here knows the order of the
 model chain, which is why re-ordering that chain in the editor cannot break it.
 
-What the lab does not own, it does not touch. A grade node the template left bypassed stays
-bypassed; an attention patch the template added stays in the chain. The lab only asserts the
-axes a benchmark varies.
+What the lab does not own, it does not touch. It asserts every setting represented by the
+generation config, including Studio's graph-level feature switches, and leaves unrelated
+template nodes in the state the workflow author chose.
 
 Two rules keep a prompt submittable, and both are enforced at the end rather than hoped for:
 no input may point at a node that is gone, and nothing may be in the prompt that the chosen
@@ -20,8 +20,9 @@ from __future__ import annotations
 import json
 import re
 from collections import deque
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from h3lab.comfy import nodes as N
 from h3lab.comfy import roles as R
@@ -35,12 +36,13 @@ from h3lab.domain.config import (
     MAX_REF_IMAGES,
     MAX_REF_VIDEOS,
     GenerationConfig,
+    config_attention,
     resolve_model_filename,
 )
 
 __all__ = [
-    "Prompt",
     "STUDIO_CLASS",
+    "Prompt",
     "WorkflowError",
     "apply_config",
     "build",
@@ -49,9 +51,9 @@ __all__ = [
     "load_workflow",
     "missing_links",
     "output_filename_prefix",
+    "referenced_files",
     "repair_studio_video_boundaries",
     "restore_studio_contract",
-    "referenced_files",
     "to_api_prompt",
 ]
 
@@ -62,6 +64,8 @@ DEFAULT_INTERP_FPS = 60
 # minimum and its default, and the only value the lab offers: the setting exists so a run can
 # be compared with and without interpolation, not so the factor can be swept.
 FILM_MULTIPLIER = 2
+# The unified workflow's GMFSS mode has one fixed 4x frame multiplier.
+GMFSS_MULTIPLIER = 4
 
 # Modes ComfyUI gives a node. The lab sets them to say what this run wants.
 ALWAYS = 0
@@ -418,6 +422,7 @@ class _Patch:
         if self.is_studio():
             self.wire_studio()
         self.wire_scalars()
+        self.wire_schedule()
         self.wire_mode()
         self.wire_model_chain()
         self.wire_video_path()
@@ -570,7 +575,28 @@ class _Patch:
         if self.config.interp == "rife":
             return self.value_of(R.INTERP_FPS, DEFAULT_INTERP_FPS)
         base = self.value_of(R.BASE_FPS, DEFAULT_BASE_FPS)
-        return base * FILM_MULTIPLIER if self.config.interp == "film" else base
+        if self.config.interp == "film":
+            return base * FILM_MULTIPLIER
+        if self.config.interp == "gmfss":
+            return base * GMFSS_MULTIPLIER
+        return base
+
+    def wire_schedule(self) -> None:
+        """The configured step count is the complete primary sampling schedule."""
+        sampler = self.need(R.SAMPLER)
+        current = sampler.inputs.get("sigmas")
+        seen: set[str] = set()
+        while is_link(current):
+            node_id = str(current[0])
+            if node_id in seen:
+                break
+            seen.add(node_id)
+            source = self.graph.get(node_id)
+            if source is None:
+                break
+            if source.class_type == "SplitSigmas":
+                source.mode = BYPASSED
+            current = source.inputs.get("sigmas")
 
     # -- media
 
@@ -795,7 +821,7 @@ class _Patch:
         loader = self.pick_model_loader()
         self.set_first(
             loader,
-            ("unet_name", "model_name", "ckpt_name", "clip_name"),
+            ("unet_name", "model_name", "ckpt_name", "clip_name", "base_model"),
             resolve_model_filename(config.diffusion_model),
         )
 
@@ -822,8 +848,13 @@ class _Patch:
         if not self.is_studio():
             self.enable(R.OPTIONAL_LORA, False)
 
-        sol = self.enable(R.SOL_ATTN, config.sol_attn)
-        if config.sol_attn:
+        attention = config_attention(config)
+        for node in _h3_tagged(self.graph, "attn/sol"):
+            node.mode = ALWAYS if attention == "sol" else BYPASSED
+        for node in _h3_tagged(self.graph, "attn/comfy-kitchen"):
+            node.mode = ALWAYS if attention == "comfy_kitchen" else BYPASSED
+        sol = self.enable(R.SOL_ATTN, attention == "sol")
+        if attention == "sol":
             self.set_known(sol, sol_widgets(config))
 
         wanted_cache = R.CACHE_ROLES.get(config.cache) if config.cache_active else None
@@ -849,7 +880,7 @@ class _Patch:
         loader = self.pick_model_loader()
         self.set_first(
             loader,
-            ("unet_name", "model_name", "ckpt_name", "clip_name"),
+            ("unet_name", "model_name", "ckpt_name", "clip_name", "base_model"),
             resolve_model_filename(config.diffusion_model),
         )
 
@@ -956,19 +987,38 @@ class _Patch:
 
         rife = self.enable(R.RIFE, config.interp == "rife")
         film = self.enable(R.FILM, config.interp == "film")
+        gmfss = self.enable(R.GMFSS, config.interp == "gmfss")
         self.enable(R.FILM_LOADER, config.interp == "film")
         if config.interp == "film" and film is not None:
             self.set_known(film, {"multiplier": FILM_MULTIPLIER})
 
-        chosen = {"rife": rife, "film": film}.get(config.interp)
+        chosen = {"rife": rife, "film": film, "gmfss": gmfss}.get(config.interp)
         if config.interp != "off" and chosen is None:
             raise WorkflowError(
                 f"this workflow has no {config.interp.upper()} node, so it cannot interpolate"
             )
 
+        grade_enabled = bool(config.widgets.get("post_grade", False))
+        grades = _h3_tagged(self.graph, "post-grade")
+        for node in grades:
+            node.mode = ALWAYS if grade_enabled else BYPASSED
+        if grade_enabled and not grades:
+            raise WorkflowError("this workflow has no post-grade node")
+
+        ltx_enabled = bool(config.widgets.get("upscale_ltx", False))
+        ltx_nodes = _h3_tagged(self.graph, "upscale/ltx/on")
+        for node in ltx_nodes:
+            node.mode = ALWAYS if ltx_enabled else BYPASSED
+        if ltx_enabled and not ltx_nodes:
+            raise WorkflowError("this workflow has no LTX upscaler")
+        if ltx_enabled:
+            self.wake_settings(ltx_nodes[0], depth=16)
+
         # The template keeps both interpolators parked beside the picture path with only one
         # of them wired in. Which one a run uses is a benchmark axis, so the lab places it.
         after = self.need(R.VAE_DECODE)
+        if ltx_enabled:
+            after = ltx_nodes[0]
         if chosen is not None:
             self.wake_settings(chosen, ignore=_IMAGE_INPUTS)
             self.put_on_image_path(chosen, after=after)
@@ -987,10 +1037,17 @@ class _Patch:
             # image link when flattened. The muxer still has to see the pictures.
             self.connect(self.need(R.VIDEO_OUT), "images", after)
 
+        # Some Studio workflows contain several cleanup points. The tag is the shared
+        # contract; role resolution intentionally picks only one node per role.
+        for node in _h3_tagged(self.graph, "clean-vram"):
+            node.mode = ALWAYS if config.clean_vram else BYPASSED
+
         # Video-only output. MiniMax audio latents frequently contain NaN or +Inf, which makes
         # the ffmpeg AAC mux fail after the picture track is already written — losing the whole
-        # file. A benchmark only needs the picture track.
-        self.enable(R.VAE_DECODE_AUDIO, False, cut=True)
+        # file. De-rope still needs pass one's decoded audio as its second-pass init.
+        derope = bool(config.widgets.get("derope", False))
+        self.enable(R.VAE_DECODE_AUDIO, derope, cut=not derope)
+        self.need(R.VIDEO_OUT).inputs.pop("audio", None)
 
     def reaches_output(self, node: Node) -> bool:
         video = self.node(R.VIDEO_OUT)

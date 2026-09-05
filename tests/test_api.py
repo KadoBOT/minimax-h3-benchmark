@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
-from typing import Any, AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -132,6 +132,30 @@ async def live_server(lab: Lab) -> AsyncIterator[str]:
     finally:
         server.should_exit = True
         thread.join(timeout=10.0)
+
+
+@pytest.mark.anyio
+async def test_startup_does_not_reconcile_after_the_worker_is_running(
+    lab_settings: Settings,
+):
+    class RunningLab:
+        settings = lab_settings
+        runner = type("Running", (), {"running": True})()
+        reconciliations = 0
+
+        def reconcile(self):
+            self.reconciliations += 1
+
+        def close(self):
+            pass
+
+    lab = RunningLab()
+    app = create_app(lab=lab, settings=lab_settings)  # type: ignore[arg-type]
+
+    async with app.router.lifespan_context(app):
+        pass
+
+    assert lab.reconciliations == 0
 
 
 @pytest.fixture
@@ -668,6 +692,39 @@ async def test_running_a_template_sweep_queues_each_selected_arm(
     ] == ["__current__", "essentials/balanced"]
 
 
+async def test_current_template_sweep_queues_a_normalized_spectrum_er_sde_config(
+    client: httpx.AsyncClient,
+    config,
+):
+    base = config.model_dump(mode="json")
+    base.update(
+        {
+            "cache": "spectrum",
+            "cache_enabled": True,
+            "widgets": {
+                **base["widgets"],
+                "er_sde": True,
+                "er_sde_solver": "ER-SDE",
+                "er_sde_eta": 1.0,
+                "er_sde_s_noise": 1.0,
+            },
+        }
+    )
+    response = await client.post(
+        f"{API}/sweeps",
+        json={
+            "base": base,
+            "axes": [{"field": "template", "values": ["__current__"]}],
+            "skip_duplicates": False,
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    queued = response.json()[0]["run"]["config"]
+    assert queued["cache"] == "none"
+    assert queued["cache_enabled"] is False
+
+
 @pytest.mark.parametrize(
     ("axes", "message"),
     [
@@ -875,7 +932,7 @@ async def test_the_arena_never_offers_runs_from_different_pools(
     client: httpx.AsyncClient, config, lab
 ):
     """A 1 MP clip beside a 0.5 MP one asks about resolution, whatever the question said."""
-    first, second = await arena_pair(client, lab, config, mp=1.0)
+    await arena_pair(client, lab, config, mp=1.0)
     response = await client.get(f"{API}/arena/next")
     assert response.status_code == 404
     body = response.json()
@@ -886,7 +943,7 @@ async def test_the_arena_never_offers_runs_from_different_pools(
 async def test_a_run_the_voter_skipped_is_not_offered_again(
     client: httpx.AsyncClient, config, lab
 ):
-    first, second = await arena_pair(client, lab, config, sampler="dpmpp_2m")
+    first, _second = await arena_pair(client, lab, config, sampler="dpmpp_2m")
     response = await client.get(f"{API}/arena/next", params={"exclude": first})
     assert response.status_code == 404
 
@@ -1286,25 +1343,27 @@ async def test_the_event_stream_replays_and_then_streams(live_server: str, lab: 
     lab.events.publish("lab.message", text="already happened")
 
     events: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(base_url=live_server, timeout=20.0) as reader:
-        async with reader.stream("GET", f"{API}/events", params={"after": 0}) as response:
-            assert response.status_code == 200
-            assert response.headers["content-type"].startswith("text/event-stream")
+    async with (
+        httpx.AsyncClient(base_url=live_server, timeout=20.0) as reader,
+        reader.stream("GET", f"{API}/events", params={"after": 0}) as response,
+    ):
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
 
-            async def publish_soon() -> None:
-                await asyncio.sleep(0.1)
-                lab.enqueue(GenerationConfig(mode="t2v", prompt="stream me"))
+        async def publish_soon() -> None:
+            await asyncio.sleep(0.1)
+            lab.enqueue(GenerationConfig(mode="t2v", prompt="stream me"))
 
-            publisher = asyncio.ensure_future(publish_soon())
-            try:
-                async with asyncio.timeout(20):
-                    async for line in response.aiter_lines():
-                        if line.startswith("data:"):
-                            events.append(json.loads(line[len("data:") :]))
-                            if any(item["kind"] == "run.created" for item in events):
-                                break
-            finally:
-                publisher.cancel()
+        publisher = asyncio.ensure_future(publish_soon())
+        try:
+            async with asyncio.timeout(20):
+                async for line in response.aiter_lines():
+                    if line.startswith("data:"):
+                        events.append(json.loads(line[len("data:") :]))
+                        if any(item["kind"] == "run.created" for item in events):
+                            break
+        finally:
+            publisher.cancel()
 
     assert events[0]["kind"] == "lab.message"
     assert events[0]["data"]["text"] == "already happened"

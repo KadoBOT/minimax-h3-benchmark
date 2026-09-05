@@ -34,6 +34,7 @@ columns, and UI labels all use the same terms.
 ## Requirements
 
 - Python 3.11+ (developed on 3.14)
+- [uv](https://docs.astral.sh/uv/) for Python environment and package management
 - Node 20+ (only to build the front end)
 - A running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) with the MiniMax H3
   models (`fl2va` for FLF2V/T2V, `ref2va` for R2V)
@@ -44,14 +45,14 @@ columns, and UI labels all use the same terms.
 ## Install
 
 ```bash
-pip install -r requirements.txt
+uv sync
 cd web && npm install && npm run build && cd ..
 ```
 
 ## Run
 
 ```bash
-python -m h3lab serve --open
+uv run h3lab serve --open
 ```
 
 Then open http://127.0.0.1:8787/.
@@ -59,7 +60,7 @@ Then open http://127.0.0.1:8787/.
 Before the first run, ask what is broken:
 
 ```bash
-python -m h3lab check
+uv run h3lab check
 ```
 
 It checks ComfyUI, the installed Studio contract, every workflow template, installed node
@@ -87,7 +88,7 @@ environment variable; flags win.
 
 | Setting | Env | Default |
 |---------|-----|---------|
-| ComfyUI URL | `H3LAB_COMFY_URL` | `http://127.0.0.1:8188` |
+| ComfyUI URL | `H3LAB_COMFY_URL` | `https://olares.hake-skink.ts.net:8443` |
 | Listen host / port | `H3LAB_HOST` / `H3LAB_PORT` | `127.0.0.1` / `8787` |
 | Data directory | `H3LAB_DATA_DIR` | `results/` |
 | Diffusion models | `H3LAB_MODELS_DIR` | `E:\AI\Models\diffusion_models` |
@@ -335,7 +336,7 @@ anything less says inconclusive and shows the record.
 ## Migrating from the old benchmark
 
 ```bash
-python -m h3lab import-legacy
+uv run h3lab import-legacy
 ```
 
 Reads `results/benchmark.db`, maps every run, rating, and video into the new schema, and
@@ -345,8 +346,8 @@ already imported are counted and skipped, not duplicated.
 ## Development
 
 ```bash
-pip install -r requirements-dev.txt
-pytest -q                       # 706 backend tests
+uv sync
+uv run pytest -q                # 706 backend tests
 
 cd web
 npm run dev                     # Vite on :5173, proxying /api to :8787
@@ -358,7 +359,7 @@ npm run build
 The front end's types are generated from the backend's OpenAPI schema:
 
 ```bash
-python scripts/gen_types.py     # writes web/src/api/schema.ts
+uv run python scripts/gen_types.py     # writes web/src/api/schema.ts
 ```
 
 `tests/test_contract.py` fails if you forget — it regenerates the schema in memory and
@@ -369,7 +370,7 @@ reach the browser as `undefined`.
 For an end-to-end check against a real browser:
 
 ```bash
-python scripts/smoke.py         # seeded temp DB + the live Studio contract, driven by Playwright
+uv run python scripts/smoke.py         # seeded temp DB + the live Studio contract, driven by Playwright
 ```
 
 It never submits a generation, but it does load the Studio v1 component and call its prepare
@@ -392,10 +393,10 @@ So if you touch `h3lab/comfy/`, or a custom node gets updated underneath you, sp
 minutes:
 
 ```bash
-python -u scripts/live_cache_check.py          # every cache family at every level
-python -u scripts/live_cache_check.py spectrum # just one family
-python -u scripts/verify_interp.py             # one clip per interpolation choice
-python -u scripts/verify_workflow.py           # one clip per template, an edited template, two LoRAs
+uv run python -u scripts/live_cache_check.py          # every cache family at every level
+uv run python -u scripts/live_cache_check.py spectrum # just one family
+uv run python -u scripts/verify_interp.py             # one clip per interpolation choice
+uv run python -u scripts/verify_workflow.py           # one clip per template, an edited template, two LoRAs
 ```
 
 `live_cache_check.py` queues a four-step clip per preset level and fails on any level the

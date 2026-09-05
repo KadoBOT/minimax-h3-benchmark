@@ -1,0 +1,60 @@
+{
+  "source_prompt_id": "bfe76759-15f3-4d71-9e2d-4e1e3d4d8330",
+  "artifact_sha256": "5229df7835a1cb098f384a264112422ad6669b1bd3defdd80fabc64499dfe304",
+  "prompt": [
+    null,
+    null,
+    {
+      "studio": {
+        "class_type": "MiniMaxH3Studio",
+        "inputs": {
+          "steps": 28
+        }
+      },
+      "schedule": {
+        "class_type": "H3InjectSchedule",
+        "inputs": {
+          "scheduler": "beta",
+          "total_steps": 6,
+          "inject": 0.7,
+          "preset": "custom"
+        }
+      },
+      "guider": {
+        "class_type": "BasicGuider",
+        "inputs": {
+          "conditioning": [
+            "studio",
+            14
+          ]
+        }
+      },
+      "sampler": {
+        "class_type": "SamplerCustomAdvanced",
+        "inputs": {
+          "guider": [
+            "guider",
+            0
+          ],
+          "sigmas": [
+            "schedule",
+            0
+          ]
+        }
+      },
+      "recover": {
+        "class_type": "H3ExactRecover",
+        "inputs": {}
+      },
+      "output": {
+        "class_type": "VHS_VideoCombine",
+        "inputs": {
+          "images": [
+            "recover",
+            0
+          ]
+        }
+      }
+    }
+  ]
+}

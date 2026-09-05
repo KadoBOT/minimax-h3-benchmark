@@ -26,6 +26,24 @@ INFO = {
         },
         "output": ["CONDITIONING", "LATENT"],
     },
+    "RTXVideoSuperResolution": {
+        "input": {
+            "required": {
+                "images": ["IMAGE"],
+                "resize_type": [
+                    "COMFY_DYNAMICCOMBO_V3",
+                    {
+                        "options": [
+                            {"key": "scale by multiplier", "inputs": {}},
+                            {"key": "target dimensions", "inputs": {}},
+                        ]
+                    },
+                ],
+                "quality": [["LOW", "MEDIUM", "HIGH", "ULTRA"]],
+            }
+        },
+        "output": ["IMAGE"],
+    },
 }
 
 
@@ -53,6 +71,13 @@ def test_a_combo_input_carries_its_options(schemas):
     assert schemas.combo("MiniMaxH3TurboLoRA", "lora_name") == (
         "turbo_a.safetensors",
         "turbo_b.safetensors",
+    )
+
+
+def test_a_dynamic_combo_uses_option_keys_as_its_values(schemas):
+    assert schemas.combo("RTXVideoSuperResolution", "resize_type") == (
+        "scale by multiplier",
+        "target dimensions",
     )
 
 

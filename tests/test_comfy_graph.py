@@ -329,6 +329,39 @@ def _two_loader_workflow() -> dict:
     return {"nodes": nodes, "links": links}
 
 
+def test_a_split_sigma_node_cannot_truncate_the_requested_schedule(base_config):
+    workflow = _two_loader_workflow()
+    sampler = next(node for node in workflow["nodes"] if node["id"] == 10)
+    sampler_input = next(item for item in sampler["inputs"] if item["name"] == "sigmas")
+    sampler_input["link"] = 11
+    workflow["nodes"].append(
+        {
+            "id": 9,
+            "type": "SplitSigmas",
+            "widgets_values": [4],
+            "inputs": [{"name": "sigmas", "type": "SIGMAS", "link": 10}],
+            "outputs": [
+                {"name": "high_sigmas", "type": "SIGMAS"},
+                {"name": "low_sigmas", "type": "SIGMAS"},
+            ],
+        }
+    )
+    workflow["links"] = [
+        link for link in workflow["links"] if not (link[1] == 6 and link[3] == 10)
+    ]
+    workflow["links"].extend(
+        [
+            [10, 6, 0, 9, 0, "SIGMAS"],
+            [11, 9, 0, 10, 1, "SIGMAS"],
+        ]
+    )
+
+    made = built(workflow, _plain(base_config, steps=28))
+
+    assert "SplitSigmas" not in made.classes()
+    assert made.source_of(R.SAMPLER, "sigmas") == made.id(R.SCHEDULER)
+
+
 def test_a_workflow_without_a_sampler_is_rejected_with_a_clear_message(base_config):
     workflow = {"nodes": [{"id": 1, "type": "UNETLoader", "widgets_values": ["a", "default"]}]}
     with pytest.raises(WorkflowError, match="sampler"):

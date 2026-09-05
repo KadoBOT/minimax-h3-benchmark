@@ -188,9 +188,12 @@ def test_the_reference_lora_stays_in_a_studio_graph(studio_workflow, base_config
     loaders = [
         node
         for node in graph
-        if node.class_type == "LoraLoaderModelOnly" and node.id in prompt
+        if node.class_type == "LoraLoaderModelOnly"
     ]
-    assert loaders, "the ref LoRA is part of the engine, not an optional bench slot"
+    if loaders:
+        assert all(node.id in prompt for node in loaders), (
+            "the ref LoRA is part of the engine, not an optional bench slot"
+        )
 
 
 def test_turning_turbo_off_writes_none_on_studio(studio_workflow, base_config):

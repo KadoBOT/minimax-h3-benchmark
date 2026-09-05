@@ -61,7 +61,7 @@ export type StudioTemplate = {
 }
 
 export type StudioTemplateCatalog = {
-  version: 1
+  version: 1 | 2
   managed_keys: string[]
   selector: {
     label: string

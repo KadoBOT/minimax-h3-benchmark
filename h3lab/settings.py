@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
+DEFAULT_COMFY_URL = "https://olares.hake-skink.ts.net:8443"
 DEFAULT_PORT = 8787
 DEFAULT_HOST = "0.0.0.0"
 if os.name == "nt":

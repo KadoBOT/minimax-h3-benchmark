@@ -62,6 +62,7 @@ VAE_DECODE_AUDIO = "vae_decode_audio"
 RIFE = "rife"
 FILM = "film"
 FILM_LOADER = "film_loader"
+GMFSS = "gmfss"
 UPSCALER = "upscaler"
 CLEAN_VRAM = "clean_vram"
 CLEAN_TEXT_ENCODER = "clean_text_encoder"
@@ -367,6 +368,7 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(FILM, ("FrameInterpolate",), tags=("MS_INTERP_FILM",), legacy=(167,)),
     Rule(FILM_LOADER, ("FrameInterpolationModelLoader",), legacy=(166,)),
+    Rule(GMFSS, ("GMFSS Fortuna VFI",), legacy=(423,)),
     Rule(
         BASE_FPS,
         ("PrimitiveFloat", "PrimitiveInt"),

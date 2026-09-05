@@ -13,8 +13,9 @@ snapshot in `nodes.py`, then nothing.
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from h3lab.comfy import nodes as N
 from h3lab.comfy.workflow import Prompt, declared_widget_names, is_link
@@ -89,7 +90,10 @@ def _combo_values(spec: Any) -> tuple[str, ...]:
     options = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
     values = options.get("options")
     if isinstance(values, list):
-        return tuple(str(value) for value in values)
+        return tuple(
+            str(value["key"] if isinstance(value, dict) and "key" in value else value)
+            for value in values
+        )
     return ()
 
 
@@ -115,9 +119,7 @@ def widget_spec(name: str, spec: Any) -> WidgetSpec | None:
     kind = spec[0]
     extra = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
     options = _combo_values(spec)
-    if isinstance(kind, list):
-        kind_name = "COMBO"
-    elif options:
+    if isinstance(kind, list) or options:
         kind_name = "COMBO"
     else:
         kind_name = str(kind)

@@ -11,6 +11,7 @@ from h3lab.domain.config import (
     CURRENT_TEMPLATE_ID,
     TEMPLATE_AXIS_FIELD,
     GenerationConfig,
+    spectrum_cache_compatible,
 )
 from h3lab.domain.sweeps import SweepSpec, TemplateResolver
 
@@ -89,6 +90,12 @@ def _requirement_failures(
             inputs.get(key) is None or inputs.get(key) == expected
         ):
             failures.append(str(requirement.get("message") or f"{key} is required"))
+        elif kind == "input_equals" and inputs.get(key) != expected:
+            failures.append(str(requirement.get("message") or f"{key} must be {expected}"))
+        elif kind == "input_in":
+            values = requirement.get("values")
+            if not isinstance(values, list) or inputs.get(key) not in values:
+                failures.append(str(requirement.get("message") or f"{key} must be one of {values}"))
         elif kind == "capability" and capabilities.get(key) != expected:
             failures.append(str(requirement.get("message") or f"{key} is unavailable"))
     return failures
@@ -111,7 +118,7 @@ def make_template_resolver(
     spec: SweepSpec,
 ) -> TemplateResolver:
     catalog = manifest.get("template_catalog")
-    if not isinstance(catalog, Mapping) or catalog.get("version") != 1:
+    if not isinstance(catalog, Mapping) or catalog.get("version") not in (1, 2):
         raise StudioContractError(
             "invalid_inputs",
             "template axis requires a supported Studio template catalog",
@@ -162,6 +169,12 @@ def make_template_resolver(
 
     def resolve(base: GenerationConfig, template_id: str) -> GenerationConfig:
         if template_id == CURRENT_TEMPLATE_ID:
+            if (
+                base.cache_active
+                and base.cache == "spectrum"
+                and not spectrum_cache_compatible(base.sampler, base.widgets)
+            ):
+                base = base.merged(cache="none", cache_enabled=False)
             return base.merged(
                 widgets={"h3s_ui": _state(CURRENT_TEMPLATE_ID, "Current settings")}
             )

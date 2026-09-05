@@ -21,6 +21,7 @@ from h3lab.comfy.studio import (
     validate_manifest,
     validate_prepare_response,
 )
+from h3lab.settings import DEFAULT_COMFY_URL
 
 LiveCallback = Callable[[dict[str, Any]], None]
 
@@ -123,7 +124,7 @@ def _validation_message(payload: dict[str, Any]) -> str:
 class ComfyClient:
     def __init__(
         self,
-        base_url: str = "http://127.0.0.1:8188",
+        base_url: str = DEFAULT_COMFY_URL,
         *,
         run_timeout_s: float = 36_000.0,
         request_timeout_s: float = 60.0,

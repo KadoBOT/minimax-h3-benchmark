@@ -50,6 +50,29 @@ def test_unknown_future_fields_round_trip_through_widgets(base_config):
     assert studio_inputs(updated)["future_widget"] == {"amount": 7}
 
 
+def test_experimental_runtime_fields_are_sweepable(base_config):
+    updated = base_config.merged(
+        use_trt_vae=True,
+        trt_vae_decoder="minimax_h3_vae_decoder.engine",
+        trt_vae_encoder="minimax_h3_vae_encoder.engine",
+        use_vdn=True,
+        vdn_checkpoint="stage-dmd-step-250",
+        vdn_apply_turbo_adapter=True,
+        vdn_strength=1.0,
+        vdn_lora_mode="merge",
+        vdn_branch_weights="stream",
+        vdn_attention_backend="grouped",
+        vdn_verbose=False,
+    )
+
+    inputs = studio_inputs(updated)
+    assert inputs["use_trt_vae"] is True
+    assert inputs["trt_vae_decoder"] == "minimax_h3_vae_decoder.engine"
+    assert inputs["use_vdn"] is True
+    assert inputs["vdn_checkpoint"] == "stage-dmd-step-250"
+    assert inputs["vdn_lora_mode"] == "merge"
+
+
 def test_attention_projects_to_legacy_field_and_explicit_widget(base_config):
     for attention, legacy in (("sol", True), ("off", False), ("comfy_kitchen", False)):
         inputs = studio_inputs(base_config)

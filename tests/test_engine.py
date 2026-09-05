@@ -6,8 +6,8 @@ import json
 import shutil
 import subprocess
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
@@ -18,7 +18,7 @@ from h3lab.domain.sweeps import SweepAxis, SweepSpec
 from h3lab.engine import artifacts
 from h3lab.engine.events import Event, EventBus
 from h3lab.engine.lab import Lab
-from h3lab.engine.runner import PreflightError, Runner, WorkflowCache, preflight
+from h3lab.engine.runner import Runner, WorkflowCache, preflight
 from h3lab.settings import Settings
 from h3lab.storage import open_store
 from h3lab.storage.runs import RunFilter, RunRepository
@@ -62,7 +62,6 @@ def test_a_reconnecting_subscriber_replays_what_it_missed():
 def test_a_stalled_subscriber_drops_old_events_instead_of_blocking():
     bus = EventBus()
     subscription = bus.subscribe()
-    subscription._queue.maxsize  # the bound is what makes this safe
     for index in range(subscription._queue.maxsize + 40):
         bus.publish("heartbeat", index=index)
     assert subscription.dropped >= 40
@@ -324,6 +323,56 @@ def test_preflight_reports_a_missing_input_file(lab_settings, base_config):
 def test_preflight_requires_an_explicit_diffusion_model(lab_settings, base_config):
     problems = preflight(base_config.merged(diffusion_model=""), lab_settings)
     assert problems == ["no diffusion model selected"]
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        ({"sampler": "dpmpp_2m_sde"}, "dpmpp_2m_sde"),
+        ({"widgets": {"er_sde": True}}, "ER-SDE"),
+    ],
+)
+def test_preflight_rejects_spectrum_sampler_combinations(
+    lab_settings, base_config, config, message
+):
+    problems = preflight(
+        base_config.merged(cache="spectrum", cache_enabled=True, **config),
+        lab_settings,
+    )
+
+    assert len(problems) == 1
+    assert message in problems[0]
+
+
+@pytest.mark.parametrize("sampler", ["euler", "res_multistep"])
+def test_preflight_accepts_supported_spectrum_samplers(
+    lab_settings, base_config, sampler
+):
+    config = base_config.merged(
+        cache="spectrum",
+        cache_enabled=True,
+        sampler=sampler,
+        widgets={"er_sde": False},
+    )
+
+    assert preflight(config, lab_settings) == []
+
+
+def test_preflight_accepts_spectrum_with_deterministic_er_sde(
+    lab_settings, base_config
+):
+    config = base_config.merged(
+        cache="spectrum",
+        cache_enabled=True,
+        widgets={
+            "er_sde": True,
+            "er_sde_solver": "ODE",
+            "er_sde_eta": 0.0,
+            "er_sde_s_noise": 0.0,
+        },
+    )
+
+    assert preflight(config, lab_settings) == []
 
 
 def test_the_worker_runs_a_queued_run_to_completion(runner_setup, base_config, stub):

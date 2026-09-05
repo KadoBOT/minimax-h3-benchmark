@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Annotated, Any, Iterable, Literal, Sequence
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -19,6 +20,7 @@ Interp = Literal["off", "film", "rife", "gmfss"]
 
 GEN_MODES: tuple[GenMode, ...] = ("flf2v", "t2v", "r2v")
 CACHE_NAMES: tuple[CacheName, ...] = ("none", "spectrum", "easy", "h3")
+SPECTRUM_SAMPLERS = frozenset({"euler", "res_multistep"})
 INTERP_MODES: tuple[Interp, ...] = ("off", "film", "rife", "gmfss")
 INTERP_LABELS: dict[str, str] = {
     "off": "Off",
@@ -83,6 +85,17 @@ TEMPLATE_WIDGET_FIELDS = frozenset(
         "er_sde_max_stage",
         "er_sde_eta",
         "er_sde_s_noise",
+        "use_trt_vae",
+        "trt_vae_decoder",
+        "trt_vae_encoder",
+        "use_vdn",
+        "vdn_checkpoint",
+        "vdn_apply_turbo_adapter",
+        "vdn_strength",
+        "vdn_lora_mode",
+        "vdn_branch_weights",
+        "vdn_attention_backend",
+        "vdn_verbose",
     }
 )
 # Studio knobs that are not first-class config fields. A top-level payload may name
@@ -120,6 +133,17 @@ STUDIO_EXTRA_FIELDS: frozenset[str] = frozenset(
         "er_sde_max_stage",
         "er_sde_eta",
         "er_sde_s_noise",
+        "use_trt_vae",
+        "trt_vae_decoder",
+        "trt_vae_encoder",
+        "use_vdn",
+        "vdn_checkpoint",
+        "vdn_apply_turbo_adapter",
+        "vdn_strength",
+        "vdn_lora_mode",
+        "vdn_branch_weights",
+        "vdn_attention_backend",
+        "vdn_verbose",
     }
 )
 PRESET_LEVELS: tuple[PresetLevel, ...] = (
@@ -265,6 +289,16 @@ def _clamp_names(values: Iterable[str] | None, limit: int) -> list[str]:
     return out
 
 
+def spectrum_cache_compatible(sampler: str, widgets: dict[str, Any]) -> bool:
+    if widgets.get("er_sde", False):
+        return (
+            widgets.get("er_sde_solver", "ER-SDE") == "ODE"
+            or widgets.get("er_sde_eta", 1.0) == 0
+            or widgets.get("er_sde_s_noise", 1.0) == 0
+        )
+    return sampler in SPECTRUM_SAMPLERS
+
+
 class GenerationConfig(BaseModel):
     """Everything that determines a generated video. Immutable once a run starts."""
 
@@ -395,7 +429,6 @@ class GenerationConfig(BaseModel):
             object.__setattr__(self, "cache_enabled", False)
         if not self.cache_enabled and self.cache != "none":
             object.__setattr__(self, "cache", "none")
-
         # With turbo off there is no LoRA in the graph, so naming one would split the
         # identity of two runs that produce the same pixels. With turbo on the opposite is
         # true: "" means the default file, and a run that says so has to say which, or it

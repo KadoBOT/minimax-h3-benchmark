@@ -200,7 +200,7 @@ def test_manifest_requires_a_supported_ui_schema(ui_schema):
     "catalog",
     [
         [],
-        {"version": 2, "categories": [], "templates": []},
+        {"version": 3, "categories": [], "templates": []},
         {"version": 1, "categories": {}, "templates": []},
         {"version": 1, "categories": [], "templates": {}},
     ],
@@ -230,6 +230,21 @@ def test_manifest_accepts_an_absent_template_catalog():
 
     with client_for(lambda _request: response(200, payload)) as client:
         assert "template_catalog" not in client.studio_manifest()
+
+
+@pytest.mark.parametrize("catalog_version", [1, 2])
+def test_manifest_accepts_supported_template_catalog_versions(catalog_version):
+    payload = {
+        "contract_version": 1,
+        "module_url": "/component.js",
+        "prepare_url": "/prepare",
+        "ui_schema": UI_SCHEMA,
+        "template_catalog": {"version": catalog_version, "categories": [], "templates": []},
+    }
+
+    with client_for(lambda _request: response(200, payload)) as client:
+        manifest = client.studio_manifest()
+        assert manifest["template_catalog"]["version"] == catalog_version
 
 
 def test_transport_failure_remains_retryable_comfy_error():

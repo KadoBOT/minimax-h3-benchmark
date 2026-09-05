@@ -11,8 +11,9 @@ from __future__ import annotations
 import threading
 import time
 import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from h3lab.comfy.client import ComfyClient, ComfyError, PromptRejected
 from h3lab.comfy.editor import run_provenance, to_editor_workflow
@@ -20,7 +21,7 @@ from h3lab.comfy.graph import WorkflowError, load_workflow
 from h3lab.comfy.progress import Preview, ProgressTracker
 from h3lab.comfy.schema import SchemaCache
 from h3lab.comfy.studio import StudioContractError, prepare_prompt
-from h3lab.domain.config import GenerationConfig
+from h3lab.domain.config import GenerationConfig, spectrum_cache_compatible
 from h3lab.domain.run import Artifact, Run, RunMetrics
 from h3lab.engine import artifacts
 from h3lab.engine.events import EventBus
@@ -125,6 +126,22 @@ def preflight(
     problems: list[str] = []
     if not config.diffusion_model.strip():
         problems.append("no diffusion model selected")
+    if (
+        config.cache_active
+        and config.cache == "spectrum"
+        and not spectrum_cache_compatible(config.sampler, config.widgets)
+    ):
+        er_sde = bool(config.widgets.get("er_sde", False))
+        if er_sde:
+            problems.append(
+                "Spectrum cache cannot run with stochastic ER-SDE on this stack; "
+                "disable Spectrum or use deterministic ER-SDE"
+            )
+        else:
+            problems.append(
+                f"Spectrum cache does not support sampler {config.sampler!r}; "
+                "disable Spectrum or choose euler/res_multistep"
+            )
     input_dir = settings.comfy_input_dir
     if config.media_files and input_dir.is_dir():
         for name in config.media_files:
@@ -341,6 +358,7 @@ class Runner:
                 workflow,
                 config,
                 schemas=self._schemas.get(),
+                output_tag=run.id,
             )
         except StudioContractError:
             raise

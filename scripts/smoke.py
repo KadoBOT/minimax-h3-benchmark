@@ -29,7 +29,7 @@ from h3lab.domain.config import GenerationConfig  # noqa: E402
 from h3lab.domain.run import RunMetrics  # noqa: E402
 from h3lab.engine import artifacts  # noqa: E402
 from h3lab.engine.lab import Lab  # noqa: E402
-from h3lab.settings import Settings  # noqa: E402
+from h3lab.settings import DEFAULT_COMFY_URL, Settings  # noqa: E402
 
 SMOKE_DIR = REPO_ROOT / ".smoke"
 PROMPT_A = "a courier on a magnetic skateboard, neon alley, heavy rain"
@@ -243,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keep", action="store_true", help="leave the seeded data behind")
     parser.add_argument(
         "--comfy-url",
-        default="http://127.0.0.1:8188",
+        default=DEFAULT_COMFY_URL,
         help="ComfyUI instance providing the read-only Studio v1 contract",
     )
     args = parser.parse_args(argv)

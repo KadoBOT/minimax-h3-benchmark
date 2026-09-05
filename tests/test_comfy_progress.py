@@ -316,6 +316,109 @@ def test_the_sampler_is_preferred_by_what_it_is(monkeypatch):
     assert tracker.sec_per_it() == pytest.approx(8.0, rel=0.05)
 
 
+def test_the_primary_sampler_step_count_wins_even_when_a_secondary_pass_reports_more(monkeypatch):
+    prompt = {
+        "studio": {"class_type": "MiniMaxH3Studio", "inputs": {}},
+        "schedule": {"class_type": "BasicScheduler", "inputs": {}},
+        "main": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "latent_image": ["studio", 1],
+                "sigmas": ["schedule", 0],
+            },
+        },
+        "secondary": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "latent_image": ["resample-init", 0],
+                "sigmas": ["inject-schedule", 0],
+            },
+        },
+        "resample-init": {"class_type": "H3V2VInit", "inputs": {}},
+        "inject-schedule": {"class_type": "H3InjectSchedule", "inputs": {}},
+    }
+    clock = {"t": 0.0}
+    monkeypatch.setattr(time, "perf_counter", lambda: clock["t"])
+    tracker = ProgressTracker.of(prompt)
+
+    tracker.on_executing({"node": "main"})
+    tracker.on_progress({"node": "main", "value": 1, "max": 4})
+    clock["t"] += 40.0
+    tracker.on_progress({"node": "main", "value": 4, "max": 4})
+    tracker.on_executing({"node": "secondary"})
+    tracker.on_progress({"node": "secondary", "value": 1, "max": 8})
+    clock["t"] += 40.0
+    tracker.on_progress({"node": "secondary", "value": 8, "max": 8})
+    tracker.on_executing({"node": None})
+
+    assert tracker.steps_seen() == 4
+    assert tracker.sec_per_it() == pytest.approx(10.0)
+
+
+def test_sampler_wrappers_cannot_double_the_configured_step_metric(monkeypatch):
+    prompt = {
+        "studio": {"class_type": "MiniMaxH3Studio", "inputs": {"steps": 23}},
+        "schedule": {
+            "class_type": "BasicScheduler",
+            "inputs": {"steps": ["studio", 6]},
+        },
+        "main": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "latent_image": ["studio", 1],
+                "sigmas": ["schedule", 0],
+            },
+        },
+    }
+    clock = {"t": 0.0}
+    monkeypatch.setattr(time, "perf_counter", lambda: clock["t"])
+    tracker = ProgressTracker.of(prompt)
+
+    tracker.on_executing({"node": "main"})
+    tracker.on_progress({"node": "main", "value": 1, "max": 46})
+    clock["t"] += 230.0
+    tracker.on_progress({"node": "main", "value": 46, "max": 46})
+    assert tracker.snapshot()["step"] == 23
+    assert tracker.snapshot()["step_total"] == 23
+    tracker.on_executing({"node": None})
+
+    assert tracker.steps_seen() == 23
+    assert tracker.sec_per_it() == pytest.approx(10.0)
+
+
+def test_the_step_metric_reflects_a_split_schedule_not_its_source(monkeypatch):
+    prompt = {
+        "studio": {"class_type": "MiniMaxH3Studio", "inputs": {"steps": 28}},
+        "schedule": {
+            "class_type": "BasicScheduler",
+            "inputs": {"steps": ["studio", 6]},
+        },
+        "split": {
+            "class_type": "SplitSigmas",
+            "inputs": {"sigmas": ["schedule", 0], "step": 4},
+        },
+        "main": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "latent_image": ["studio", 1],
+                "sigmas": ["split", 0],
+            },
+        },
+    }
+    clock = {"t": 0.0}
+    monkeypatch.setattr(time, "perf_counter", lambda: clock["t"])
+    tracker = ProgressTracker.of(prompt)
+
+    tracker.on_executing({"node": "main"})
+    tracker.on_progress({"node": "main", "value": 1, "max": 8})
+    clock["t"] += 40.0
+    tracker.on_progress({"node": "main", "value": 8, "max": 8})
+    tracker.on_executing({"node": None})
+
+    assert tracker.steps_seen() == 4
+    assert tracker.sec_per_it() == pytest.approx(10.0)
+
+
 def test_progress_from_a_real_clock_is_measured_not_guessed():
     tracker = ProgressTracker()
     tracker.on_executing({"node": "10"})
