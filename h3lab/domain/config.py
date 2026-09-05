@@ -209,33 +209,62 @@ def is_gguf(diffusion_model: str) -> bool:
     return (diffusion_model or "").strip().lower().endswith(".gguf")
 
 BASELINE_PROMPT = (
-    "[0s-1.5s] Low tracking shot races forward with the courier as he accelerates hard "
-    "on the magnetic skateboard, cyan board thrusters flare brighter, rain streaks turn "
-    "into diagonal streaks across the lens, neon signs smear into long light trails "
-    "while the alley walls rush past on both sides.\n"
-    "[1.5s-3.5s] He snaps into a sharp left bank at full speed, the board sprays a sheet "
-    "of water and sparks off the wet pavement, a swarm of holographic ads and floating "
-    "drones whip past his head, camera whip-pans to keep him centered as background "
-    "traffic blurs into pure light streaks.\n"
-    "[3.5s-5s] The courier launches off a sudden ramp of debris, body and board launching "
-    "airborne in a tight arc through heavy rain and neon haze, camera follows the upward "
-    "trajectory then drops with him as he lands hard, water exploding outward in all "
-    "directions while the alley continues to rush past at extreme speed."
+    "subject_definitions:\n"
+    "<Subject 1> is Rail Saint Korr from <Picture 1>, an older Velk warrior with a lean wiry-dense "
+    "build, gaunt planed face, shaved scalp, right-side roped burn scars, and four living dorsal caldera "
+    "vents on the upper back venting dull ember heat. Wearing asymmetrical soot-black rail-runner wraps "
+    "over dark trousers with leg wraps, gripping a compact blackened hooked boarding axe.\n"
+    "<Subject 2> is the industrial foundry fortress of Cinderrail from <Picture 2>, a tiered mountain "
+    "of colossal smokestacks, dark iron catwalks, massive rotating gears, and glowing molten metal channels "
+    "under heavy smog.\n"
+    "<Subject 3> is Hearth Bol from <Picture 3>, a broad muscular bearded Velk foundry smith with four "
+    "dorsal caldera vents, soot-stained work clothes, heavy leather apron, tool harness, and a massive "
+    "chained iron foundry key.\n\n"
+    "summary:\n"
+    "[reference generation] A 5.00-second native 1.91:1 cinematic landscape composition high-octane "
+    "action sequence in the Orrery universe. Set across the industrial heights of <Subject 2>, <Subject 1> "
+    "sprints across a suspended magnetic rail and vaults down toward <Subject 3> at the blast furnace gate. "
+    "Dynamic lateral tracking, fast cutting cadence, high chiaroscuro ember contrast, and synchronized "
+    "industrial sound.\n\n"
+    "retention_analysis:\n"
+    "<Subject 1> (appears in [Shot 1], [Shot 3]): fully_preserved - gaunt shaved head, burn scars, soot-black "
+    "runner wraps, hooked axe, and four glowing dorsal caldera vents remain consistent.\n"
+    "<Subject 2> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - towering smokestacks, molten rails, "
+    "dark iron gantries, and ember smoke establish the environment.\n"
+    "<Subject 3> (appears in [Shot 2], [Shot 3]): fully_preserved - broad muscular build, beard, leather apron, "
+    "chained foundry key, and dorsal vents remain consistent.\n\n"
+    "detailed_description:\n"
+    "The target video features 2D painterly anime and graphic cel-shaded treatment with high chiaroscuro contrast, "
+    "glowing molten accents, charcoal soot, and sharp cut transitions.\n"
+    "[Shot 1] Native 1.91:1 wide tracking shot frames <Subject 1> sprinting left-to-right along an elevated magnetic "
+    "rail high above <Subject 2>. The four living caldera vents on his upper back pulse with dull orange magma heat, "
+    "trailing subtle heat haze into the dark smog. His hooked boarding axe catches amber rim light as his boots spark "
+    "against the metal track. The camera tracks laterally with large amplitude at fast speed, keeping him on the "
+    "left-third while smokestacks and glowing slag cascades rush past in the background.\n"
+    "[Shot 2] At 00:01.800, the shot cuts to an asymmetric medium-low angle inside the blast furnace gate of <Subject 2>. "
+    "<Subject 3> stands braced on the right-third, heaving his massive chained foundry key across an open molten channel "
+    "as sparks blast across the foreground. His four back vents flare brightly in rhythm with the forge hammer. "
+    "The camera pushes in with medium amplitude at fast speed, tilting slightly upward to emphasize his broad muscular "
+    "silhouette against the roaring fire.\n"
+    "[Shot 3] At 00:03.400, the shot transitions to a dynamic wide-to-medium convergence shot. <Subject 1> drops from an "
+    "overhead gantry onto the grated foundry platform beside <Subject 3>, landing with one knee planted and hooked axe raised. "
+    "Both warriors turn in unison to face the glowing furnace breach as a burst of molten metal illuminates their silhouettes "
+    "in sharp chiaroscuro contrast. The camera pushes in with large amplitude at fast speed toward the center-frame lock until "
+    "the 00:05.000 mark.\n\n"
+    "overall_soundscape:\n"
+    "Deep industrial drone, heavy reverberating forge impacts, hiss of molten metal slag, spark crackle, boot impacts "
+    "on magnetic iron rails, heavy chain clatter, and rushing wind through high gantries.\n\n"
+    "non_diegetic_music:\n"
+    "Driving 140 BPM industrial hybrid trailer cue: heavy distorted sub-bass pulse, metallic percussive hits syncing with "
+    "shot cuts at 00:01.800 and 00:03.400, rising brass swell, sharp cymbal choke on the final lockup at 00:05.000, no fade."
 )
 
-# The media the form starts from, so a first run costs no file hunting. The frame is the
-# still the baseline prompt above describes; the references are a set that belongs together
-# and only reads as a scene when all of them are present.
-#
-# These are names, not promises. `catalog` resolves each one against ComfyUI's input folder
-# and drops whatever is not there, because a default pointing at a missing file is worse
-# than no default — it fails preflight instead of failing to be filled in.
-BASELINE_FIRST_FRAME = "Cyberpunk_courier_riding_magneti…_2K_202608070843.jpeg"
+# The media the form starts from, so a first run costs no file hunting.
+BASELINE_FIRST_FRAME = "rail_saint_korr_hero_21x9.png"
 BASELINE_REF_IMAGES: tuple[str, ...] = (
-    "Female_space_explorer_character___202608071035.jpeg",
-    "Alien_greenhouse_concept_design___202608071035.jpeg",
-    "Spherical_robot_character_design__2K_202608071035.jpeg",
-    "Storyboard_grid_of_greenhouse_ex__202608071035.jpeg",
+    "rail_saint_korr_hero_21x9.png",
+    "cinderrail_establishing.jpeg",
+    "hearth_bol_hero_21x9.png",
 )
 
 

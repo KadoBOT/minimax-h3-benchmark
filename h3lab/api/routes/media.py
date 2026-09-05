@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from h3lab.api.deps import LabDep, SettingsDep
 from h3lab.api.errors import problem
+from h3lab.settings import REPO_ROOT
 
 router = APIRouter(tags=["media"])
 
@@ -73,6 +74,11 @@ def strip(settings: SettingsDep, name: str) -> Response:
 @router.get("/media/inputs/{name:path}", response_class=FileResponse)
 def input_media(settings: SettingsDep, name: str) -> Response:
     """A file already in ComfyUI's input folder, so the form can show what was picked."""
+    target = settings.comfy_input_dir / name
+    if not target.is_file():
+        fallback = REPO_ROOT / "inputs" / name
+        if fallback.is_file():
+            return serve(REPO_ROOT / "inputs", name, cache=CACHE_BRIEFLY)
     return serve(settings.comfy_input_dir, name, cache=CACHE_BRIEFLY)
 
 

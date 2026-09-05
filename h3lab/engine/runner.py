@@ -12,6 +12,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -152,9 +153,10 @@ def preflight(
                 "disable Spectrum or choose euler/res_multistep"
             )
     input_dir = settings.comfy_input_dir
-    if config.media_files and input_dir.is_dir():
+    repo_inputs = REPO_ROOT / "inputs"
+    if config.media_files and (input_dir.is_dir() or repo_inputs.is_dir()):
         for name in config.media_files:
-            if not (input_dir / name).is_file():
+            if not (input_dir / name).is_file() and not (repo_inputs / name).is_file():
                 problems.append(f"{name} is not in ComfyUI's input folder")
     return problems
 
@@ -359,6 +361,14 @@ class Runner:
         problems = preflight(config, self._settings, self._client)
         if problems:
             raise PreflightError("; ".join(problems))
+
+        for name in config.media_files:
+            source = self._settings.comfy_input_dir / name
+            if not source.is_file():
+                source = REPO_ROOT / "inputs" / name
+            if source.is_file():
+                with suppress(Exception):
+                    self._client.upload_input(source)
 
         workflow = self._workflows.get(config.mode)
         try:

@@ -178,6 +178,7 @@ def comfy_input_dir_candidates(home: Path | None = None) -> list[Path]:
         Path("/run/media/kadobot/12TB_P/Documents/ComfyUI/ComfyUI/input"),
         Path("/mnt/c/Users/ricar/Documents/ComfyUI/ComfyUI/input"),
         DEFAULT_COMFY_INPUT_DIR,
+        REPO_ROOT / "inputs",
     ]
 
 

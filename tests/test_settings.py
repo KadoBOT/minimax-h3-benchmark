@@ -76,3 +76,10 @@ def test_with_overrides_returns_a_new_frozen_settings(tmp_path: Path):
     assert other.port == 1234
     assert made.port == DEFAULT_PORT
     assert other.comfy_url == made.comfy_url
+
+
+def test_comfy_input_dir_candidates_includes_bundled_repo_inputs():
+    from h3lab.settings import REPO_ROOT, comfy_input_dir_candidates
+
+    candidates = comfy_input_dir_candidates()
+    assert REPO_ROOT / "inputs" in candidates

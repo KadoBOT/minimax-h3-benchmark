@@ -34,7 +34,7 @@ from h3lab.domain.config import (
     PRESET_LEVELS,
     turbo_steps_for,
 )
-from h3lab.settings import Settings
+from h3lab.settings import DEFAULT_COMFY_INPUT_DIR, REPO_ROOT, Settings
 
 FALLBACK_SCHEDULERS: Final[tuple[str, ...]] = (
     "simple",
@@ -394,6 +394,24 @@ def build_catalog(settings: Settings, client: ComfyClient | None = None) -> Cata
     videos = _listdir(settings.comfy_input_dir, VIDEO_SUFFIXES)
     audios = _listdir(settings.comfy_input_dir, AUDIO_SUFFIXES)
     media_source = "disk" if settings.comfy_input_dir.is_dir() else "unavailable"
+    repo_inputs = REPO_ROOT / "inputs"
+    if repo_inputs.is_dir():
+        if not settings.comfy_input_dir.is_dir():
+            images = _listdir(repo_inputs, IMAGE_SUFFIXES)
+            videos = _listdir(repo_inputs, VIDEO_SUFFIXES)
+            audios = _listdir(repo_inputs, AUDIO_SUFFIXES)
+            media_source = "disk"
+        elif settings.comfy_input_dir == DEFAULT_COMFY_INPUT_DIR:
+            for img in _listdir(repo_inputs, IMAGE_SUFFIXES):
+                if img not in images:
+                    images.append(img)
+            for vid in _listdir(repo_inputs, VIDEO_SUFFIXES):
+                if vid not in videos:
+                    videos.append(vid)
+            for aud in _listdir(repo_inputs, AUDIO_SUFFIXES):
+                if aud not in audios:
+                    audios.append(aud)
+            media_source = "disk"
 
     chosen_model = default_model(models)
     first_frame = default_first_frame(images)

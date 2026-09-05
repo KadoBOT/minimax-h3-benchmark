@@ -1242,6 +1242,15 @@ async def test_an_input_image_is_served_so_the_form_can_show_it(
     assert response.headers["content-type"] == "image/png"
 
 
+async def test_an_input_image_falls_back_to_bundled_repo_inputs(
+    client: httpx.AsyncClient,
+):
+    response = await client.get(f"{API}/media/inputs/rail_saint_korr_hero_21x9.png")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert len(response.content) > 100_000
+
+
 async def test_an_input_image_is_not_cached_forever(
     client: httpx.AsyncClient, lab_settings: Settings
 ):
