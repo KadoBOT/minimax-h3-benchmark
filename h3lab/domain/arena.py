@@ -64,6 +64,7 @@ from h3lab.domain.rating import Vote, replay_pairwise
 # What the voter must not be able to tell apart: the subject, and how it is presented.
 HELD_FIELDS: frozenset[str] = frozenset(
     {
+        "width", "height", "frames",
         "mode",
         "prompt",
         "first_frame",
@@ -86,6 +87,8 @@ HELD_FIELDS: frozenset[str] = frozenset(
 # suppressed when both differ, so one change never reads as two.
 CONTESTED_FIELDS: frozenset[str] = frozenset(
     {
+        "preset",
+        "experiment",
         "diffusion_model",
         "sampler",
         "scheduler",
@@ -289,6 +292,13 @@ def contested_differences(a: GenerationConfig, b: GenerationConfig) -> list[Fiel
     """Only the ranked settings that differ, in canonical order, ``a`` first."""
     found: dict[str, FieldDiff] = {}
     for field in CONTESTED_ORDER:
+        if field == "experiment":
+            for key in sorted(a.experiment.keys() | b.experiment.keys()):
+                values = [field_display(key, cfg.experiment.get(key, "recipe default")) for cfg in (a, b)]
+                if values[0] != values[1]:
+                    name = f"experiment.{key}"
+                    found[name] = FieldDiff(field=name, label=key.replace("_", " ").title(), values=values)
+            continue
         values = [field_display(field, getattr(cfg, field)) for cfg in (a, b)]
         if values[0] != values[1]:
             found[field] = FieldDiff(
@@ -297,7 +307,7 @@ def contested_differences(a: GenerationConfig, b: GenerationConfig) -> list[Fiel
     for derived, determinants in DERIVED_FROM.items():
         if derived in found and any(name in found for name in determinants):
             del found[derived]
-    return [found[field] for field in CONTESTED_ORDER if field in found]
+    return list(found.values())
 
 
 # --- choosing what to show next ---------------------------------------------

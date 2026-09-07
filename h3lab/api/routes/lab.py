@@ -98,7 +98,7 @@ def meta(lab: LabDep, settings: SettingsDep) -> Meta:
         interpolations=list(INTERP_MODES),
         interpolation_labels=dict(INTERP_LABELS),
         preset_levels=list(PRESET_LEVELS),
-        config_fields=sorted(GenerationConfig.model_fields),
+        config_fields=["preset", "width", "height", "frames", "prompt", "seed", "references", "guides", "first_frame", "last_frame", "ref_image_size", "final_audio"],
         defaults=field_defaults(),
         comfy_url=settings.comfy_url,
     )

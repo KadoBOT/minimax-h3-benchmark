@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from h3lab.domain.config import (
     STUDIO_EXTRA_FIELDS,
+    EXPERIMENT_FIELDS,
     TEMPLATE_AXIS_FIELD,
     GenerationConfig,
     config_hash,
@@ -37,12 +38,8 @@ class SweepAxis(BaseModel):
     @field_validator("field")
     @classmethod
     def _known_field(cls, value: str) -> str:
-        if (
-            value not in GenerationConfig.model_fields
-            and value not in STUDIO_EXTRA_FIELDS
-            and value not in VIRTUAL_AXIS_FIELDS
-        ):
-            raise ValueError(f"unknown config field {value!r}")
+        if value not in {"preset", "width", "height", "frames", "seed", "prompt", "ref_image_size"} | {f"experiment.{key}" for key in EXPERIMENT_FIELDS}:
+            raise ValueError(f"unsupported H3 sweep field {value!r}")
         if value == "seed":
             raise ValueError("vary the seed with repeats and seed_strategy, not as an axis")
         return value

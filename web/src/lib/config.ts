@@ -66,21 +66,9 @@ export function needsOf(meta: Meta | undefined, mode: string | undefined): ModeN
 }
 
 /** What is still missing before this config could be queued. */
-export function missingInputs(config: Draft, meta: Meta | undefined): string[] {
-  const missing: string[] = []
-  if (isEmpty(config.diffusion_model)) missing.push("Weights")
+export function missingInputs(config: Draft, _meta: Meta | undefined): string[] {
+  return ["width", "height", "frames"].filter(key => Number(config[key as keyof Draft]) <= 0)
 
-  const needs = needsOf(meta, config.mode)
-  if (!needs) return missing
-
-  for (const field of needs.requires_all ?? []) {
-    if (isEmpty(config[field as keyof Draft])) missing.push(label(meta, field))
-  }
-  const anyOf = needs.requires_any ?? []
-  if (anyOf.length > 0 && anyOf.every((field) => isEmpty(config[field as keyof Draft]))) {
-    missing.push(anyOf.map((field) => label(meta, field)).join(" or "))
-  }
-  return missing
 }
 
 /** Fields this mode reads. Everything else is hidden rather than shown as inert noise. */

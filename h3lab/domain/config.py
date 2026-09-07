@@ -48,6 +48,12 @@ STUDIO_VALUE_ALIASES: dict[str, dict[str, str]] = {
 TEMPLATE_AXIS_FIELD = "template"
 CURRENT_TEMPLATE_ID = "__current__"
 TEMPLATE_STATE_KEY = "h3s_ui"
+EXPERIMENT_FIELDS = frozenset({
+    "diffusion_model", "weight_dtype", "video_vae", "audio_vae", "text_encoder",
+    "sampler", "scheduler", "steps", "denoise", "shift_video", "shift_audio",
+    "ffn_chunks", "bridge_alpha", "refine_enabled", "refine_sampler", "refine_sigmas",
+    "loras", "node_inputs",
+})
 TEMPLATE_TOP_LEVEL_FIELDS = frozenset(
     {
         "steps",
@@ -302,7 +308,7 @@ def _guide_files(raw: Any) -> list[str]:
     for clip in payload:
         if not isinstance(clip, dict):
             continue
-        for key in ("image", "audio"):
+        for key in ("image", "video", "audio"):
             value = clip.get(key)
             if isinstance(value, str) and value.strip():
                 names.append(basename(value))
@@ -318,8 +324,6 @@ def _clamp_names(values: Iterable[str] | None, limit: int) -> list[str]:
         if not text:
             continue
         out.append(basename(text))
-        if len(out) >= limit:
-            break
     return out
 
 
@@ -338,7 +342,12 @@ class GenerationConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    mode: GenMode = "flf2v"
+    preset: Literal["speed", "quality", "quality_pece", "motion"] = "speed"
+    experiment: dict[str, Any] = Field(default_factory=dict)
+    width: Annotated[int, Field(gt=0)] = 1344
+    height: Annotated[int, Field(gt=0)] = 768
+    frames: Annotated[int, Field(gt=0)] = 175
+    mode: GenMode = "t2v"
     diffusion_model: str = ""
     prompt: str = BASELINE_PROMPT
 
@@ -355,8 +364,8 @@ class GenerationConfig(BaseModel):
     aspect_ratio: str = DEFAULT_ASPECT
     steps: Annotated[int, Field(ge=1, le=200)] = 20
     seed: Annotated[int, Field(ge=0, le=2**63 - 1)] = DEFAULT_SEED
-    mp: Annotated[float, Field(ge=0.05, le=8.0)] = 0.5
-    duration_s: Annotated[float, Field(ge=0.5, le=60.0)] = 5.0
+    mp: Annotated[float, Field(ge=0.05, le=8.0)] = 1.0
+    duration_s: Annotated[float, Field(ge=0.5, le=150.0)] = 7.0
 
     turbo: bool = False
     turbo_lora: str = ""
@@ -446,7 +455,7 @@ class GenerationConfig(BaseModel):
     def _clamp_images(cls, value: Any) -> tuple[str, ...]:
         return tuple(_clamp_names(value, MAX_REF_IMAGES))
 
-    @field_validator("ref_videos", "ref_video_audios", mode="before")
+    @field_validator("ref_videos", mode="before")
     @classmethod
     def _clamp_videos(cls, value: Any) -> tuple[str, ...]:
         return tuple(_clamp_names(value, MAX_REF_VIDEOS))
@@ -456,8 +465,25 @@ class GenerationConfig(BaseModel):
     def _clamp_audios(cls, value: Any) -> tuple[str, ...]:
         return tuple(_clamp_names(value, MAX_REF_AUDIOS))
 
+    @field_validator("ref_video_audios", mode="before")
+    @classmethod
+    def _paired_audio(cls, value: Any) -> tuple[str, ...]:
+        return tuple(basename(str(name or "")) for name in (value or []))
+
     @model_validator(mode="after")
     def _mode_coherence(self) -> GenerationConfig:
+        for field in ("diffusion_model", "sampler", "scheduler", "steps"):
+            if field in self.experiment:
+                object.__setattr__(self, field, self.experiment[field])
+        nodes = self.experiment.get("node_inputs", {})
+        for node_id, mapping in {
+            "110": {"width": "width", "height": "height", "length": "frames", "prompt": "prompt"},
+            "114": {"steps": "steps", "scheduler": "scheduler"},
+            "123": {"noise_seed": "seed"},
+        }.items():
+            for source, target in mapping.items():
+                if source in nodes.get(node_id, {}):
+                    object.__setattr__(self, target, nodes[node_id][source])
         # cache="none" and cache_enabled=False are the same statement; keep one truth.
         if self.cache == "none" and self.cache_enabled:
             object.__setattr__(self, "cache_enabled", False)
@@ -468,39 +494,18 @@ class GenerationConfig(BaseModel):
         # true: "" means the default file, and a run that says so has to say which, or it
         # would read as a different experiment from the one that spelled the name out.
         #
-        # The step count is the same rule from the other side. A turbo run samples at the
-        # schedule its LoRA was distilled for, so whatever the step field held when the
-        # toggle was flipped is not a setting — it is a leftover, and leaving it in a hashed
-        # field makes two identical runs read as two experiments and shows a person a
-        # schedule the sampler was never given.
         if self.turbo:
             object.__setattr__(self, "turbo_lora", resolve_turbo_lora(self.turbo_lora))
-            object.__setattr__(self, "steps", turbo_steps_for(self.turbo_lora))
         else:
             object.__setattr__(self, "turbo_lora", "")
             object.__setattr__(self, "turbo_lora_strength", DEFAULT_TURBO_STRENGTH)
 
-        if self.mode == "flf2v" and not self.first_frame:
-            raise ValueError("first_frame is required for mode 'flf2v'")
-        if self.mode != "flf2v" and (self.first_frame or self.last_frame):
-            object.__setattr__(self, "first_frame", "")
-            object.__setattr__(self, "last_frame", "")
-        if self.mode != "r2v":
-            for field in ("ref_images", "ref_videos", "ref_video_audios", "ref_audios"):
-                object.__setattr__(self, field, ())
-        elif not (self.ref_images or self.ref_videos or self.ref_audios):
-            raise ValueError("mode 'r2v' needs at least one reference image, video, or audio")
         return self
 
     @property
     def effective_steps(self) -> int:
-        """The step count the sampler is given.
-
-        A turbo run samples at the schedule its LoRA was distilled for, which the validator
-        has already written into `steps`. The two can no longer disagree; this stays because
-        it is the name the rest of the lab asks the question by.
-        """
-        return turbo_steps_for(self.turbo_lora) if self.turbo else self.steps
+        """The step count selected for the primary schedule."""
+        return self.experiment.get("node_inputs", {}).get("114", {}).get("steps", self.steps)
 
     @property
     def turbo_lora_file(self) -> str:
@@ -518,7 +523,7 @@ class GenerationConfig(BaseModel):
     @property
     def media_files(self) -> tuple[str, ...]:
         """Every input file ComfyUI must already have, in wiring order."""
-        names = [self.first_frame, self.last_frame]
+        names = [self.first_frame, self.last_frame, self.widgets.get("final_audio", "")]
         names.extend(self.ref_images)
         names.extend(self.ref_videos)
         names.extend(self.ref_video_audios)
@@ -536,6 +541,11 @@ class GenerationConfig(BaseModel):
         data = self.model_dump()
         rewritten: dict[str, Any] = {}
         for key, value in overrides.items():
+            if key.startswith("experiment."):
+                experiment = dict(rewritten.get("experiment", self.experiment))
+                experiment[key.removeprefix("experiment.")] = value
+                rewritten["experiment"] = experiment
+                continue
             target = STUDIO_FIELD_ALIASES.get(key)
             if target is not None and target not in overrides:
                 rewritten[target] = value
@@ -580,36 +590,11 @@ def config_attention(config: GenerationConfig) -> str:
 # Fields that change the produced pixels. Ordered so canonical output is stable
 # regardless of how the model happens to be declared.
 HASHED_FIELDS: tuple[str, ...] = (
-    "mode",
-    "diffusion_model",
-    "prompt",
-    "first_frame",
-    "last_frame",
-    "ref_images",
-    "ref_videos",
-    "ref_video_audios",
-    "ref_audios",
-    "ref_image_size",
-    "scheduler",
-    "sampler",
-    "aspect_ratio",
-    "steps",
-    "seed",
-    "mp",
-    "duration_s",
-    "turbo",
-    "turbo_lora",
-    "turbo_lora_strength",
-    "interp",
-    "upscaler",
-    "clean_vram",
-    "cache_enabled",
-    "cache",
-    "cache_preset",
-    "sol_attn",
-    "sol_preset",
-    "widgets",
+    "preset", "experiment", "width", "height", "frames", "prompt", "seed",
+    "first_frame", "last_frame", "ref_images", "ref_videos", "ref_video_audios", "ref_audios",
+    "ref_image_size", "widgets",
 )
+
 
 RECIPE_EXCLUDED: frozenset[str] = frozenset({"seed"})
 
@@ -641,10 +626,11 @@ def canonical_form(
             {
                 key: value
                 for key, value in cfg.widgets.items()
-                if key not in skipped_widgets
-                and (key != "attn" or value not in {"sol", "off"})
+                if key not in skipped_widgets and key in {"guides", "final_audio"}
             }
             if field == "widgets"
+            else {key: value for key, value in cfg.experiment.items() if f"experiment.{key}" not in skip}
+            if field == "experiment"
             else getattr(cfg, field)
         )
         for field in HASHED_FIELDS
@@ -837,26 +823,5 @@ def lora_stem(turbo_lora: str) -> str:
 
 def derive_label(seq: int, cfg: GenerationConfig) -> str:
     """Human-facing display string. Never used as identity."""
-    parts = [model_stem(cfg.diffusion_model)]
-    parts.append(cfg.cache if cfg.cache_enabled else "nocache")
-    if cfg.cache_enabled and cfg.cache_preset != "custom":
-        parts[-1] = f"{cfg.cache}/{cfg.cache_preset[:3]}"
-    attention = config_attention(cfg)
-    if attention == "sol":
-        parts.append(f"sol/{cfg.sol_preset[:3]}")
-    elif attention == "comfy_kitchen":
-        parts.append("kitchen")
-    else:
-        parts.append("nosol")
-    parts.append(f"{cfg.effective_steps}st")
-    if cfg.turbo:
-        parts.append(f"turbo/{lora_stem(cfg.turbo_lora_file)}")
-        if cfg.turbo_lora_strength != DEFAULT_TURBO_STRENGTH:
-            parts[-1] += f"@{cfg.turbo_lora_strength:g}"
-    if cfg.interp != "off":
-        parts.append(cfg.interp)
-    if cfg.upscaler:
-        parts.append("up")
-    if cfg.mode != "flf2v":
-        parts.insert(0, cfg.mode)
-    return f"#{seq} " + " · ".join(parts)
+    recipe = f"{cfg.preset} + custom" if cfg.experiment else cfg.preset
+    return f"#{seq} {recipe} · {cfg.width}×{cfg.height} · {cfg.frames} frames"

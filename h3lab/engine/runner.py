@@ -22,7 +22,7 @@ from h3lab.comfy.graph import WorkflowError, load_workflow
 from h3lab.comfy.progress import Preview, ProgressTracker
 from h3lab.comfy.schema import SchemaCache
 from h3lab.comfy.studio import StudioContractError, prepare_prompt
-from h3lab.domain.config import GenerationConfig, spectrum_cache_compatible
+from h3lab.domain.config import GenerationConfig
 from h3lab.domain.run import Artifact, Run, RunMetrics
 from h3lab.engine import artifacts
 from h3lab.engine.events import EventBus
@@ -134,24 +134,6 @@ def preflight(
 ) -> list[str]:
     """Check only files the consumer must transport into ComfyUI."""
     problems: list[str] = []
-    if not config.diffusion_model.strip():
-        problems.append("no diffusion model selected")
-    if (
-        config.cache_active
-        and config.cache == "spectrum"
-        and not spectrum_cache_compatible(config.sampler, config.widgets)
-    ):
-        er_sde = bool(config.widgets.get("er_sde", False))
-        if er_sde:
-            problems.append(
-                "Spectrum cache cannot run with stochastic ER-SDE on this stack; "
-                "disable Spectrum or use deterministic ER-SDE"
-            )
-        else:
-            problems.append(
-                f"Spectrum cache does not support sampler {config.sampler!r}; "
-                "disable Spectrum or choose euler/res_multistep"
-            )
     input_dir = settings.comfy_input_dir
     repo_inputs = REPO_ROOT / "inputs"
     if config.media_files and (input_dir.is_dir() or repo_inputs.is_dir()):
@@ -389,7 +371,7 @@ class Runner:
             self._stop.wait(PREPARE_RETRY_S)
             return
         prompt = prepared.prompt
-        editor = to_editor_workflow(workflow, prompt, provenance=run_provenance(run))
+        editor = to_editor_workflow(prepared.editor_workflow, prompt, provenance=run_provenance(run))
 
         if self._clear_cache:
             # Without this, ComfyUI can replay the previous identical graph's outputs in
@@ -409,6 +391,7 @@ class Runner:
             outcome = self._client.execute(
                 prompt,
                 on_live=self._progress_for(run.id),
+                on_queued=lambda prompt_id: self._runs.set_prompt_id(run.id, prompt_id),
                 workflow=editor,
                 tracker=tracker,
             )

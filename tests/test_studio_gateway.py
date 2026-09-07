@@ -9,7 +9,7 @@ from h3lab.comfy.client import ComfyClient, ComfyError
 from h3lab.comfy.studio import (
     STUDIO_CONTRACT_VERSION,
     StudioContractError,
-    find_studio_node,
+    studio_session_prompt,
 )
 
 UI_SCHEMA = {
@@ -59,12 +59,12 @@ def response(status: int, payload=None, *, content=b"", content_type="applicatio
 def test_manifest_get_preserves_additive_fields():
     def handler(request):
         assert request.method == "GET"
-        assert request.url.path == "/minimax_h3_studio/v1/manifest"
+        assert request.url.path == "/h3_clean/v1/manifest"
         return response(200, {
             "contract_version": 1,
             "component_version": "1.1.0",
-            "module_url": "/minimax_h3_studio/v1/component.js",
-            "prepare_url": "/minimax_h3_studio/v1/prepare",
+            "module_url": "/h3_clean/v1/component.js",
+            "prepare_url": "/h3_clean/v1/prepare",
             "input_options": {"scheduler": ["simple"]},
             "ui_schema": UI_SCHEMA,
             "template_catalog": TEMPLATE_CATALOG,
@@ -81,7 +81,7 @@ def test_component_returns_exact_bytes_and_content_type():
     source = b"export const answer = 42;\n"
 
     def handler(request):
-        assert request.url.path == "/minimax_h3_studio/v1/component.js"
+        assert request.url.path == "/h3_clean/v1/component.js"
         return response(
             200,
             content=source,
@@ -98,7 +98,7 @@ def test_template_runtime_returns_exact_bytes_and_content_type():
     source = b"export const runtime = true;\n"
 
     def handler(request):
-        assert request.url.path == "/minimax_h3_studio/v1/template_runtime.mjs"
+        assert request.url.path == "/h3_clean/v1/template_runtime.mjs"
         return response(
             200,
             content=source,
@@ -116,7 +116,7 @@ def test_prepare_posts_exact_envelope_and_validates_response():
     inputs = {"attn": "off"}
 
     def handler(request):
-        assert request.url.path == "/minimax_h3_studio/v1/prepare"
+        assert request.url.path == "/h3_clean/v1/prepare"
         assert json.loads(request.content) == {
             "contract_version": STUDIO_CONTRACT_VERSION,
             "workflow": workflow,
@@ -181,7 +181,7 @@ def test_unknown_major_is_definitive():
         {"version": 2, "specialized": [], "internal": [], "sections": []},
     ],
 )
-def test_manifest_requires_a_supported_ui_schema(ui_schema):
+def test_manifest_does_not_require_legacy_ui_schema(ui_schema):
     payload = {
         "contract_version": 1,
         "module_url": "/component.js",
@@ -191,9 +191,7 @@ def test_manifest_requires_a_supported_ui_schema(ui_schema):
         payload["ui_schema"] = ui_schema
 
     with client_for(lambda _request: response(200, payload)) as client:
-        with pytest.raises(StudioContractError, match="UI schema") as caught:
-            client.studio_manifest()
-    assert caught.value.code == "contract_unavailable"
+        assert client.studio_manifest()["contract_version"] == 1
 
 
 @pytest.mark.parametrize(
@@ -256,16 +254,13 @@ def test_transport_failure_remains_retryable_comfy_error():
             client.studio_manifest()
 
 
-def test_find_studio_node_requires_exactly_one():
-    workflow = {"7": {"class_type": "MiniMaxH3Studio", "inputs": {"prompt": "x"}}}
-    node_id, studio = find_studio_node(workflow)
-    assert node_id == "7"
-    assert studio["inputs"]["prompt"] == "x"
-    assert find_studio_node({}, required=False) is None
-    with pytest.raises(StudioContractError, match="no MiniMaxH3Studio"):
-        find_studio_node({})
-    with pytest.raises(StudioContractError, match="2 MiniMaxH3Studio"):
-        find_studio_node({"1": workflow["7"], "2": workflow["7"]})
+def test_session_accepts_native_graph_without_a_wrapper():
+    from h3lab.comfy.schema import Schemas
+    from tests.clean_workflow import SCHEMAS, workflow
+
+    prompt = studio_session_prompt(workflow(), schemas=Schemas(SCHEMAS))
+    assert prompt["110"]["class_type"] == "MiniMaxH3ReferenceToVideo"
+    assert all(node["class_type"] != "H3CleanWorkflow" for node in prompt.values())
 
 
 @pytest.mark.parametrize(

@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from h3lab.domain.config import GenerationConfig
+from h3lab.api.h3_inputs import H3Inputs
 from h3lab.domain.rating import CRITERIA, STARS_MAX, STARS_MIN
 from h3lab.domain.run import RunStatus
 from h3lab.domain.scoring import ScoreWeights
@@ -17,7 +17,7 @@ from h3lab.storage.runs import RunFilter, SortKey
 class EnqueueRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    config: GenerationConfig
+    config: H3Inputs
     count: Annotated[int, Field(ge=1, le=64)] = 1
 
 
@@ -30,7 +30,7 @@ class RerunRequest(BaseModel):
 class DryRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    config: GenerationConfig
+    config: H3Inputs
 
 
 class PatchRunRequest(BaseModel):
@@ -74,7 +74,7 @@ class PresetRequest(BaseModel):
 
     name: str
     run_id: str | None = None
-    config: GenerationConfig | None = None
+    config: H3Inputs | None = None
     replace: bool = False
 
 
@@ -88,7 +88,7 @@ class SweepAxisRequest(BaseModel):
 class SweepRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    base: GenerationConfig
+    base: H3Inputs
     axes: list[SweepAxisRequest] = Field(default_factory=list)
     repeats: Annotated[int, Field(ge=1, le=32)] = 1
     seed_strategy: SeedStrategy = "fixed"
@@ -96,7 +96,7 @@ class SweepRequest(BaseModel):
 
     def to_spec(self) -> SweepSpec:
         return SweepSpec(
-            base=self.base,
+            base=self.base.to_config(),
             axes=tuple(
                 SweepAxis(field=axis.field, values=tuple(axis.values)) for axis in self.axes
             ),

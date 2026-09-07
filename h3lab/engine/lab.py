@@ -245,18 +245,7 @@ class Lab:
         return self.catalog_cache.get(refresh=refresh)
 
     def studio_session(self, mode: GenMode) -> dict[str, Any]:
-        from h3lab.comfy.form import studio_bindings
-
-        workflow = self.workflows.get(mode)
-        prompt = studio_session_prompt(workflow, self.runner.schemas())
-        manifest = self.client.studio_manifest()
-        return {
-            **manifest,
-            "module_url": "/api/studio/component.js",
-            "prepare_url": "/api/studio/prepare",
-            "workflow": prompt,
-            "bindings": studio_bindings(),
-        }
+        return self.client.studio_manifest()
 
     def status(self) -> LabStatus:
         counts = self.runs.status_counts()
@@ -476,14 +465,14 @@ class Lab:
         """
         run = self.runs.require(run_id)
         workflow = self.workflows.get(run.config.mode)
-        prompt = prepare_prompt(
+        prepared = prepare_prompt(
             self.client,
             workflow,
             run.config,
             schemas=self.runner.schemas(),
             output_tag=run.id,
-        ).prompt
-        return to_editor_workflow(workflow, prompt, provenance=run_provenance(run))
+        )
+        return to_editor_workflow(prepared.editor_workflow, prepared.prompt, provenance=run_provenance(run))
 
     def preview(self, run_id: str) -> Preview | None:
         """The frame ComfyUI is drawing for a run that is rendering right now."""

@@ -24,7 +24,6 @@ import {
   type Draft,
 } from "@/lib/config"
 import { plural, shortHash } from "@/lib/format"
-import { BenchmarkControls } from "./benchmark-controls"
 import { QueuePanel } from "./queue-panel"
 import { StudioHost } from "./studio-host"
 import { SweepBuilder } from "./sweep-builder"
@@ -166,12 +165,6 @@ export function LabPage() {
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="min-w-0 space-y-4">
           <StudioHost draft={draft} onChange={patch} />
-          <BenchmarkControls
-            draft={draft}
-            meta={meta.data}
-            catalog={catalog.data}
-            onChange={patch}
-          />
           <SweepBuilder
             base={config}
             meta={meta.data}

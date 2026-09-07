@@ -87,7 +87,6 @@ def _checks(settings: Settings) -> Report:
     from h3lab.comfy.client import ComfyClient, ComfyError
     from h3lab.comfy.graph import load_workflow
     from h3lab.comfy.schema import Schemas
-    from h3lab.comfy.studio import find_studio_node
     from h3lab.comfy.workflow import executable
     from h3lab.domain.config import GEN_MODES
     from h3lab.engine import artifacts
@@ -132,13 +131,14 @@ def _checks(settings: Settings) -> Report:
                 template,
                 widget_names=schemas.widget_names,
             )
-            studio_id, _studio = find_studio_node(prompt)
+            if not any(node["class_type"] == "MiniMaxH3ReferenceToVideo" for node in prompt.values()):
+                raise ValueError("The expanded H3 workflow has no reference conditioning node")
             record(
                 f"workflow {mode}",
                 True,
                 f"{len(prompt)} nodes",
             )
-            record(f"studio {mode}", True, f"node {studio_id}")
+            record(f"studio {mode}", True, "expanded native graph")
         except Exception as exc:  # noqa: BLE001 - a broken template is the answer, not a crash
             record(f"workflow {mode}", False, f"{type(exc).__name__}: {exc}")
             record(f"studio {mode}", False, f"{type(exc).__name__}: {exc}")

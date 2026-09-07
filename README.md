@@ -3,6 +3,15 @@
 A benchmarking lab for MiniMax H3 video generation. Queue runs, judge them, and find out
 which settings actually earn their render time.
 
+Generation uses the native H3 clean workflow and `/h3_clean/v1/prepare`. Speed,
+Quality, Quality PECE, and Motion are starting recipes: the Lab can override weights,
+samplers, schedulers, steps, resolution, ordered LoRAs and strengths, encoders,
+VAEs, refinement, and individual native node inputs. Sweep these settings with
+`experiment.*` axes. Each run stores its experiment settings and submitted graph.
+References support images, videos, video audio, and audio; timed guides support
+image, video, and audio at a frame index. Defaults are 1344 × 768, 175 frames at
+24 fps; dimensions and frame count remain editable.
+
 The old version of this project could run a config and list the result. This one is built
 around the harder question: *of everything I have generated, what should I generate next?*
 
@@ -38,7 +47,13 @@ columns, and UI labels all use the same terms.
 - Node 20+ (only to build the front end)
 - A running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) with the MiniMax H3
   models (`fl2va` for FLF2V/T2V, `ref2va` for R2V)
-- `ComfyUI-MiniMax-H3-Studio` with Studio contract major version 1
+- Install this repository's `comfyui-h3-clean` folder under ComfyUI's `custom_nodes`.
+  Copy its `workflows/` contents into ComfyUI's `user/default/workflows/`, keeping
+  the `h3_presets/` subfolder, then restart ComfyUI. Preserve your saved graph edits
+  when updating. Confirm `/h3_clean/v1/manifest` reports component version `2.0.0`.
+  The clean workflow requires native H3 nodes, KJNodes, Easy-Use, the semantic
+  bridge, H3 SLA, and RES4LYF. It has no MiniMaxH3Turbo or Studio node dependency.
+  Motion additionally requires ComfyUI-MAINodes.
 - `ffmpeg` / `ffprobe` on `PATH` — optional; without them you get videos but no poster
   frames or filmstrips
 
@@ -57,13 +72,16 @@ uv run h3lab serve --open
 
 Then open http://127.0.0.1:8787/.
 
+On Windows, `./start-lab.ps1` also finds the installed WinGet FFmpeg package for
+video metadata, posters, and filmstrips.
+
 Before the first run, ask what is broken:
 
 ```bash
 uv run h3lab check
 ```
 
-It checks ComfyUI, the installed Studio contract, every workflow template, installed node
+It checks ComfyUI, the installed workflow contract, every workflow template, installed node
 schemas, the fallback model folder, ffmpeg, ffprobe, and the built front end. Exit code is
 non-zero only when a fatal requirement is missing; optional fallback paths remain visible in
 the report without blocking the app.
@@ -450,3 +468,7 @@ result back for a person to read.
 
 `domain/` knows nothing about the database, ComfyUI, or HTTP. That is what makes the
 scoring and comparison logic testable without a GPU in the room.
+
+## Official workflow
+
+The shared Music Suite / H3 Lab workflows are expanded native ComfyUI graphs. Open `minimax_h3_clean.json` for Quality, or `h3_presets/speed.json`, `h3_presets/quality_pece.json`, and `h3_presets/motion.json` for the other presets, under `C:/Users/ricar/ComfyUI/ComfyUI_windows_portable/ComfyUI/user/default/workflows/`. Edit the nodes and save the same file: `/h3_clean/v1/prepare` reads it on every request, without a code change or restart. The API still supplies shot inputs (prompt, dimensions, frames, seed, references, guides, and output names); the saved graph owns model and sampling choices. Preserve the nodes' `h3_role` and `h3_inputs` properties when replacing input/output nodes. Guide images are resized by the native guide node; the H3 model pads guide latents to its patch grid while preserving the target size.

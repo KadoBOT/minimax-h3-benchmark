@@ -32,7 +32,6 @@ from h3lab.domain.config import (
     BASELINE_FIRST_FRAME,
     BASELINE_REF_IMAGES,
     DEFAULT_TURBO_LORA,
-    DEFAULT_TURBO_STRENGTH,
 )
 from h3lab.settings import Settings
 
@@ -209,9 +208,10 @@ def test_execute_forwards_the_workflow_it_was_given(comfy, client):
     assert state.queued[0]["extra_data"]["extra_pnginfo"]["workflow"] == workflow
 
 
-def test_a_rejected_graph_reports_which_node_and_input_failed(comfy, client):
+@pytest.mark.parametrize("status", [200, 400])
+def test_a_rejected_graph_reports_which_node_and_input_failed(comfy, client, status):
     state, _url = comfy
-    state.prompt_status = 400
+    state.prompt_status = status
     state.prompt_body = {
         "error": {"message": "Prompt outputs failed validation", "details": ""},
         "node_errors": {
@@ -264,8 +264,10 @@ def test_an_execution_error_is_raised_with_its_detail(comfy, client):
             ],
         }
     }
+    queued = []
     with pytest.raises(PromptFailed) as caught:
-        client.execute({"1": {"class_type": "X", "inputs": {}}}, track=False)
+        client.execute({"1": {"class_type": "X", "inputs": {}}}, track=False, on_queued=queued.append)
+    assert queued == ["p1"]
     assert "CUDA out of memory" in str(caught.value)
     assert "node 10" in str(caught.value)
 
@@ -477,7 +479,7 @@ def test_the_catalog_falls_back_when_comfy_is_offline(tmp_path: Path):
     assert catalog.diffusion_models_source == "unavailable"
     assert catalog.diffusion_models == []
     assert catalog.default_diffusion_model == ""
-    assert catalog.defaults["diffusion_model"] == ""
+    assert "diffusion_model" not in catalog.defaults
     assert "nvfp4" not in str(catalog.model_dump()).lower()
     assert catalog.reference_limits == {"images": 9, "videos": 3, "audios": 3}
 
@@ -504,7 +506,7 @@ def test_an_offline_catalog_reads_the_minimax_h3_subfolder(tmp_path: Path):
         "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors",
     ]
     assert catalog.default_diffusion_model in catalog.diffusion_models
-    assert catalog.defaults["diffusion_model"] == catalog.default_diffusion_model
+    assert "diffusion_model" not in catalog.defaults
 
 
 def test_match_installed_keeps_a_folder_prefixed_combo_value():
@@ -576,7 +578,7 @@ def test_the_catalog_takes_unet_names_from_the_running_server(comfy, tmp_path: P
     assert catalog.default_diffusion_model == (
         "minimax-h3/MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors"
     )
-    assert catalog.defaults["diffusion_model"] == catalog.default_diffusion_model
+    assert "diffusion_model" not in catalog.defaults
 
 
 def test_the_local_minimax_h3_folder_wins_over_stale_live_entries(comfy, tmp_path: Path):
@@ -657,8 +659,8 @@ def test_the_catalog_prefers_the_live_lists_and_scans_input_media(comfy, tmp_pat
     assert catalog.images == ["shot.png"]
     assert catalog.videos == ["clip.mp4"]
     assert catalog.audios == ["voice.wav"]
-    assert catalog.defaults["first_frame"] == "shot.png"
-    assert catalog.defaults["mode"] == "flf2v"
+    assert catalog.defaults["first_frame"] == ""
+    assert catalog.defaults["preset"] == "speed"
 
 
 def test_the_catalog_defaults_to_text_mode_with_no_input_images(comfy, tmp_path: Path):
@@ -671,7 +673,7 @@ def test_the_catalog_defaults_to_text_mode_with_no_input_images(comfy, tmp_path:
     )
     (tmp_path / "empty").mkdir()
     catalog = build_catalog(settings)
-    assert catalog.defaults["mode"] == "t2v"
+    assert catalog.defaults["preset"] == "speed"
     assert catalog.defaults["first_frame"] == ""
     assert catalog.default_first_frame == ""
     assert catalog.default_ref_images == []
@@ -696,7 +698,7 @@ def test_the_baseline_frame_wins_over_whatever_sorts_first(tmp_path: Path):
     """Alphabetical order picked an arbitrary still, so every new run started with a chore."""
     catalog = _catalog_over(tmp_path, ["aaa-first-alphabetically.png", BASELINE_FIRST_FRAME])
     assert catalog.default_first_frame == BASELINE_FIRST_FRAME
-    assert catalog.defaults["first_frame"] == BASELINE_FIRST_FRAME
+    assert catalog.defaults["first_frame"] == ""
 
 
 def test_a_missing_baseline_frame_falls_back_to_something_that_exists(tmp_path: Path):
@@ -758,8 +760,8 @@ def test_the_lora_list_comes_from_the_node_that_will_load_it(comfy, tmp_path: Pa
         "MiniMax-H3-Turbo-LoRA-8steps.safetensors",
     ]
     assert catalog.default_turbo_lora == "MiniMax-H3-Turbo-LoRA-4steps.safetensors"
-    assert catalog.defaults["turbo_lora"] == catalog.default_turbo_lora
-    assert catalog.defaults["turbo_lora_strength"] == DEFAULT_TURBO_STRENGTH
+    assert "turbo_lora" not in catalog.defaults
+    assert "turbo_lora_strength" not in catalog.defaults
     # The form should not have to parse a filename to say what a run will sample at.
     assert catalog.turbo_lora_steps == {
         "MiniMax-H3-Turbo-LoRA-4steps.safetensors": 4,

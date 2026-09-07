@@ -420,30 +420,11 @@ def build_catalog(settings: Settings, client: ComfyClient | None = None) -> Cata
     ref_images = default_ref_images(images)
 
     defaults: dict[str, Any] = {
-        "mode": "flf2v" if first_frame else "t2v",
-        "diffusion_model": chosen_model,
-        "prompt": BASELINE_PROMPT,
-        "first_frame": first_frame,
-        "last_frame": "",
-        "ref_images": ref_images,
-        "scheduler": DEFAULT_SCHEDULER,
-        "sampler": DEFAULT_SAMPLER,
-        "aspect_ratio": DEFAULT_ASPECT,
-        "steps": 20,
-        "seed": 42,
-        "mp": 0.5,
-        "duration_s": 5.0,
-        "turbo": False,
-        "turbo_lora": chosen_lora,
-        "turbo_lora_strength": DEFAULT_TURBO_STRENGTH,
-        "cache_enabled": True,
-        "cache": "spectrum",
-        "cache_preset": "moderate",
-        "sol_attn": True,
-        "sol_preset": "moderate",
-        "widgets": {
-            "guides": json.dumps(list(BASELINE_GUIDES), separators=(",", ":")),
-        },
+        "preset": "speed", "width": 1344, "height": 768, "frames": 175,
+        "prompt": "A cinematic rainy neon street. Rain falls and footsteps echo.",
+        "seed": 42, "first_frame": "", "last_frame": "",
+        "ref_images": [], "ref_videos": [], "ref_video_audios": [], "ref_audios": [],
+        "widgets": {"guides": []},
     }
 
     if live is None or not live.usable:

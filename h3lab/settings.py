@@ -9,19 +9,19 @@ from typing import Any, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-DEFAULT_COMFY_URL = "https://olares.hake-skink.ts.net:8443"
+DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
 DEFAULT_PORT = 8787
 DEFAULT_HOST = "0.0.0.0"
 if os.name == "nt":
-    DEFAULT_MODELS_DIR = Path(r"E:\AI\Models\diffusion_models")
-    DEFAULT_COMFY_INPUT_DIR = Path(r"C:\Users\ricar\Documents\ComfyUI\ComfyUI\input")
+    DEFAULT_MODELS_DIR = Path(r"C:\Users\ricar\ComfyUI\ComfyUI_windows_portable\ComfyUI\models\diffusion_models")
+    DEFAULT_COMFY_INPUT_DIR = Path(r"C:\Users\ricar\ComfyUI\ComfyUI_windows_portable\ComfyUI\input")
     DEFAULT_COMFY_WORKFLOW_DIR = DEFAULT_COMFY_INPUT_DIR.parent / "user" / "default" / "workflows"
 else:
     DEFAULT_MODELS_DIR = Path.home() / "ComfyUI" / "models" / "diffusion_models"
     DEFAULT_COMFY_INPUT_DIR = Path.home() / "ComfyUI" / "input"
     DEFAULT_COMFY_WORKFLOW_DIR = Path.home() / "ComfyUI" / "user" / "default" / "workflows"
 
-UNIFIED_WORKFLOW_NAME = "minimax_h3_unified_guided_dual.json"
+UNIFIED_WORKFLOW_NAME = "minimax_h3_clean.json"
 
 _ENV_PREFIX = "H3LAB_"
 

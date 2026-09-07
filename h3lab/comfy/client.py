@@ -26,7 +26,7 @@ from h3lab.settings import DEFAULT_COMFY_URL
 LiveCallback = Callable[[dict[str, Any]], None]
 
 VIDEO_SUFFIXES = (".mp4", ".webm", ".mkv", ".mov", ".gif")
-OUTPUT_KEYS = ("videos", "gifs")
+OUTPUT_KEYS = ("videos", "gifs", "images")
 
 
 class ComfyError(RuntimeError):
@@ -393,6 +393,8 @@ class ComfyClient:
             raise PromptRejected(_validation_message(detail), detail)
 
         body = response.json() if response.content else None
+        if isinstance(body, dict) and body.get("node_errors"):
+            raise PromptRejected(_validation_message(body), body)
         if not isinstance(body, dict) or "prompt_id" not in body:
             raise ComfyError(f"unexpected /prompt response: {body}")
         return str(body["prompt_id"])
@@ -432,6 +434,7 @@ class ComfyClient:
         *,
         track: bool = True,
         on_live: LiveCallback | None = None,
+        on_queued: Callable[[str], None] | None = None,
         workflow: dict[str, Any] | None = None,
         tracker: ProgressTracker | None = None,
     ) -> Outcome:
@@ -453,6 +456,8 @@ class ComfyClient:
         if track:
             self._active_prompt = prompt_id
         try:
+            if on_queued is not None:
+                on_queued(prompt_id)
             entry = self.wait(prompt_id)
         finally:
             if self._active_prompt == prompt_id:
@@ -477,7 +482,7 @@ class ComfyClient:
             for key in OUTPUT_KEYS:
                 for item in node_output.get(key) or []:
                     name = str(item.get("filename") or "")
-                    if name.lower().endswith(VIDEO_SUFFIXES):
+                    if item.get("type", "output") == "output" and name.lower().endswith(VIDEO_SUFFIXES):
                         return (
                             name,
                             str(item.get("subfolder") or ""),

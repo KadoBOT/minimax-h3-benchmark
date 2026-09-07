@@ -7,17 +7,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from h3lab.comfy.graph import build
 from h3lab.comfy.schema import Schemas
-from h3lab.comfy.workflow import Graph, Prompt, executable
+from h3lab.comfy.experiment import apply_experiment
+from h3lab.comfy.workflow import Graph, Prompt, executable, read
 from h3lab.domain.config import DEFAULT_ASPECT, GenerationConfig
 
 STUDIO_CONTRACT_VERSION = 1
 STUDIO_UI_SCHEMA_VERSION = 1
 STUDIO_TEMPLATE_CATALOG_VERSION = 2
 STUDIO_SUPPORTED_TEMPLATE_CATALOG_VERSIONS = {1, 2}
-STUDIO_API_ROOT = "/minimax_h3_studio/v1"
-STUDIO_CLASS = "MiniMaxH3Studio"
+STUDIO_API_ROOT = "/h3_clean/v1"
 _MODE_TO_STUDIO = {"t2v": "T2V", "flf2v": "FLF2V", "r2v": "R2V"}
 _MODE_FROM_STUDIO = {value: key for key, value in _MODE_TO_STUDIO.items()}
 _INTERP_TO_STUDIO = {"off": "none", "film": "film", "rife": "rife", "gmfss": "gmfss"}
@@ -51,32 +50,6 @@ class StudioContractError(ValueError):
         self.details = dict(details or {})
 
 
-def find_studio_node(
-    workflow: Mapping[str, Any],
-    *,
-    required: bool = True,
-) -> tuple[str, Mapping[str, Any]] | None:
-    found = [
-        (str(node_id), node)
-        for node_id, node in workflow.items()
-        if isinstance(node, Mapping) and node.get("class_type") == STUDIO_CLASS
-    ]
-    if len(found) == 1:
-        return found[0]
-    if not found and not required:
-        return None
-    if not found:
-        raise StudioContractError(
-            "studio_node_missing",
-            f"workflow has no {STUDIO_CLASS} node",
-        )
-    raise StudioContractError(
-        "studio_node_ambiguous",
-        f"workflow has {len(found)} {STUDIO_CLASS} nodes",
-        {"node_ids": [node_id for node_id, _node in found]},
-    )
-
-
 def validate_manifest(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise StudioContractError(
@@ -90,24 +63,8 @@ def validate_manifest(payload: Any) -> dict[str, Any]:
             f"unsupported Studio contract version {version!r}; "
             f"expected {STUDIO_CONTRACT_VERSION}",
         )
-    for field in ("module_url", "prepare_url"):
-        if not isinstance(payload.get(field), str) or not payload[field]:
-            raise StudioContractError(
-                "contract_unavailable",
-                f"Studio manifest has no {field}",
-            )
-    ui_schema = payload.get("ui_schema")
-    if not isinstance(ui_schema, Mapping):
-        raise StudioContractError(
-            "contract_unavailable",
-            "Studio manifest has no UI schema",
-        )
-    if ui_schema.get("version") != STUDIO_UI_SCHEMA_VERSION:
-        raise StudioContractError(
-            "contract_unavailable",
-            f"unsupported Studio UI schema version {ui_schema.get('version')!r}; "
-            f"expected {STUDIO_UI_SCHEMA_VERSION}",
-        )
+    if not isinstance(payload.get("prepare_url"), str):
+        raise StudioContractError("contract_unavailable", "H3 manifest has no prepare_url")
     template_catalog = payload.get("template_catalog")
     if template_catalog is not None:
         if not isinstance(template_catalog, Mapping):
@@ -177,7 +134,6 @@ def studio_session_prompt(
 ) -> Prompt:
     """Flatten the live editor workflow using ordinary ComfyUI mode semantics."""
     prompt, _graph = executable(workflow, widget_names=schemas.widget_names)
-    find_studio_node(prompt)
     return prompt
 
 
@@ -188,49 +144,26 @@ def _studio_json(value: Any, fallback: Any) -> str:
 
 
 def studio_inputs(config: GenerationConfig) -> dict[str, Any]:
-    references = {
-        "images": list(config.ref_images),
-        "videos": list(config.ref_videos),
-        "video_audios": list(config.ref_video_audios),
-        "audios": list(config.ref_audios),
-    }
-    extras = {
-        name: _studio_json(value, []) if name == "guides" else value
-        for name, value in config.widgets.items()
-    }
-    mapped = {
-        "mode": _MODE_TO_STUDIO[config.mode],
+    guides = config.widgets.get("guides", [])
+    if isinstance(guides, str):
+        guides = json.loads(guides)
+    return {
+        "preset": config.preset,
         "prompt": config.prompt,
-        "duration": config.duration_s,
-        "aspect_ratio": config.aspect_ratio or DEFAULT_ASPECT,
-        "megapixels": config.mp,
+        "width": config.width,
+        "height": config.height,
+        "frames": config.frames,
+        "seed": config.seed,
         "ref_image_size": config.ref_image_size,
         "first_frame": config.first_frame,
         "last_frame": config.last_frame,
-        "references": json.dumps(references, separators=(",", ":")),
-        "steps": config.effective_steps,
-        "turbo": config.turbo,
-        "turbo_lora": config.turbo_lora_file or "none",
-        "turbo_lora_strength": config.turbo_lora_strength,
-        "scheduler": config.scheduler,
-        "sampler_name": config.sampler,
-        "cache": config.cache_active,
-        "upscale_ltx": False,
-        "upscale_rtx": config.upscaler,
-        "seed_mode": "fixed",
-        "seed": config.seed,
-        "interpolation": _INTERP_TO_STUDIO.get(config.interp, config.interp),
-        "clean_vram": config.clean_vram,
-        "sol_attn": config.sol_attn,
-        "guides": _studio_json(config.widgets.get("guides"), []),
+        "references": {
+            "images": list(config.ref_images), "videos": list(config.ref_videos),
+            "video_audios": list(config.ref_video_audios), "audios": list(config.ref_audios),
+        },
+        "guides": guides,
+        "final_audio": config.widgets.get("final_audio", ""),
     }
-    for name in ("seed_mode", "upscale_ltx"):
-        if name in extras:
-            mapped[name] = extras.pop(name)
-    explicit_attention = config.widgets.get("attn")
-    if explicit_attention is None:
-        extras.pop("attn", None)
-    return {**extras, **mapped}
 
 
 def _references(value: Any) -> dict[str, list[Any]]:
@@ -331,6 +264,7 @@ class PreparedPrompt:
     prompt: Prompt
     graph: Graph
     inputs: dict[str, Any]
+    editor_workflow: dict[str, Any]
 
 
 def prepare_prompt(
@@ -341,16 +275,19 @@ def prepare_prompt(
     schemas: Schemas,
     output_tag: str = "run",
 ) -> PreparedPrompt:
-    prompt, graph, _roles = build(
-        workflow,
-        config,
-        output_tag=output_tag,
-        schemas=schemas,
-    )
-    find_studio_node(prompt)
-    result = client.prepare_studio(prompt, studio_inputs(config))
-    return PreparedPrompt(
-        prompt=result["workflow"],
-        graph=graph,
-        inputs=result["inputs"],
-    )
+    inputs = {**studio_inputs(config), "filename_prefix": output_tag}
+    result = client.prepare_studio({}, inputs)
+    experiment = dict(config.experiment)
+    value = experiment.get("diffusion_model")
+    if value:
+        loader = "UnetLoaderGGUF" if value.lower().endswith(".gguf") else "UNETLoader"
+        candidates = schemas.combo(loader, "unet_name")
+        relative = value.replace("\\", "/")
+        matches = [name for name in candidates if name.replace("\\", "/").endswith("/" + relative)]
+        if not matches:
+            matches = [name for name in candidates if name.replace("\\", "/").split("/")[-1] == relative.split("/")[-1]]
+        if value not in candidates and len(matches) == 1:
+            experiment["diffusion_model"] = matches[0]
+    prompt = apply_experiment(result["workflow"], experiment)
+    return PreparedPrompt(prompt=prompt, graph=read(prompt), inputs={**result["inputs"], "experiment": experiment},
+                          editor_workflow=result.get("editor_workflow", workflow))

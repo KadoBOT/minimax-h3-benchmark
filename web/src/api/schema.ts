@@ -152,11 +152,11 @@ export interface DryRun {
 }
 
 export interface DryRunRequest {
-  config: GenerationConfig;
+  config: H3Inputs;
 }
 
 export interface EnqueueRequest {
-  config: GenerationConfig;
+  config: H3Inputs;
   count?: number;
 }
 
@@ -176,6 +176,11 @@ export interface FieldDiff {
 
 /** Everything that determines a generated video. Immutable once a run starts. */
 export interface GenerationConfig {
+  preset?: "speed" | "quality" | "quality_pece" | "motion";
+  experiment?: Record<string, unknown>;
+  width?: number;
+  height?: number;
+  frames?: number;
   mode?: "flf2v" | "t2v" | "r2v";
   diffusion_model?: string;
   prompt?: string;
@@ -213,6 +218,29 @@ export interface GraphSummary {
   classes?: string[];
   missing_links?: string[];
   files?: string[];
+}
+
+export interface Guide {
+  frame?: number;
+  image?: string;
+  video?: string;
+  audio?: string;
+}
+
+export interface H3Inputs {
+  preset?: "speed" | "quality" | "quality_pece" | "motion";
+  prompt: string;
+  width?: number;
+  height?: number;
+  frames?: number;
+  seed?: number;
+  references?: References;
+  guides?: Guide[];
+  first_frame?: string;
+  last_frame?: string;
+  ref_image_size?: "match" | "max";
+  final_audio?: string;
+  experiment?: Record<string, unknown>;
 }
 
 export interface Health {
@@ -358,7 +386,7 @@ export interface Preset {
 export interface PresetRequest {
   name: string;
   run_id?: string | null;
-  config?: GenerationConfig | null;
+  config?: H3Inputs | null;
   replace?: boolean;
 }
 
@@ -394,6 +422,13 @@ export interface RecipeGroup {
   mean_sec_per_it?: number | null;
   best_run_id?: string | null;
   run_ids?: string[];
+}
+
+export interface References {
+  images?: string[];
+  videos?: string[];
+  video_audios?: string[];
+  audios?: string[];
 }
 
 export interface RerunRequest {
@@ -465,7 +500,6 @@ export interface StarRange {
 
 export interface StudioPrepareRequest {
   contract_version?: 1;
-  workflow: Record<string, unknown>;
   inputs: Record<string, unknown>;
 }
 
@@ -491,7 +525,7 @@ export interface SweepPreviewItem {
 }
 
 export interface SweepRequest {
-  base: GenerationConfig;
+  base: H3Inputs;
   axes?: SweepAxisRequest[];
   repeats?: number;
   seed_strategy?: "fixed" | "increment" | "random";
@@ -570,10 +604,9 @@ export const API_PATHS = [
   "/api/runs/{run_id}/rerun",
   "/api/runs/{run_id}/workflow",
   "/api/status",
-  "/api/studio/component.js",
+  "/api/studio/experiment",
   "/api/studio/prepare",
   "/api/studio/session",
-  "/api/studio/template_runtime.mjs",
   "/api/sweeps",
   "/api/sweeps/preview",
   "/api/tags",

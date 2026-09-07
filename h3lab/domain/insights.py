@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from h3lab.domain.config import (
     DERIVED_FROM,
+    EXPERIMENT_FIELDS,
     FIELD_LABELS,
     STUDIO_EXTRA_FIELDS,
     TEMPLATE_AXIS_FIELD,
@@ -50,40 +51,13 @@ class AxisDef(BaseModel):
 
 
 AXES: tuple[AxisDef, ...] = (
-    AxisDef(field="diffusion_model", label="Weights", kind="categorical"),
-    AxisDef(field="cache", label="Cache", kind="categorical"),
-    AxisDef(field="cache_preset", label="Cache preset", kind="categorical"),
-    AxisDef(field="sol_attn", label="Sol-Attn", kind="boolean"),
-    AxisDef(field="sol_preset", label="Sol preset", kind="categorical"),
-    AxisDef(field="sampler", label="Sampler", kind="categorical"),
-    AxisDef(field="scheduler", label="Scheduler", kind="categorical"),
-    AxisDef(field="steps", label="Steps", kind="numeric"),
-    AxisDef(field="turbo", label="Turbo", kind="boolean"),
-    AxisDef(field="turbo_lora", label="Turbo LoRA", kind="categorical"),
-    AxisDef(field="turbo_lora_strength", label="Turbo strength", kind="numeric"),
-    AxisDef(field="interp", label="Interpolation", kind="categorical"),
-    AxisDef(field="upscaler", label="Upscaler", kind="boolean"),
-    AxisDef(field="clean_vram", label="Clean VRAM", kind="boolean"),
-    AxisDef(field="mp", label="Megapixels", kind="numeric"),
-    AxisDef(field="duration_s", label="Duration", kind="numeric"),
-    AxisDef(field="aspect_ratio", label="Aspect", kind="categorical"),
-    AxisDef(field="mode", label="Mode", kind="categorical"),
-    AxisDef(field=TEMPLATE_AXIS_FIELD, label="Template", kind="categorical"),
-    AxisDef(field="shift_audio", label="Audio shift", kind="numeric"),
-    AxisDef(field="derope", label="De-rope", kind="boolean"),
-    AxisDef(field="sla", label="SLA", kind="boolean"),
-    AxisDef(field="sla_sparsity", label="SLA sparsity", kind="numeric"),
-    AxisDef(field="sla_block_size", label="SLA block", kind="categorical"),
-    AxisDef(field="sla_dense_last_steps", label="SLA dense tail", kind="numeric"),
-    AxisDef(field="sla_protect_audio", label="SLA audio guard", kind="boolean"),
-    AxisDef(field="sla_stabilize_motion", label="SLA motion guard", kind="boolean"),
-    AxisDef(field="adaln", label="AdaLN LoRA", kind="categorical"),
-    AxisDef(field="fp16_accum", label="fp16 accum", kind="boolean"),
-    AxisDef(field="er_sde", label="ER-SDE", kind="boolean"),
-    AxisDef(field="er_sde_solver", label="ER-SDE solver", kind="categorical"),
-    AxisDef(field="er_sde_max_stage", label="ER-SDE stage", kind="numeric"),
-    AxisDef(field="er_sde_eta", label="ER-SDE eta", kind="numeric"),
-    AxisDef(field="er_sde_s_noise", label="ER-SDE s_noise", kind="numeric"),
+    AxisDef(field="preset", label="Preset", kind="categorical"),
+    AxisDef(field="width", label="Width", kind="numeric"),
+    AxisDef(field="height", label="Height", kind="numeric"),
+    AxisDef(field="frames", label="Frames", kind="numeric"),
+    *(AxisDef(field=f"experiment.{key}", label=key.replace("_", " ").title(),
+              kind="numeric" if key in {"steps", "denoise", "shift_video", "shift_audio", "ffn_chunks", "bridge_alpha"} else "categorical")
+      for key in sorted(EXPERIMENT_FIELDS)),
 )
 
 AXES_BY_FIELD: dict[str, AxisDef] = {axis.field: axis for axis in AXES}
@@ -190,6 +164,8 @@ class AxisInsight(BaseModel):
 
 
 def axis_value(cfg: GenerationConfig, axis: str) -> str | None:
+    if axis.startswith("experiment."):
+        return field_display(axis, cfg.experiment.get(axis.removeprefix("experiment."), "recipe default"))
     if axis == TEMPLATE_AXIS_FIELD:
         provenance = template_provenance(cfg)
         return provenance[1] if provenance is not None else None

@@ -23,7 +23,7 @@ def list_presets(lab: LabDep) -> list[Preset]:
 @router.post("/presets", status_code=201)
 def create_preset(lab: LabDep, body: PresetRequest) -> Preset:
     """Save a config worth returning to, taken either from a run or sent directly."""
-    return lab.save_preset(body.name, run_id=body.run_id, config=body.config, replace=body.replace)
+    return lab.save_preset(body.name, run_id=body.run_id, config=body.config.to_config() if body.config else None, replace=body.replace)
 
 
 @router.delete("/presets/{preset_id}", response_model=Ok)

@@ -1,3 +1,4 @@
+import { h3Inputs } from "@/lib/h3-inputs"
 /**
  * Every server interaction the app performs, as a hook.
  *
@@ -242,7 +243,7 @@ export function useEnqueue() {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (input: { config: GenerationConfig; count?: number }) =>
-      api.post<RunView[]>(routes.runs(), input),
+      api.post<RunView[]>(routes.runs(), { ...input, config: h3Inputs(input.config) }),
     onSuccess: (created) => {
       invalidateRunWorld(client)
       const first = created[0]
@@ -256,7 +257,7 @@ export function useEnqueue() {
 
 export function useDryRun() {
   return useMutation({
-    mutationFn: (config: GenerationConfig) => api.post<DryRun>(routes.dryRun(), { config }),
+    mutationFn: (config: GenerationConfig) => api.post<DryRun>(routes.dryRun(), { config: h3Inputs(config) }),
     onError: (error) => complain(error, "could not check that config"),
   })
 }
@@ -410,7 +411,7 @@ export function useSavePreset() {
       run_id?: string
       config?: GenerationConfig
       replace?: boolean
-    }) => api.post<Preset>(routes.presets(), input),
+    }) => api.post<Preset>(routes.presets(), { ...input, config: input.config ? h3Inputs(input.config) : undefined }),
     onSuccess: (preset) => {
       void client.invalidateQueries({ queryKey: keys.presets })
       toast.success(`Saved “${preset.name}”`)

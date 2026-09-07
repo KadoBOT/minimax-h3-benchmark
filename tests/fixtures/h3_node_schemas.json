@@ -1,0 +1,3450 @@
+{
+  "BasicGuider": {
+    "input": {
+      "required": {
+        "model": [
+          "MODEL",
+          {}
+        ],
+        "conditioning": [
+          "CONDITIONING",
+          {}
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "model",
+        "conditioning"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "GUIDER"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "GUIDER"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "BasicGuider",
+    "display_name": "Basic Guider",
+    "description": "",
+    "python_module": "comfy_extras.nodes_custom_sampler",
+    "category": "model/sampling/guiders",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": null,
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "BasicScheduler": {
+    "input": {
+      "required": {
+        "model": [
+          "MODEL",
+          {}
+        ],
+        "scheduler": [
+          "COMBO",
+          {
+            "multiselect": false,
+            "options": [
+              "simple",
+              "sgm_uniform",
+              "karras",
+              "exponential",
+              "ddim_uniform",
+              "beta",
+              "normal",
+              "linear_quadratic",
+              "kl_optimal",
+              "bong_tangent",
+              "beta57"
+            ]
+          }
+        ],
+        "steps": [
+          "INT",
+          {
+            "default": 20,
+            "min": 1,
+            "max": 10000
+          }
+        ],
+        "denoise": [
+          "FLOAT",
+          {
+            "default": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.01
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "model",
+        "scheduler",
+        "steps",
+        "denoise"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "SIGMAS"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "SIGMAS"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "BasicScheduler",
+    "display_name": null,
+    "description": "",
+    "python_module": "comfy_extras.nodes_custom_sampler",
+    "category": "model/sampling/schedulers",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": null,
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "BlockSparseAttention": {
+    "input": {
+      "required": {
+        "model": [
+          "MODEL",
+          {}
+        ],
+        "selection": [
+          "COMFY_DYNAMICCOMBO_V3",
+          {
+            "tooltip": "How exact key blocks are chosen. Sol-Attn: per head/block adaptive threshold. top-k (SLA): fixed keep_percent everywhere, recommended only with trained weights. VSA (FastVideo): FastH3-VSA's cube tiling and coarse branch, requires weights trained for it.",
+            "options": [
+              {
+                "key": "Sol-Attn (adaptive tau)",
+                "inputs": {
+                  "required": {
+                    "tau": [
+                      "FLOAT",
+                      {
+                        "tooltip": "Threshold in score-distribution sigmas. Higher is sparser: 1.0 keeps ~16% of key blocks exact, 1.5 ~7%, 2.0 ~2.7%.",
+                        "default": 1.3,
+                        "min": 0.0,
+                        "max": 4.0,
+                        "step": 0.05
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "key": "top-k (SLA)",
+                "inputs": {
+                  "required": {
+                    "keep_percent": [
+                      "FLOAT",
+                      {
+                        "tooltip": "Percent of key blocks each query block keeps exactly (sinks and the diagonal ride on top). The selection SLA-style LoRAs are distilled against; without such a LoRA higher is closer to dense.",
+                        "default": 10.0,
+                        "min": 0.5,
+                        "max": 95.0,
+                        "step": 0.5
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "key": "VSA (FastVideo)",
+                "inputs": {
+                  "required": {
+                    "keep_percent": [
+                      "FLOAT",
+                      {
+                        "tooltip": "Percent of video cubes each query cube keeps; FastH3-VSA checkpoints are trained at 10. Uses the model's to_gate_compress layers for the coarse branch when present.",
+                        "default": 10.0,
+                        "min": 0.5,
+                        "max": 95.0,
+                        "step": 0.5
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "start_percent": [
+          "FLOAT",
+          {
+            "tooltip": "Dense before this point of the schedule.",
+            "default": 0.2,
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.01
+          }
+        ],
+        "end_percent": [
+          "FLOAT",
+          {
+            "tooltip": "Dense after this point of the schedule.",
+            "default": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.01
+          }
+        ],
+        "dense_blocks": [
+          "STRING",
+          {
+            "tooltip": "Transformer blocks that always run dense, e.g. '0, 1, 47-49'.",
+            "advanced": true,
+            "default": "",
+            "multiline": false
+          }
+        ],
+        "min_tokens": [
+          "INT",
+          {
+            "tooltip": "Sequences shorter than this stay dense.",
+            "advanced": true,
+            "default": 12288,
+            "min": 0,
+            "max": 1048576,
+            "step": 512
+          }
+        ],
+        "extra_tokens": [
+          "INT",
+          {
+            "tooltip": "Extra top-scoring tokens each query block attends beyond its selected blocks. Closer to dense for more attention time; 256 recommended, 0 disables. Ignored for VSA.",
+            "advanced": true,
+            "default": 256,
+            "min": 0,
+            "max": 256,
+            "step": 64
+          }
+        ],
+        "sink_conditioning": [
+          "COMBO",
+          {
+            "tooltip": "MiniMax-H3 only. exact_kv: every query attends the packed text/audio/reference rows exactly (~3% cost). exact_kv_and_rows: additionally runs the target-audio query rows dense (keeps generated audio intact).",
+            "advanced": true,
+            "default": "exact_kv_and_rows",
+            "multiselect": false,
+            "options": [
+              "exact_kv",
+              "exact_kv_and_rows",
+              "off"
+            ]
+          }
+        ],
+        "verbose": [
+          "BOOLEAN",
+          {
+            "advanced": true,
+            "default": false
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "model",
+        "selection",
+        "start_percent",
+        "end_percent",
+        "dense_blocks",
+        "min_tokens",
+        "extra_tokens",
+        "sink_conditioning",
+        "verbose"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "MODEL"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "MODEL"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "BlockSparseAttention",
+    "display_name": "Block Sparse Attention",
+    "description": "Block-sparse attention through comfy_kitchen: each query block attends a selected subset of key blocks exactly, reducing attention compute. The relative speed gain grows with sequence length since short sequences are usually faster dense. Outside the active schedule, dense_blocks and under min_tokens, the model uses the active dense model attention backend.",
+    "python_module": "comfy_extras.nodes_sparse_attention",
+    "category": "advanced/model",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": true,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": null,
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "CLIPLoader": {
+    "input": {
+      "required": {
+        "clip_name": [
+          [
+            "previous_install\\ltx-2.5\\gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+            "previous_install\\minimax-music3\\minimax_music3_text_encoder_pruned_int8_convrot.safetensors",
+            "previous_install\\qwen_3_4b_fp8_mixed.safetensors",
+            "previous_install\\text_encoders\\qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+          ]
+        ],
+        "type": [
+          [
+            "stable_diffusion",
+            "stable_cascade",
+            "sd3",
+            "stable_audio",
+            "mochi",
+            "ltxv",
+            "pixart",
+            "cosmos",
+            "lumina2",
+            "wan",
+            "hidream",
+            "chroma",
+            "ace",
+            "omnigen2",
+            "qwen_image",
+            "hunyuan_image",
+            "flux2",
+            "ovis",
+            "longcat_image",
+            "cogvideox",
+            "lens",
+            "pixeldit",
+            "ideogram4",
+            "boogu",
+            "krea2",
+            "joyimage",
+            "mage",
+            "minimax"
+          ]
+        ]
+      },
+      "optional": {
+        "device": [
+          [
+            "default",
+            "cpu"
+          ],
+          {
+            "advanced": true
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "clip_name",
+        "type"
+      ],
+      "optional": [
+        "device"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "CLIP"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "CLIP"
+    ],
+    "name": "CLIPLoader",
+    "display_name": "Load CLIP",
+    "description": "Recipes:\nsd: clip-l\nstable cascade: clip-g\nsd3: t5 xxl / clip-g / clip-l\nstable audio: t5 base\nmochi: t5 xxl\ncogvideox: t5 xxl (226-token padding)\ncosmos: old t5 xxl\nlumina2: gemma 2 2B\nwan: umt5 xxl\nhidream: llama-3.1 (Recommend) or t5\nomnigen2: qwen vl 2.5 3B\njoyimage: qwen3-vl 8B\nlens: gpt-oss-20b\npixeldit: gemma 2 2B elm\nminimax: MiniMax H3 Qwen3-VL or Music3 Qwen/RVQ",
+    "python_module": "nodes",
+    "category": "model/loaders",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "CreateVideo": {
+    "input": {
+      "required": {
+        "images": [
+          "IMAGE",
+          {
+            "tooltip": "The images to create a video from."
+          }
+        ],
+        "fps": [
+          "FLOAT",
+          {
+            "default": 30.0,
+            "min": 1.0,
+            "max": 120.0,
+            "step": 1.0
+          }
+        ]
+      },
+      "optional": {
+        "audio": [
+          "AUDIO",
+          {
+            "tooltip": "The audio to add to the video."
+          }
+        ],
+        "bit_depth": [
+          "COMBO",
+          {
+            "tooltip": "Auto uses 8-bit for sRGB and 10-bit for HDR. Explicit 8-bit and 10-bit choices are independent of colorspace.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+              "auto",
+              8,
+              10
+            ]
+          }
+        ],
+        "color_space": [
+          "COMBO",
+          {
+            "tooltip": "Colorspace of the input images. HDR selects BT.2020/HLG and HDR PQ selects BT.2020/PQ.",
+            "default": "sRGB",
+            "multiselect": false,
+            "options": [
+              "sRGB",
+              "HDR",
+              "HDR PQ"
+            ]
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "images",
+        "fps"
+      ],
+      "optional": [
+        "audio",
+        "bit_depth",
+        "color_space"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "VIDEO"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "VIDEO"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "CreateVideo",
+    "display_name": "Create Video",
+    "description": "Create a video from images.",
+    "python_module": "comfy_extras.nodes_video",
+    "category": "video",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": [
+      "images to video"
+    ],
+    "essentials_category": "Video Tools",
+    "has_intermediate_output": false
+  },
+  "GetVideoComponents": {
+    "input": {
+      "required": {
+        "video": [
+          "VIDEO",
+          {
+            "tooltip": "The video to extract components from."
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "video"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "IMAGE",
+      "AUDIO",
+      "FLOAT",
+      "COMBO",
+      "COMBO"
+    ],
+    "output_is_list": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "output_name": [
+      "images",
+      "audio",
+      "fps",
+      "bit_depth",
+      "color_space"
+    ],
+    "output_tooltips": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "GetVideoComponents",
+    "display_name": "Get Video Components",
+    "description": "Extracts video frames, audio, frame rate, bit depth, and color space.",
+    "python_module": "comfy_extras.nodes_video",
+    "category": "video",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": [
+      "extract frames",
+      "split video",
+      "video to images",
+      "demux"
+    ],
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "H3AudioRecover": {
+    "input": {
+      "required": {
+        "audio": [
+          "AUDIO"
+        ],
+        "hold_map": [
+          "STRING",
+          {
+            "default": ""
+          }
+        ],
+        "fps": [
+          "INT",
+          {
+            "default": 24,
+            "min": 1,
+            "max": 120
+          }
+        ]
+      },
+      "optional": {
+        "reference": [
+          "AUDIO",
+          {
+            "tooltip": "baseline clip audio (already real-time)"
+          }
+        ],
+        "reference_mix": [
+          "FLOAT",
+          {
+            "default": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.05,
+            "tooltip": "1 = the pass-1 reference track intact (default: regenerated audio quality varies, especially with turbo passes), 0 = regenerated foley only (leaner, one performance). Mid values blend two takes and are happiest near the ends"
+          }
+        ],
+        "audio_source": [
+          [
+            "custom (use reference_mix)",
+            "keep the original performance (safe default)",
+            "use pass 2's foley - ONLY IF the audio rows were seeded",
+            "blend, favour the original",
+            "blend, favour pass 2"
+          ],
+          {
+            "default": "custom (use reference_mix)",
+            "tooltip": "plain-language presets; anything but 'custom' overrides reference_mix. WHICH ONE IS RIGHT DEPENDS ON WHETHER PASS 2's AUDIO ROWS WERE SEEDED (H3 Audio Smear -> H3 V2V Init audio_latent). Unseeded, pass 2 invents speech at natural rate and this node compresses it, so held regions come back rushed - keep the original. Seeded, pass 2 really did perform slowly, so the retime is valid and its foley is scored for the NEW motion"
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "audio",
+        "hold_map",
+        "fps"
+      ],
+      "optional": [
+        "reference",
+        "reference_mix",
+        "audio_source"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "AUDIO"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "AUDIO"
+    ],
+    "name": "H3AudioRecover",
+    "display_name": "H3 Audio Recover (hold-map atempo, pitch kept)",
+    "description": "Retimes the regenerated clip's own audio back to the original clock, using the same hold map as the video. Each hold segment is compressed with a phase vocoder, so pitch is preserved while duration shrinks. Wire audio from VAEDecodeAudio of the regenerated latent and hold_map from the same H3 Time Smear that built the init; the result lines up with H3 Exact Recover's video frame for frame. fps is the video frame rate the holds count in.\n\nThickness dial: the regenerated foley is scored for the slowed performance, so it comes back leaner than a native-speed mix (often a more realistic feel). Wire the baseline clip's audio into reference and raise reference_mix to blend its denser full-speed track back in: 0 keeps the lean regenerated foley, 1 is the baseline track alone. Note: with an adaptive hold map, audio in unheld spans passes through untouched, so dialog outside the bursts is unaffected either way.",
+    "python_module": "custom_nodes.ComfyUI-MAINodes",
+    "category": "audio/minimax/motion",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "H3AudioSmear": {
+    "input": {
+      "required": {
+        "audio": [
+          "AUDIO",
+          {
+            "tooltip": "baseline (pass-1) audio, on the world clock"
+          }
+        ],
+        "hold_map": [
+          "STRING",
+          {
+            "default": ""
+          }
+        ],
+        "fps": [
+          "INT",
+          {
+            "default": 24,
+            "min": 1,
+            "max": 120
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "audio",
+        "hold_map",
+        "fps"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "AUDIO"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "AUDIO"
+    ],
+    "name": "H3AudioSmear",
+    "display_name": "H3 Audio Smear (hold-map stretch, pitch kept) [alpha]",
+    "description": "The audio twin of H3 Time Smear: stretches the baseline clip's audio onto the SAME dilated timeline the smeared video init lives on, so the second pass can be seeded with a slowed performance instead of inventing its own.\n\nWhy this exists: the de-rope tells pass 2 to move slowly through the smeared video init, and the picture obeys, but audio has no init, so the model writes fresh speech at NATURAL rate and drags the mouth to match it. Recovery then compresses that mouth (and, at reference_mix 0, that speech) by the hold factor, which is why held regions come back rushed while the unheld tail sounds fine. Seed the audio rows with this node's output and the slowed performance becomes the thing pass 2 renders, so Exact Recover and Audio Recover are both compressing something that really was slow.\n\nWire the same hold_map you gave H3 Time Smear, and the BASELINE (pass-1) audio. Feed the result to VAEEncodeAudio and then to H3 V2V Init's audio_latent. Pitch is preserved; the stretch is a phase vocoder, so its fine detail is rough. That is fine: the injection strength is what re-renders detail (0.5-0.7, the same dial the video side uses).",
+    "python_module": "custom_nodes.ComfyUI-MAINodes",
+    "category": "audio/minimax/motion",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "H3ExactRecover": {
+    "input": {
+      "required": {
+        "images": [
+          "IMAGE"
+        ],
+        "hold_map": [
+          "STRING",
+          {
+            "default": ""
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "images",
+        "hold_map"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "IMAGE"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "IMAGE"
+    ],
+    "name": "H3ExactRecover",
+    "display_name": "H3 Exact Recover (24fps frame selection)",
+    "description": "Inverts H3 Time Smear: keeps the first frame of every hold group, giving exact 24fps real-time recovery by pure frame selection \u2014 never interpolation or resampling, so recovered frames are pixel-identical to generated ones. Wire hold_map from the SAME H3 Time Smear node that produced the frames (hold_map_used output).",
+    "python_module": "custom_nodes.ComfyUI-MAINodes",
+    "category": "image/minimax/motion",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "H3InjectSchedule": {
+    "input": {
+      "required": {
+        "model": [
+          "MODEL"
+        ],
+        "scheduler": [
+          [
+            "simple",
+            "normal",
+            "beta",
+            "sgm_uniform",
+            "karras",
+            "exponential"
+          ],
+          {
+            "default": "simple"
+          }
+        ],
+        "total_steps": [
+          "INT",
+          {
+            "default": 25,
+            "min": 4,
+            "max": 100
+          }
+        ],
+        "inject": [
+          "FLOAT",
+          {
+            "default": 0.7,
+            "min": 0.05,
+            "max": 1.0,
+            "step": 0.05,
+            "tooltip": "0.5-0.8 recommended; lower keeps init artifacts, higher invents choreography"
+          }
+        ]
+      },
+      "optional": {
+        "preset": [
+          [
+            "custom",
+            "balanced 0.70 (default)",
+            "faithful detail 0.50 (metric best)",
+            "loose / creative 0.80"
+          ],
+          {
+            "default": "balanced 0.70 (default)",
+            "tooltip": "any choice but 'custom' overrides the inject knob"
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "model",
+        "scheduler",
+        "total_steps",
+        "inject"
+      ],
+      "optional": [
+        "preset"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "SIGMAS"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "SIGMAS"
+    ],
+    "name": "H3InjectSchedule",
+    "display_name": "H3 Inject Schedule (v2v sigmas, 0.70)",
+    "description": "Truncated sigma schedule for v2v injection \u2014 THE quality dial of the pipeline. inject = how much of the denoise trajectory actually runs on top of your smeared init.\n\nRecommended range 0.5-0.8. Default 0.70 (playback-ratified). 0.5 measured as the metric quality point in our A/B (sharpest AND closest choreography tracking) \u2014 try both on your content. Below ~0.5 the init's own artifacts start surviving into the output; above ~0.8 the model increasingly ignores your baseline and invents its own choreography. total_steps 25 for the base model; drop to the distilled step count if you stack a turbo LoRA (measure first \u2014 injection under heavy distillation is still experimental).",
+    "python_module": "custom_nodes.ComfyUI-MAINodes",
+    "category": "sampling/custom_sampling/schedulers",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "H3JerkOracle": {
+    "input": {
+      "required": {
+        "samples": [
+          "LATENT"
+        ],
+        "length": [
+          "INT",
+          {
+            "default": 124,
+            "min": 5,
+            "max": 3600,
+            "step": 17
+          }
+        ],
+        "q": [
+          "FLOAT",
+          {
+            "default": 0.75,
+            "min": 0.5,
+            "max": 0.99,
+            "step": 0.01,
+            "tooltip": "jerk quantile that counts as hot; higher = tighter span, lower cost"
+          }
+        ],
+        "d_max": [
+          "INT",
+          {
+            "default": 4,
+            "min": 2,
+            "max": 8,
+            "tooltip": "peak hold count on the hottest tokens; 4 = measured sweet spot"
+          }
+        ],
+        "ramp": [
+          "BOOLEAN",
+          {
+            "default": true,
+            "tooltip": "C1 ramp shoulders (1,2,..,d_max,..,2,1) instead of hard steps \u2014 keep ON"
+          }
+        ]
+      },
+      "optional": {
+        "preset": [
+          [
+            "custom",
+            "balanced (default)",
+            "max quality (wide plateau)",
+            "economy (tight spans)"
+          ],
+          {
+            "default": "balanced (default)",
+            "tooltip": "any choice but 'custom' overrides the knobs above"
+          }
+        ],
+        "bridge": [
+          "INT",
+          {
+            "default": 8,
+            "min": 0,
+            "max": 20,
+            "tooltip": "bridge inter-peak valleys within a burst at d_max (measured production rule: a plateau dip between peaks of the same burst causes mid-burst artifacts). Max gap in tokens to fill; 0 disables."
+          }
+        ],
+        "profile_mode": [
+          [
+            "value |d3| (default)",
+            "value |d1| (energy baseline)",
+            "trajectory centroid |d3|",
+            "value |d3| camera-compensated"
+          ],
+          {
+            "default": "value |d3| (default)",
+            "tooltip": "(alpha) which signal to threshold. The default is the shipped one. |d1| is the honest cheap baseline (on real clips it correlates 0.96-0.98 with |d3|, so the default is closer to motion ENERGY than to jerk). 'trajectory' differentiates the energy CENTROID's path instead, which is closer to the physical quantity; on real textured clips it gave a narrower profile than velocity. EXPERIMENTAL: on SMOOTH synthetic content the centroid is nearly noise-free, so its contrast is not comparable to the value domain's there. Ablate it, do not assume it."
+          }
+        ],
+        "abstain_below": [
+          "FLOAT",
+          {
+            "default": 0.0,
+            "min": 0.0,
+            "max": 10.0,
+            "step": 0.1,
+            "tooltip": "(alpha) ABSOLUTE gate, 0 = off (shipped behaviour). q is a quantile, so the oracle always dilates the top (1-q) of tokens even on a clip that needs nothing: a synthetic clip with EXACTLY zero trajectory jerk still got 3.06x. If the profile's peak-to-mean contrast is below this, the oracle abstains and returns a flat hold map (no dilation, no cost). Measured contrast ran about 2x higher on a jerky clip than a smooth one, so try 1.5-2.5 and check against a clip you know is calm."
+          }
+        ],
+        "fps": [
+          "INT",
+          {
+            "default": 24,
+            "min": 1,
+            "max": 120,
+            "tooltip": "only used to phrase the report in seconds"
+          }
+        ],
+        "s_per_step": [
+          "FLOAT",
+          {
+            "default": 0.0,
+            "min": 0.0,
+            "max": 120.0,
+            "step": 0.05,
+            "tooltip": "seconds per step from a baseline render of this clip; 0 skips the minutes estimate"
+          }
+        ],
+        "est_steps": [
+          "INT",
+          {
+            "default": 18,
+            "min": 1,
+            "max": 100,
+            "tooltip": "steps the regen pass will actually run (total_steps x inject)"
+          }
+        ],
+        "overhead_s": [
+          "FLOAT",
+          {
+            "default": 6.7,
+            "min": 0.0,
+            "max": 600.0,
+            "step": 0.1,
+            "tooltip": "fixed non-sampling seconds per render (setup, VAE encode/decode). 40 measured at 1.5 MP on a warm instance; take it from the gap between your own 1-step and 2-step wall times"
+          }
+        ],
+        "model_profile": [
+          [
+            "minimax-h3",
+            "ltx-2.5",
+            "wan-2.2 (unmeasured)"
+          ],
+          {
+            "default": "minimax-h3",
+            "tooltip": "which model's latent is wired in. minimax-h3 is the shipped path, bit-identical. Any other preset reads THAT model's video latent (LTX-2.5: 128 channels, 1+8k token clock; Wan 2.2: 16 channels, 1+4k) with the same planner, no phase normalisation, and emits holds per SOURCE frame as before - wire into H3 Clock Remap or straight into H3 Time Smear."
+          }
+        ],
+        "protect_tail": [
+          "INT",
+          {
+            "default": 0,
+            "min": 0,
+            "max": 96,
+            "tooltip": "(alpha) hold the LAST n frames at 1 whatever the profile says. A burst that runs into the end of the clip has no 'after' for the model to slow into: measured 2026-08-23 on a chained segment, hold 4 on the closing gesture played it 1.55x fast after recovery; 17 (one token group) brought it to 1.06x. Untested on a single clip; 0 = off"
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "samples",
+        "length",
+        "q",
+        "d_max",
+        "ramp"
+      ],
+      "optional": [
+        "preset",
+        "bridge",
+        "profile_mode",
+        "abstain_below",
+        "fps",
+        "s_per_step",
+        "est_steps",
+        "overhead_s",
+        "model_profile",
+        "protect_tail"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "STRING",
+      "STRING",
+      "INT",
+      "INT",
+      "STRING",
+      "STRING"
+    ],
+    "output_is_list": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "output_name": [
+      "hold_map",
+      "segments",
+      "window_start",
+      "window_len",
+      "profile",
+      "report"
+    ],
+    "name": "H3JerkOracle",
+    "display_name": "H3 Jerk Oracle (profile / window / hold map)",
+    "description": "Reads WHERE and WHEN a clip's motion is too fast for the model from the clip's own latent (per-token jerk, |\u0394\u00b3| over time). Outputs: hold_map \u2192 wire into H3 Time Smear for ADAPTIVE dilation; segments \u2192 H3 Local Rate; window/profile for inspection.\n\nKnobs: q = jerk quantile that counts as 'hot' (default 0.75; raise toward 0.85 for tighter spans and lower cost, lower toward 0.7 to catch more of the burst). d_max = peak hold count (default 4; the measured sweet spot \u2014 2-3 saves time but starts to rope again). ramp = C1 shoulders on the hold curve (keep ON; hard steps jitter).\n\nADAPTIVE MODE NOTE: the oracle hold map dilates only the hot spans, which saves significant render time (~2.4-3x total budget instead of uniform 4x) and follows the clip's intended pacing/attention more closely \u2014 quiet spans keep their native beat contrast. Trade-off: it can artifact slightly more than uniform dilation if the hold plateau dips inside a burst \u2014 the bridge knob (default 8) closes such valleys automatically per our measured production rule; if you still see hiccups mid-burst, lower q or raise d_max so the whole burst sits at the plateau.\n\nEFFECTIVE SIZE: this node decides how long the regeneration pass really is, and the report output states it before you pay \u2014 world length in, effective regen length out, then the multipliers. Expect a 5 s action clip to run as 11 to 13 s of frame data, so on a card that fits 10 s you can de-rope about a third of that. The frame and TIME multipliers are not the same number: per-step cost goes as tokens^1.7, so 2.5x the frames is roughly 4.9x the time per step. q and d_max are the two knobs that move it. Set s_per_step from a baseline render of this clip on this card for a minutes estimate.",
+    "python_module": "custom_nodes.ComfyUI-MAINodes",
+    "category": "latent/minimax/motion",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "H3ReferenceFrames": {
+    "input": {
+      "required": {
+        "images": [
+          "IMAGE"
+        ],
+        "fps": [
+          "FLOAT",
+          {
+            "default": 24,
+            "min": 0.01
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "images",
+        "fps"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "IMAGE"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "IMAGE"
+    ],
+    "name": "H3ReferenceFrames",
+    "display_name": "H3ReferenceFrames",
+    "description": "",
+    "python_module": "custom_nodes.comfyui-h3-clean",
+    "category": "video/MiniMax H3",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "H3SLAAttention": {
+    "input": {
+      "required": {
+        "model": [
+          "MODEL",
+          {
+            "tooltip": "MODEL,"
+          }
+        ],
+        "sparsity_ratio": [
+          "FLOAT",
+          {
+            "tooltip": "Fraction of key blocks skipped. 0.85 is the shipped default and what the SLA turbo LoRA was distilled against; 0.90 is the value validated here and is ~15% faster. Sparsity did NOT turn out to drive the speech artefacts on H3 -- step count did, so use 6 steps rather than lowering this. Break-even is about 0.60 -- below that this kernel is SLOWER than dense attention, so a low value is a loss, not a safe fallback. If a LoRA cannot take 0.7+, this node has nothing to offer it. 0.0 disables sparsity without removing the node.",
+            "default": 0.9,
+            "min": 0.0,
+            "max": 0.95,
+            "step": 0.05,
+            "round": false
+          }
+        ],
+        "block_size": [
+          "COMBO",
+          {
+            "tooltip": "How many sequence tokens share one key selection. Unrelated to the model's 128-wide heads. This matters far more for audio than video: H3 packs audio at 80 rows per second, so a 128-row block forces 1.6 s of audio down one attention pattern, while the same 128 rows are only 3% of a video frame. Speech came out robotic at 128 and clean at 64, for about 2% more time -- halving the block doubles the block count, so the attention work is identical and only the routing gets finer. Use 128 only if you generate without meaningful audio. Coming down to 32 has increased the quality even further for marginal slowdown ",
+            "default": "32",
+            "multiselect": false,
+            "options": [
+              "32",
+              "64",
+              "128"
+            ]
+          }
+        ]
+      },
+      "optional": {
+        "min_seq_len": [
+          "INT",
+          {
+            "tooltip": "Sequences shorter than this stay dense. Guards two things: the short text-refiner attention, which must never be sparsified, and low-resolution or short clips, where block selection would cost more than it saves. Lower it only if you know your sequence is long enough to benefit.",
+            "default": 8192,
+            "min": 0,
+            "max": 1000000,
+            "step": 1024
+          }
+        ],
+        "dense_last_steps": [
+          "INT",
+          {
+            "tooltip": "Run the last N sampling steps at full attention. 0 matches the turbo LoRA's original distillation setup exactly. 1 costs a little speed and can recover fine detail, since the final step's error is the one you actually see. Stacks with dense_steps below rather than replacing it.",
+            "default": 1,
+            "min": 0,
+            "max": 8
+          }
+        ],
+        "protect_audio": [
+          "BOOLEAN",
+          {
+            "tooltip": "Always attend blocks overlapping actual language tokens, target audio, and audio-reference segments. Visual-reference blocks are controlled separately. Disable only for turbo-style uniform sparsity; testing found partial or unprotected audio unstable for very little speed gain.",
+            "default": true,
+            "label_on": "protect",
+            "label_off": "uniform (turbo parity)"
+          }
+        ],
+        "enabled": [
+          "BOOLEAN",
+          {
+            "tooltip": "Turn off to pass the model straight through, for a like-for-like speed baseline without rewiring.",
+            "default": true,
+            "label_on": "sparse",
+            "label_off": "dense (bypass)"
+          }
+        ],
+        "dense_steps": [
+          "STRING",
+          {
+            "tooltip": "Explicit 0-based step indices to force dense, on top of dense_last_steps -- e.g. '0,1' or '0-2'. Early steps set global composition and prompt adherence, so keeping just those exact and sparsifying the rest can fix prompt-following regressions without paying for full attention on every step. Blank = none.",
+            "default": "0",
+            "multiline": false
+          }
+        ],
+        "dense_backend": [
+          "COMBO",
+          {
+            "tooltip": "Attention kernel used on every dense fall-through (short sequences, dense_last_steps, dense_steps). 'comfy_kitchen' (default, Comfy Kitchen int8) is fast enough on the handful of dense steps this node runs to be worth its precision tradeoff there. 'pytorch' pins the plain reference kernel instead if you want zero quantization anywhere in the dense path, at real cost to dense-step speed -- dense steps are the ones this node already decided must be exact, so that's the safest choice if you're chasing maximum quality over speed there. The 'sage:*' modes match an existing sage-attention kernel dropdown one-for-one -- 'sage:auto' lets the sageattention package pick; the rest pin a specific kernel + pv_accum_dtype: fp16_cuda uses fp32 accum (safest), fp8_cuda uses fp32+fp32 (safest of the fp8 pair), fp8_cuda++ uses fp32+fp16 (faster, more overflow-prone -- try this first if fp8_cuda works but you want more speed). Needs the sageattention package installed; falls back to whatever's already active with a logged warning if it isn't, or if a specific kernel is missing from your installed version. 'auto' restores the old behaviour of using whatever backend is already active globally. The sparse path is unaffected by this setting either way -- it never goes through backend selection at all.",
+            "default": "comfy_kitchen",
+            "multiselect": false,
+            "options": [
+              "pytorch",
+              "comfy_kitchen",
+              "sage:auto",
+              "sage:qk_int8_pv_fp16_cuda",
+              "sage:qk_int8_pv_fp16_triton",
+              "sage:qk_int8_pv_fp8_cuda",
+              "sage:qk_int8_pv_fp8_cuda++",
+              "auto"
+            ]
+          }
+        ],
+        "disable_fp16_accum": [
+          "BOOLEAN",
+          {
+            "tooltip": "Force off the fp16/bf16 reduced-precision matmul reduction path for this model's sampling run, regardless of the global --fast fp16_accumulation flag. Measured to cost quality on H3 with no throughput gain. Turn off only to A/B against the global flag.",
+            "default": true,
+            "label_on": "disabled (recommended)",
+            "label_off": "follow --fast"
+          }
+        ],
+        "stabilize_motion": [
+          "BOOLEAN",
+          {
+            "tooltip": "Bias each layer's block selection toward what it picked last step, so a near-tie between two blocks doesn't flip for no reason and show up as a faint double-exposure on fast motion. Only target-video query rows are stabilized; text and audio choices remain step-local. It is a fix for that one specific symptom, not a general quality dial. - Uses more Vram ",
+            "default": false,
+            "label_on": "on",
+            "label_off": "off"
+          }
+        ],
+        "reference_protection": [
+          "COMBO",
+          {
+            "display_name": "Protect Vid/Ref",
+            "tooltip": "Protect Image/Video Reference. Heavy Enforcement guarantees every Qwen vision-token, conditioning/image-reference, and video-reference block, matching the broad legacy prefix protection -- this is a reinforcement of those blocks, not a protection tuned for reference quality, and is most likely unusable with max ref size mode. Light uses fixed 0.85 reference sparsity and guarantees the best-scoring 15% of each visual-reference range. Off adds no special quota; references still participate in ordinary top-k. Default Off preserves the precise audio patch's fastest behaviour.",
+            "default": "Off",
+            "multiselect": false,
+            "options": [
+              "Heavy Enforcement",
+              "Light",
+              "Off"
+            ]
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "model",
+        "sparsity_ratio",
+        "block_size"
+      ],
+      "optional": [
+        "min_seq_len",
+        "dense_last_steps",
+        "protect_audio",
+        "enabled",
+        "dense_steps",
+        "dense_backend",
+        "disable_fp16_accum",
+        "stabilize_motion",
+        "reference_protection"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "MODEL"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "MODEL"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "H3SLAAttention",
+    "display_name": "H3 SLA Attention",
+    "description": "Block-sparse attention for MiniMax-H3, matching the inference sequences benefit most, so the gain grows with resolution and duration; short ones fall back to dense automatically.",
+    "python_module": "custom_nodes.ComfyUI-H3-SLA-Attention",
+    "category": "PlagueKind/model_patches/minimax",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": null,
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "H3TimeSmear": {
+    "input": {
+      "required": {
+        "images": [
+          "IMAGE"
+        ],
+        "dilation": [
+          "INT",
+          {
+            "default": 4,
+            "min": 1,
+            "max": 8,
+            "tooltip": "uniform hold count; ignored when hold_map is wired"
+          }
+        ]
+      },
+      "optional": {
+        "hold_map": [
+          "STRING",
+          {
+            "default": "",
+            "tooltip": "from H3JerkOracle \u2014 per-frame integer holds"
+          }
+        ],
+        "expand_to_end": [
+          "BOOLEAN",
+          {
+            "default": true,
+            "tooltip": "when the map ends in a SHORT rate-1 tail (<= 17 frames) after an expansion span, run that span through the last frame instead (kills the end jump). Uniform maps and longer rest tails are untouched"
+          }
+        ],
+        "fps": [
+          "INT",
+          {
+            "default": 24,
+            "min": 1,
+            "max": 120,
+            "tooltip": "only used to phrase the report in seconds"
+          }
+        ],
+        "s_per_step": [
+          "FLOAT",
+          {
+            "default": 0.0,
+            "min": 0.0,
+            "max": 120.0,
+            "step": 0.05,
+            "tooltip": "seconds per step from a baseline render of this clip; 0 skips the minutes estimate"
+          }
+        ],
+        "est_steps": [
+          "INT",
+          {
+            "default": 18,
+            "min": 1,
+            "max": 100,
+            "tooltip": "steps the regen pass will actually run (total_steps x inject)"
+          }
+        ],
+        "overhead_s": [
+          "FLOAT",
+          {
+            "default": 6.7,
+            "min": 0.0,
+            "max": 600.0,
+            "step": 0.1,
+            "tooltip": "fixed non-sampling seconds per render (setup, VAE encode/decode). 40 measured at 1.5 MP on a warm instance; take it from the gap between your own 1-step and 2-step wall times"
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "images",
+        "dilation"
+      ],
+      "optional": [
+        "hold_map",
+        "expand_to_end",
+        "fps",
+        "s_per_step",
+        "est_steps",
+        "overhead_s"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "IMAGE",
+      "STRING",
+      "INT",
+      "STRING"
+    ],
+    "output_is_list": [
+      false,
+      false,
+      false,
+      false
+    ],
+    "output_name": [
+      "images",
+      "hold_map_used",
+      "length",
+      "report"
+    ],
+    "name": "H3TimeSmear",
+    "display_name": "H3 Time Smear (integer holds)",
+    "description": "Retimes frames onto a longer uniform grid by integer frame holds \u2014 the seed material for v2v regeneration.\n\nTwo modes: UNIFORM (nothing wired to hold_map): every frame held 'dilation' times (default 4 \u2014 the zero-artifact reference point; highest cost). ADAPTIVE (wire H3 Jerk Oracle's hold_map): only jerk-hot spans get held, quiet spans stay real-time \u2014 cheaper and preserves the clip's natural beat contrast ('motion beauty'), at a small artifact risk where the hold curve dips inside a burst.\n\nexpand_to_end (default ON): if the map ends in a rate-1 tail behind an expansion span, that tail reads as a little jump back to real time at the clip end. With the toggle on, the span is run through the last world frame instead and the length is put back on the 17k+5 grid inside the same span. Uniform maps, maps that already end inside an expansion, rate-1-only maps, and rest tails longer than 17 world frames are left alone. The console and the report say so whenever a map is rewritten.\n\nOutput length is snapped up to the H3-legal 17k+5 grid by extending the final hold - or to the TARGET model's grid when the map comes from H3 Clock Remap (LTX-2.5: 8k+1). ALWAYS pass hold_map_used to H3 Exact Recover \u2014 it records exactly what happened so recovery is lossless.\n\nEFFECTIVE SIZE: the report output is the price tag for everything downstream of here \u2014 a 5 s action clip regenerates as 11 to 13 s of frame data, and that dilated length, not the runtime, is what sets the bill and the VRAM peak. Read the TIME multiplier, not the frame one: per-step cost is superlinear in tokens, so 2.5x the frames is about 4.9x the time per step. Set s_per_step from a baseline render of this clip on this card for a minutes estimate.",
+    "python_module": "custom_nodes.ComfyUI-MAINodes",
+    "category": "image/minimax/motion",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "H3V2VInit": {
+    "input": {
+      "required": {
+        "samples": [
+          "LATENT",
+          {
+            "tooltip": "video latent from VAEEncode of the smeared frames"
+          }
+        ]
+      },
+      "optional": {
+        "length": [
+          "INT",
+          {
+            "default": 0,
+            "min": 0,
+            "max": 3600,
+            "tooltip": "0 = derive from the latent (recommended); nonzero asserts this exact 17k+5 length"
+          }
+        ],
+        "oracle_samples": [
+          "LATENT",
+          {
+            "tooltip": "baseline latent; enables background freezing"
+          }
+        ],
+        "freeze_threshold": [
+          "FLOAT",
+          {
+            "default": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.05,
+            "tooltip": "0 = off. Above 0: freeze background latent to the smeared init so its timing stays exactly the baseline's (fixes background agents speeding up). The subject mask is the oracle heat unioned over time, so the boundary never moves. 0.35 is a sane start."
+          }
+        ],
+        "freeze_grow": [
+          "INT",
+          {
+            "default": 2,
+            "min": 0,
+            "max": 16,
+            "tooltip": "latent-pixels of mask dilation (16 image px each); applies to both mask sources"
+          }
+        ],
+        "mask": [
+          "MASK",
+          {
+            "tooltip": "(alpha) manual region to REGENERATE (1) vs freeze to baseline timing (0). Overrides the oracle path. Union over time by default: the boundary never moves (set time_varying to keep the time axis)"
+          }
+        ],
+        "mask_feather": [
+          "INT",
+          {
+            "default": 0,
+            "min": 0,
+            "max": 256,
+            "tooltip": "0 (default): hard latent cells, every cell fully frozen or fully live; the decode smooths the edge. >0: pixel-space ramp pooled to fractional cells (~16 px quanta) if a hard seam ever shows"
+          }
+        ],
+        "invert_mask": [
+          "BOOLEAN",
+          {
+            "default": false,
+            "tooltip": "on: the mask marks the FREEZE region instead (paint the background/birds directly)"
+          }
+        ],
+        "time_varying": [
+          "BOOLEAN",
+          {
+            "default": false,
+            "tooltip": "off (default): the manual mask is unioned over time, static boundary. on: a multi-frame mask keeps its time axis, quantized to the latent token grid ((1,4,4,4,4) frames per 17). A moving boundary CAN pop; put intended transitions on 17-frame phase. Manual mask only, ignored by the oracle path and by 2D / single-frame masks"
+          }
+        ],
+        "audio_latent": [
+          "LATENT",
+          {
+            "tooltip": "(alpha) VAEEncodeAudio of H3 Audio Smear's output: the baseline track stretched onto THIS dilated clock. Leave unwired for the original behaviour (audio starts from zeros and pass 2 invents its own performance at natural rate, which is what makes held regions come back rushed after recovery)"
+          }
+        ],
+        "audio_mode": [
+          [
+            "custom (use audio_strength)",
+            "invent freely (original behaviour)",
+            "follow the original performance (0.5)",
+            "follow loosely, re-render more (0.7)",
+            "pin the original outright (0.0)"
+          ],
+          {
+            "default": "custom (use audio_strength)",
+            "tooltip": "plain-language presets for the audio rows; anything but 'custom' overrides audio_strength. All but the first need audio_latent wired (H3 Audio Smear -> VAEEncodeAudio). Start with 'follow the original performance': it is what makes a de-roped clip keep its dialogue"
+          }
+        ],
+        "audio_strength": [
+          "FLOAT",
+          {
+            "default": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.05,
+            "tooltip": "(alpha) how much of the audio rows pass 2 re-renders. 1.0 (default) = unchanged behaviour. With audio_latent wired, 0.5-0.7 keeps the seeded performance's bulk timing and re-renders detail, the same bargain H3 Inject Schedule makes on the video side; 0.0 pins the track outright. H3 runs ONE joint pass, so the sigma schedule cannot set this per modality - it rides the audio half of the noise mask"
+          }
+        ],
+        "audio_prefix_ticks": [
+          "INT",
+          {
+            "default": 0,
+            "min": 0,
+            "max": 36000,
+            "tooltip": "(alpha) freeze the FIRST n audio-latent ticks to the seeded audio_latent content (noise-mask 0 there; every later tick keeps audio_strength). The audio twin of the video prefix freeze: a 39-frame carried handle is 65 ticks exactly. Needs audio_latent wired. 0 = off (scalar behaviour unchanged)"
+          }
+        ],
+        "audio_prefix_release_ticks": [
+          "INT",
+          {
+            "default": 0,
+            "min": 0,
+            "max": 400,
+            "tooltip": "(alpha) half-cosine release: the LAST n ticks of the frozen prefix ramp 0 -> audio_strength instead of cutting hard (8 ticks = 0.2 s, the field's tested recipe). If used, assembly must let the continuation OWN the overlap tail, or the trim discards the release. 0 = hard edge"
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "samples"
+      ],
+      "optional": [
+        "length",
+        "oracle_samples",
+        "freeze_threshold",
+        "freeze_grow",
+        "mask",
+        "mask_feather",
+        "invert_mask",
+        "time_varying",
+        "audio_latent",
+        "audio_mode",
+        "audio_strength",
+        "audio_prefix_ticks",
+        "audio_prefix_release_ticks"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "LATENT"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "LATENT"
+    ],
+    "name": "H3V2VInit",
+    "display_name": "H3 V2V Init (nested AV latent)",
+    "description": "Wraps a VAE-encoded video latent (from VAEEncode of the smeared frames) as the nested audio+video latent H3's SamplerCustomAdvanced expects, ready for partial-denoise injection. Audio starts empty and generates jointly with the video on the truncated schedule \u2014 causally synced foley, the preferred audio source for regenerated content. length=0 (default) derives the frame count from the latent itself; wire H3 Time Smear's length output or set it only to assert a specific grid.\n\nBackground freeze: wire the BASELINE latent into oracle_samples and set freeze_threshold above 0 to keep everything outside the oracle's motion region frozen to the smeared init during generation. Frozen background is held baseline content, so after exact recovery its timing is exactly the baseline's: background agents (birds, crowds) cannot speed up. The mask is static over time, so nothing pops at its boundary. Effects that fly far from the subject may be clipped by the freeze; lower the threshold or raise freeze_grow to give them room.\n\nManual freeze: wire a MASK instead and YOU choose the boundary (overrides the oracle path). mask = the region to REGENERATE; invert_mask flips it so you can paint the background/birds to freeze directly. By default the mask is unioned over time (static boundary, never pops) and snapped to HARD latent cells by default (mask_feather 0): every ~16 px cell is fully frozen or fully live, no half-frozen blend cells, and the decode smooths the edge. Set mask_feather above 0 to get the old pixel-space ramp pooled to fractional cells if a hard seam ever shows. Prefer this over the composite node when background and subject share lighting, shadows or water contact.\n\ntime_varying (manual mask only): keeps the mask's time axis instead of unioning it, so the freeze region can move or switch on partway. Transitions QUANTIZE to the latent token grid: each 17 pixel frames are 5 tokens covering (1, 4, 4, 4, 4) frames, so a change lands on the token that covers it and a token regenerates if ANY frame it covers is marked regenerate. A moving boundary CAN pop at those steps - that is the tradeoff for the default's promise. Put intended transitions on 17-frame phase (frames 0, 17, 34, ...), where the singleton tokens hold exactly one frame each and the step is tightest. Masks whose frame count differs from the clip length are nearest-neighbour resampled first; a 2D or single-frame mask behaves as before.\n\nAUDIO ROWS (alpha): by default they start from zeros, so pass 2 invents its own performance at NATURAL rate and drags the mouth to match it. On a de-roped clip that is the whole dialogue defect - recovery then compresses those lips (and, at reference_mix 0, that speech) by the hold factor, so held regions come back rushed while the unheld tail sounds fine. Wire audio_latent with the baseline track stretched onto THIS dilated clock (H3 Audio Smear -> VAEEncodeAudio), pick an audio_mode, and pass 2 renders a genuinely slowed performance instead - which is what Exact Recover and Audio Recover were assuming all along.",
+    "python_module": "custom_nodes.ComfyUI-MAINodes",
+    "category": "latent/minimax/motion",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "KSamplerSelect": {
+    "input": {
+      "required": {
+        "sampler_name": [
+          "COMBO",
+          {
+            "multiselect": false,
+            "options": [
+              "euler",
+              "euler_cfg_pp",
+              "euler_ancestral",
+              "euler_ancestral_cfg_pp",
+              "heun",
+              "heunpp2",
+              "exp_heun_2_x0",
+              "exp_heun_2_x0_sde",
+              "dpm_2",
+              "dpm_2_ancestral",
+              "lms",
+              "dpm_fast",
+              "dpm_adaptive",
+              "dpmpp_2s_ancestral",
+              "dpmpp_2s_ancestral_cfg_pp",
+              "dpmpp_sde",
+              "dpmpp_sde_gpu",
+              "dpmpp_2m",
+              "dpmpp_2m_cfg_pp",
+              "dpmpp_2m_sde",
+              "dpmpp_2m_sde_gpu",
+              "dpmpp_2m_sde_heun",
+              "dpmpp_2m_sde_heun_gpu",
+              "dpmpp_3m_sde",
+              "dpmpp_3m_sde_gpu",
+              "ddpm",
+              "lcm",
+              "ipndm",
+              "ipndm_v",
+              "deis",
+              "cfgpp_ud10_ab",
+              "res_multistep",
+              "res_multistep_cfg_pp",
+              "res_multistep_ancestral",
+              "res_multistep_ancestral_cfg_pp",
+              "gradient_estimation",
+              "gradient_estimation_cfg_pp",
+              "er_sde",
+              "seeds_2",
+              "seeds_3",
+              "sa_solver",
+              "sa_solver_pece",
+              "ddim",
+              "uni_pc",
+              "uni_pc_bh2",
+              "legacy_rk",
+              "rk",
+              "rk_beta",
+              "deis_3m_ode",
+              "deis_2m_ode",
+              "deis_3m",
+              "deis_2m",
+              "res_6s_ode",
+              "res_5s_ode",
+              "res_3s_ode",
+              "res_2s_ode",
+              "res_3m_ode",
+              "res_2m_ode",
+              "res_6s",
+              "res_5s",
+              "res_3s",
+              "res_2s",
+              "res_3m",
+              "res_2m"
+            ]
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "sampler_name"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "SAMPLER"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "SAMPLER"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "KSamplerSelect",
+    "display_name": null,
+    "description": "",
+    "python_module": "comfy_extras.nodes_custom_sampler",
+    "category": "model/sampling/samplers",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": null,
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "LoadAudio": {
+    "input": {
+      "required": {
+        "audio": [
+          "COMBO",
+          {
+            "multiselect": false,
+            "options": [
+              "test.wav"
+            ],
+            "audio_upload": true
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "audio"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "AUDIO"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "AUDIO"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "LoadAudio",
+    "display_name": "Load Audio",
+    "description": "",
+    "python_module": "comfy_extras.nodes_audio",
+    "category": "audio",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": [
+      "import audio",
+      "open audio",
+      "audio file"
+    ],
+    "essentials_category": "Audio",
+    "has_intermediate_output": false
+  },
+  "LoadImage": {
+    "input": {
+      "required": {
+        "image": [
+          [
+            "test.png"
+          ],
+          {
+            "image_upload": true
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "image"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "IMAGE",
+      "MASK"
+    ],
+    "output_is_list": [
+      false,
+      false
+    ],
+    "output_name": [
+      "IMAGE",
+      "MASK"
+    ],
+    "name": "LoadImage",
+    "display_name": "Load Image",
+    "description": "",
+    "python_module": "nodes",
+    "category": "image",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": [
+      "load image",
+      "open image",
+      "import image",
+      "image input",
+      "upload image",
+      "read image",
+      "image loader"
+    ],
+    "essentials_category": "Basics"
+  },
+  "LoadVideo": {
+    "input": {
+      "required": {
+        "file": [
+          "COMBO",
+          {
+            "multiselect": false,
+            "options": [
+              "test.mp4"
+            ],
+            "video_upload": true
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "file"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "VIDEO"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "VIDEO"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "LoadVideo",
+    "display_name": "Load Video",
+    "description": "",
+    "python_module": "comfy_extras.nodes_video",
+    "category": "video",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": [
+      "import video",
+      "open video",
+      "video file"
+    ],
+    "essentials_category": "Basics",
+    "has_intermediate_output": true
+  },
+  "LoraLoaderModelOnly": {
+    "input": {
+      "required": {
+        "model": [
+          "MODEL"
+        ],
+        "lora_name": [
+          [
+            "previous_install\\ltx-2.5\\ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors",
+            "previous_install\\minimax-h3\\H3-PK-Parasyte-Turbo.safetensors",
+            "previous_install\\minimax-h3\\MiniMax-H3-FL2VA-Acc-8Step.safetensors",
+            "previous_install\\minimax-h3\\MiniMax-H3-FL2VA-Acc-8Step_comfy.safetensors",
+            "previous_install\\minimax-h3\\MiniMax-H3-FL2VA-Acc-8Step_pruned_comfy.safetensors",
+            "previous_install\\minimax-h3\\MiniMax-H3-Ref2VA-Acc-8Step.safetensors",
+            "previous_install\\minimax-h3\\MiniMax-H3-Ref2VA-Acc-8Step_comfy.safetensors",
+            "previous_install\\minimax-h3\\MiniMax-H3-Ref2VA-Acc-8Step_pruned_comfy.safetensors",
+            "previous_install\\minimax-h3\\MysticXXX_MMH3-V4.safetensors",
+            "previous_install\\minimax-h3\\PinkFluffyBunny-unpruned-fl2va-v2-.safetensors",
+            "previous_install\\minimax-h3\\dareties_pruned\\minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro_pruned.safetensors",
+            "previous_install\\minimax-h3\\dareties_pruned\\minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro_rev2_pruned.safetensors",
+            "previous_install\\minimax-h3\\dareties_pruned\\minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro_rev3_pruned.safetensors",
+            "previous_install\\minimax-h3\\dareties_pruned\\minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro_rev4_pruned.safetensors",
+            "previous_install\\minimax-h3\\dareties_pruned\\minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro_rev5_pruned.safetensors",
+            "previous_install\\minimax-h3\\dareties_pruned\\minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro_rev6_pruned.safetensors",
+            "previous_install\\minimax-h3\\dareties_resize\\minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro_rev2.safetensors",
+            "previous_install\\minimax-h3\\dareties_resize\\minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro_rev3.safetensors",
+            "previous_install\\minimax-h3\\dareties_resize\\minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro_rev4.safetensors",
+            "previous_install\\minimax-h3\\dareties_resize\\minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro_rev5.safetensors",
+            "previous_install\\minimax-h3\\dareties_resize\\minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro_rev6.safetensors",
+            "previous_install\\minimax-h3\\depr\\minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_fro.safetensors",
+            "previous_install\\minimax-h3\\depr\\minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_fro_v2.safetensors",
+            "previous_install\\minimax-h3\\depr\\minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_fro_v3.safetensors",
+            "previous_install\\minimax-h3\\depr\\minimax_h3_fl2v_lightx2v_v0.1_dare_v4_step600_comfy_fro.safetensors",
+            "previous_install\\minimax-h3\\embeddings\\minimaxh3_art_is_explosion.safetensors",
+            "previous_install\\minimax-h3\\embeddings\\minimaxh3_blooming_flowers.safetensors",
+            "previous_install\\minimax-h3\\embeddings\\minimaxh3_bullet_time.safetensors",
+            "previous_install\\minimax-h3\\embeddings\\minimaxh3_dark_magic.safetensors",
+            "previous_install\\minimax-h3\\embeddings\\minimaxh3_fire_breath.safetensors",
+            "previous_install\\minimax-h3\\embeddings\\minimaxh3_four_seasons.safetensors",
+            "previous_install\\minimax-h3\\embeddings\\minimaxh3_kiss_camera.safetensors",
+            "previous_install\\minimax-h3\\embeddings\\minimaxh3_spiral_ascent.safetensors",
+            "previous_install\\minimax-h3\\embeddings\\minimaxh3_storm_magic.safetensors",
+            "previous_install\\minimax-h3\\embeddings\\minimaxh3_truman_show.safetensors",
+            "previous_install\\minimax-h3\\experimental\\minimax_h3_duo_lightx2v_v0.1_v4s600_4step_cwb_custom_fro_09675.safetensors",
+            "previous_install\\minimax-h3\\experimental\\minimax_h3_fl2v_lightx2v_turbo_4to8step_v0.1-v1.0_768p_v4_step600_dareties.safetensors",
+            "previous_install\\minimax-h3\\experimental\\minimax_h3_fl2v_lightx2v_turbo_4to8step_v0.1-v1.0_768p_v4_step600_dareties_fro095.safetensors",
+            "previous_install\\minimax-h3\\fastvideo_fasth3\\[INVALID]fastvideo_fasth3_4_step_preview_v1_vsa_datafree_comfyui.safetensors",
+            "previous_install\\minimax-h3\\fastvideo_fasth3\\fastvideo_fasth3_4_step_preview_v1_lora_comfyui.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_fro_v4.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_fl2v_lightx2v_turbo_4step_v1.0_768p_resized_avg_rank_31_bf16.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_fl2v_turbo_4step_v1.2_768p_comfyui_bf16.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_fl2va_pdd_acc_8step_comfyui.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_ref2va_pdd_acc_8step_comfyui.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_ref_lora_rank_256_bf16.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_turbo_4step.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_turbo_4step_ckpt500.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_turbo_4step_ckpt850.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_turbo_4step_ema.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_turbo_4step_ema_ckpt500.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_turbo_4step_ema_ckpt850.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_turbo_4step_ema_ckpt850_pruned_comfyui.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_turbo_v4_step600.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_turbo_v4_step600_ema.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+            "previous_install\\minimax-h3\\ref2v_dareties\\minimax_h3_ref2v_turbo_4step_v0.1_v4_step600_dareties_fro095.safetensors",
+            "previous_install\\minimax-h3\\ref2v_dareties\\minimax_h3_ref2v_turbo_4step_v0.1_v4_step600_dareties_fro09625.safetensors",
+            "previous_install\\minimax-h3\\ref2v_dareties\\minimax_h3_ref2v_turbo_4step_v0.1_v4_step600_dareties_fro0975.safetensors",
+            "previous_install\\minimax-h3\\ref2v_dareties\\minimax_h3_ref2v_turbo_4step_v0.1_v4_step600_dareties_fro09875.safetensors",
+            "previous_install\\minimax-h3\\ref2v_dareties\\minimax_h3_ref2v_turbo_4step_v0.1_v4_step600_dareties_fro09925.safetensors",
+            "previous_install\\minimax-h3\\ref2v_dareties\\minimax_h3_ref2v_turbo_4step_v0.1_v4_step600_dareties_fro0995.safetensors",
+            "previous_install\\music-lora\\21d92cc2-c320-4f2b-91ef-db7830f6279f-2a1faa2ea543.safetensors",
+            "previous_install\\music-lora\\50b265ae-39c2-4a5f-8433-aed69ff93390-5b1048460bff.safetensors"
+          ]
+        ],
+        "strength_model": [
+          "FLOAT",
+          {
+            "default": 1.0,
+            "min": -100.0,
+            "max": 100.0,
+            "step": 0.01
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "model",
+        "lora_name",
+        "strength_model"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "MODEL"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "MODEL"
+    ],
+    "name": "LoraLoaderModelOnly",
+    "display_name": "Load LoRA",
+    "description": "This LoRAs loader is used to modify the diffusion model, altering the way in which latents are denoised such as applying styles. Multiple LoRA nodes can be linked together.",
+    "python_module": "nodes",
+    "category": "model/loaders",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "output_tooltips": [
+      "The modified diffusion model.",
+      "The modified CLIP model."
+    ],
+    "search_aliases": [
+      "lora",
+      "load lora",
+      "apply lora",
+      "lora loader",
+      "lora model"
+    ],
+    "essentials_category": "Image Generation"
+  },
+  "ManualSigmas": {
+    "input": {
+      "required": {
+        "sigmas": [
+          "STRING",
+          {
+            "default": "1, 0.5",
+            "multiline": false
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "sigmas"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "SIGMAS"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "SIGMAS"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "ManualSigmas",
+    "display_name": null,
+    "description": "",
+    "python_module": "comfy_extras.nodes_custom_sampler",
+    "category": "model/sampling/sigmas",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": true,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": [
+      "custom noise schedule",
+      "define sigmas"
+    ],
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "MiniMaxChunkFeedForward": {
+    "input": {
+      "required": {
+        "model": [
+          "MODEL",
+          {}
+        ],
+        "chunks": [
+          "INT",
+          {
+            "tooltip": "Number of chunks to split the feedforward tokens into. More chunks = lower peak VRAM, slightly more overhead.",
+            "default": 2,
+            "min": 1,
+            "max": 64,
+            "step": 1
+          }
+        ],
+        "seq_threshold": [
+          "INT",
+          {
+            "tooltip": "Only chunk when the packed token count exceeds this (skips tiny sequences).",
+            "default": 4096,
+            "min": 256,
+            "max": 262144,
+            "step": 256
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "model",
+        "chunks",
+        "seq_threshold"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "MODEL"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "model"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "MiniMaxChunkFeedForward",
+    "display_name": "MiniMax H3 Chunk FeedForward",
+    "description": "Chunks the MiniMax H3 feedforward (SwiGLU) over the packed token dim to reduce peak VRAM usage. Each chunk still goes through ComfyUI's fused INT8 kernel when the model is quantized, and since activations are quantized per-token the output matches the unchunked model.",
+    "python_module": "custom_nodes.ComfyUI-KJNodes",
+    "category": "KJNodes/experimental",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": true,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": null,
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "MiniMaxH3AddGuide": {
+    "input": {
+      "required": {
+        "positive": [
+          "CONDITIONING",
+          {}
+        ],
+        "latent": [
+          "LATENT",
+          {}
+        ],
+        "frame_idx": [
+          "INT",
+          {
+            "tooltip": "Frame index to anchor the image or the clip's first frame at. Negative values are counted from the end of the video.",
+            "default": 0,
+            "min": -9999,
+            "max": 9999
+          }
+        ]
+      },
+      "optional": {
+        "vae": [
+          "VAE",
+          {
+            "tooltip": "Video VAE, needed when an image is connected."
+          }
+        ],
+        "audio_vae": [
+          "VAE",
+          {
+            "tooltip": "Audio VAE, needed when an audio is connected."
+          }
+        ],
+        "image": [
+          "IMAGE",
+          {
+            "tooltip": "Image or video frames to anchor. Multi-frame batches are anchored as a clip and cropped down to the model's valid clip lengths: 5, 22, 39... (17k + 5) frames. Batches shorter than 5 frames use only the first image."
+          }
+        ],
+        "audio": [
+          "AUDIO",
+          {
+            "tooltip": "Soundtrack to anchor starting at the same frame index, cropped to the video's remaining duration."
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "positive",
+        "latent",
+        "frame_idx"
+      ],
+      "optional": [
+        "vae",
+        "audio_vae",
+        "image",
+        "audio"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "CONDITIONING"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "positive"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "MiniMaxH3AddGuide",
+    "display_name": "Add Guide for MiniMax H3",
+    "description": "Anchor an image, a short clip, audio, or a clip with its soundtrack at any frame of a MiniMax H3 video. Chain several nodes to anchor several frames.",
+    "python_module": "comfy_extras.nodes_minimax_h3",
+    "category": "model/conditioning/minimax",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": null,
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "MiniMaxH3ReferenceToVideo": {
+    "input": {
+      "required": {
+        "clip": [
+          "CLIP",
+          {}
+        ],
+        "prompt": [
+          "STRING",
+          {
+            "multiline": true,
+            "dynamicPrompts": true
+          }
+        ],
+        "width": [
+          "INT",
+          {
+            "default": 1344,
+            "min": 32,
+            "max": 16384,
+            "step": 32
+          }
+        ],
+        "height": [
+          "INT",
+          {
+            "default": 768,
+            "min": 32,
+            "max": 16384,
+            "step": 32
+          }
+        ],
+        "length": [
+          "INT",
+          {
+            "tooltip": "Frame count at 24 fps, (124 = ~5s, trained range is ~124-362)",
+            "default": 124,
+            "min": 5,
+            "max": 3600,
+            "step": 17
+          }
+        ],
+        "ref_image_size": [
+          "COMBO",
+          {
+            "tooltip": "Reference image sizing. 'match' scales each ref (down only, keeping aspect) to the generation's pixel area; 'max' uses the reference pipeline's 2048px short edge for best identity fidelity. Reference tokens ride through every sampling step, so 'max' can be several times slower.",
+            "default": "match",
+            "multiselect": false,
+            "options": [
+              "match",
+              "max"
+            ]
+          }
+        ]
+      },
+      "optional": {
+        "vae": [
+          "VAE",
+          {
+            "tooltip": "Video VAE. Without it reference images/videos only condition the text encoder."
+          }
+        ],
+        "audio_vae": [
+          "VAE",
+          {
+            "tooltip": "Audio VAE. Without it reference audio only conditions the text encoder."
+          }
+        ],
+        "ref_images": [
+          "COMFY_AUTOGROW_V3",
+          {
+            "template": {
+              "input": {
+                "required": {
+                  "ref_image": [
+                    "IMAGE",
+                    {
+                      "tooltip": "Reference image (downscaled to 2048 short edge if larger, never upscaled)"
+                    }
+                  ]
+                }
+              },
+              "prefix": "ref_image_",
+              "min": 0,
+              "max": 9
+            }
+          }
+        ],
+        "ref_videos": [
+          "COMFY_AUTOGROW_V3",
+          {
+            "template": {
+              "input": {
+                "required": {
+                  "ref_video": [
+                    "IMAGE",
+                    {
+                      "tooltip": "Reference video frames at 24 fps (2-15s)"
+                    }
+                  ]
+                }
+              },
+              "prefix": "ref_video_",
+              "min": 0,
+              "max": 3
+            }
+          }
+        ],
+        "ref_video_audios": [
+          "COMFY_AUTOGROW_V3",
+          {
+            "template": {
+              "input": {
+                "required": {
+                  "ref_video_audio": [
+                    "AUDIO",
+                    {
+                      "tooltip": "Soundtrack of the same-numbered reference video"
+                    }
+                  ]
+                }
+              },
+              "prefix": "ref_video_audio_",
+              "min": 0,
+              "max": 3
+            }
+          }
+        ],
+        "ref_audios": [
+          "COMFY_AUTOGROW_V3",
+          {
+            "template": {
+              "input": {
+                "required": {
+                  "ref_audio": [
+                    "AUDIO",
+                    {
+                      "tooltip": "Standalone reference audio"
+                    }
+                  ]
+                }
+              },
+              "prefix": "ref_audio_",
+              "min": 0,
+              "max": 3
+            }
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "clip",
+        "prompt",
+        "width",
+        "height",
+        "length",
+        "ref_image_size"
+      ],
+      "optional": [
+        "vae",
+        "audio_vae",
+        "ref_images",
+        "ref_videos",
+        "ref_video_audios",
+        "ref_audios"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "CONDITIONING",
+      "LATENT"
+    ],
+    "output_is_list": [
+      false,
+      false
+    ],
+    "output_name": [
+      "positive",
+      "LATENT"
+    ],
+    "output_tooltips": [
+      null,
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "MiniMaxH3ReferenceToVideo",
+    "display_name": "MiniMax H3 Reference to Video",
+    "description": "<Picture i> / <Video k> / <Audio j> reference conditioning for MiniMax H3. Use the same tags when prompting.",
+    "python_module": "comfy_extras.nodes_minimax_h3",
+    "category": "model/conditioning/minimax",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": null,
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "MiniMaxH3SigmaShift": {
+    "input": {
+      "required": {
+        "model": [
+          "MODEL",
+          {}
+        ],
+        "shift_video": [
+          "FLOAT",
+          {
+            "default": 12.0,
+            "min": 0.01,
+            "max": 100.0,
+            "step": 0.01
+          }
+        ],
+        "shift_audio": [
+          "FLOAT",
+          {
+            "default": 3.0,
+            "min": 0.01,
+            "max": 100.0,
+            "step": 0.01
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "model",
+        "shift_video",
+        "shift_audio"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "MODEL"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "MODEL"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "MiniMaxH3SigmaShift",
+    "display_name": "ModelSamplingMiniMaxH3",
+    "description": "Set the video/audio flow shifts.",
+    "python_module": "comfy_extras.nodes_minimax_h3",
+    "category": "model/patch/minimax",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": [
+      "sigma shift",
+      "minimax shift"
+    ],
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "RandomNoise": {
+    "input": {
+      "required": {
+        "noise_seed": [
+          "INT",
+          {
+            "default": 0,
+            "min": 0,
+            "max": 18446744073709551615,
+            "control_after_generate": true
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "noise_seed"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "NOISE"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "NOISE"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "RandomNoise",
+    "display_name": null,
+    "description": "",
+    "python_module": "comfy_extras.nodes_custom_sampler",
+    "category": "model/sampling/noise",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": null,
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "SamplerCustomAdvanced": {
+    "input": {
+      "required": {
+        "noise": [
+          "NOISE",
+          {}
+        ],
+        "guider": [
+          "GUIDER",
+          {}
+        ],
+        "sampler": [
+          "SAMPLER",
+          {}
+        ],
+        "sigmas": [
+          "SIGMAS",
+          {}
+        ],
+        "latent_image": [
+          "LATENT",
+          {}
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "noise",
+        "guider",
+        "sampler",
+        "sigmas",
+        "latent_image"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "LATENT",
+      "LATENT"
+    ],
+    "output_is_list": [
+      false,
+      false
+    ],
+    "output_name": [
+      "output",
+      "denoised_output"
+    ],
+    "output_tooltips": [
+      null,
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "SamplerCustomAdvanced",
+    "display_name": null,
+    "description": "",
+    "python_module": "comfy_extras.nodes_custom_sampler",
+    "category": "model/sampling/custom",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": null,
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "SaveVideo": {
+    "input": {
+      "required": {
+        "video": [
+          "VIDEO",
+          {
+            "tooltip": "The video to save."
+          }
+        ],
+        "filename_prefix": [
+          "STRING",
+          {
+            "tooltip": "The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes.",
+            "default": "video/ComfyUI",
+            "multiline": false
+          }
+        ],
+        "format": [
+          "COMFY_DYNAMICCOMBO_V3",
+          {
+            "tooltip": "The output container. Auto uses MP4 for Auto/H.264 and WebM for AV1. MP4, MKV, and WebM select a specific container.",
+            "options": [
+              {
+                "key": "auto",
+                "inputs": {
+                  "required": {
+                    "codec": [
+                      "COMFY_DYNAMICCOMBO_V3",
+                      {
+                        "tooltip": "The output video codec. Auto preserves a compatible source stream. H.264 and AV1 re-encoding support SDR, HDR (HLG), and HDR PQ.",
+                        "options": [
+                          {
+                            "key": "auto",
+                            "inputs": {
+                              "required": {}
+                            }
+                          },
+                          {
+                            "key": "h264",
+                            "inputs": {
+                              "required": {},
+                              "optional": {
+                                "encoding": [
+                                  "COMFY_DYNAMICCOMBO_V3",
+                                  {
+                                    "display_name": "encoding mode",
+                                    "tooltip": "Automatic preserves compatible H.264 streams. Re-encode applies custom encoding options.",
+                                    "options": [
+                                      {
+                                        "key": "auto",
+                                        "inputs": {
+                                          "required": {}
+                                        }
+                                      },
+                                      {
+                                        "key": "re-encode",
+                                        "inputs": {
+                                          "required": {
+                                            "crf": [
+                                              "FLOAT",
+                                              {
+                                                "tooltip": "Lower values produce higher quality and larger files.",
+                                                "default": 23.0,
+                                                "min": 0.0,
+                                                "max": 51.0,
+                                                "step": 1.0
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          {
+                            "key": "av1",
+                            "inputs": {
+                              "required": {},
+                              "optional": {
+                                "encoding": [
+                                  "COMFY_DYNAMICCOMBO_V3",
+                                  {
+                                    "display_name": "encoding mode",
+                                    "tooltip": "Automatic preserves compatible AV1 streams. Re-encode applies custom encoding options.",
+                                    "options": [
+                                      {
+                                        "key": "auto",
+                                        "inputs": {
+                                          "required": {}
+                                        }
+                                      },
+                                      {
+                                        "key": "re-encode",
+                                        "inputs": {
+                                          "required": {
+                                            "crf": [
+                                              "FLOAT",
+                                              {
+                                                "tooltip": "Lower values produce higher quality and larger files.",
+                                                "default": 30.0,
+                                                "min": 0.0,
+                                                "max": 63.0,
+                                                "step": 1.0
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "key": "mp4",
+                "inputs": {
+                  "required": {
+                    "codec": [
+                      "COMFY_DYNAMICCOMBO_V3",
+                      {
+                        "tooltip": "The output video codec. Auto preserves a compatible source stream. H.264 and AV1 re-encoding support SDR, HDR (HLG), and HDR PQ.",
+                        "options": [
+                          {
+                            "key": "auto",
+                            "inputs": {
+                              "required": {}
+                            }
+                          },
+                          {
+                            "key": "h264",
+                            "inputs": {
+                              "required": {},
+                              "optional": {
+                                "encoding": [
+                                  "COMFY_DYNAMICCOMBO_V3",
+                                  {
+                                    "display_name": "encoding mode",
+                                    "tooltip": "Automatic preserves compatible H.264 streams. Re-encode applies custom encoding options.",
+                                    "options": [
+                                      {
+                                        "key": "auto",
+                                        "inputs": {
+                                          "required": {}
+                                        }
+                                      },
+                                      {
+                                        "key": "re-encode",
+                                        "inputs": {
+                                          "required": {
+                                            "crf": [
+                                              "FLOAT",
+                                              {
+                                                "tooltip": "Lower values produce higher quality and larger files.",
+                                                "default": 23.0,
+                                                "min": 0.0,
+                                                "max": 51.0,
+                                                "step": 1.0
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          {
+                            "key": "av1",
+                            "inputs": {
+                              "required": {},
+                              "optional": {
+                                "encoding": [
+                                  "COMFY_DYNAMICCOMBO_V3",
+                                  {
+                                    "display_name": "encoding mode",
+                                    "tooltip": "Automatic preserves compatible AV1 streams. Re-encode applies custom encoding options.",
+                                    "options": [
+                                      {
+                                        "key": "auto",
+                                        "inputs": {
+                                          "required": {}
+                                        }
+                                      },
+                                      {
+                                        "key": "re-encode",
+                                        "inputs": {
+                                          "required": {
+                                            "crf": [
+                                              "FLOAT",
+                                              {
+                                                "tooltip": "Lower values produce higher quality and larger files.",
+                                                "default": 30.0,
+                                                "min": 0.0,
+                                                "max": 63.0,
+                                                "step": 1.0
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "key": "mkv",
+                "inputs": {
+                  "required": {
+                    "codec": [
+                      "COMFY_DYNAMICCOMBO_V3",
+                      {
+                        "tooltip": "The output video codec. Auto preserves a compatible source stream. H.264 and AV1 re-encoding support SDR, HDR (HLG), and HDR PQ.",
+                        "options": [
+                          {
+                            "key": "auto",
+                            "inputs": {
+                              "required": {}
+                            }
+                          },
+                          {
+                            "key": "h264",
+                            "inputs": {
+                              "required": {},
+                              "optional": {
+                                "encoding": [
+                                  "COMFY_DYNAMICCOMBO_V3",
+                                  {
+                                    "display_name": "encoding mode",
+                                    "tooltip": "Automatic preserves compatible H.264 streams. Re-encode applies custom encoding options.",
+                                    "options": [
+                                      {
+                                        "key": "auto",
+                                        "inputs": {
+                                          "required": {}
+                                        }
+                                      },
+                                      {
+                                        "key": "re-encode",
+                                        "inputs": {
+                                          "required": {
+                                            "crf": [
+                                              "FLOAT",
+                                              {
+                                                "tooltip": "Lower values produce higher quality and larger files.",
+                                                "default": 23.0,
+                                                "min": 0.0,
+                                                "max": 51.0,
+                                                "step": 1.0
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          {
+                            "key": "av1",
+                            "inputs": {
+                              "required": {},
+                              "optional": {
+                                "encoding": [
+                                  "COMFY_DYNAMICCOMBO_V3",
+                                  {
+                                    "display_name": "encoding mode",
+                                    "tooltip": "Automatic preserves compatible AV1 streams. Re-encode applies custom encoding options.",
+                                    "options": [
+                                      {
+                                        "key": "auto",
+                                        "inputs": {
+                                          "required": {}
+                                        }
+                                      },
+                                      {
+                                        "key": "re-encode",
+                                        "inputs": {
+                                          "required": {
+                                            "crf": [
+                                              "FLOAT",
+                                              {
+                                                "tooltip": "Lower values produce higher quality and larger files.",
+                                                "default": 30.0,
+                                                "min": 0.0,
+                                                "max": 63.0,
+                                                "step": 1.0
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "key": "webm",
+                "inputs": {
+                  "required": {
+                    "codec": [
+                      "COMFY_DYNAMICCOMBO_V3",
+                      {
+                        "tooltip": "The output video codec. Auto preserves a compatible source stream. H.264 and AV1 re-encoding support SDR, HDR (HLG), and HDR PQ.",
+                        "options": [
+                          {
+                            "key": "auto",
+                            "inputs": {
+                              "required": {}
+                            }
+                          },
+                          {
+                            "key": "av1",
+                            "inputs": {
+                              "required": {},
+                              "optional": {
+                                "encoding": [
+                                  "COMFY_DYNAMICCOMBO_V3",
+                                  {
+                                    "display_name": "encoding mode",
+                                    "tooltip": "Automatic preserves compatible AV1 streams. Re-encode applies custom encoding options.",
+                                    "options": [
+                                      {
+                                        "key": "auto",
+                                        "inputs": {
+                                          "required": {}
+                                        }
+                                      },
+                                      {
+                                        "key": "re-encode",
+                                        "inputs": {
+                                          "required": {
+                                            "crf": [
+                                              "FLOAT",
+                                              {
+                                                "tooltip": "Lower values produce higher quality and larger files.",
+                                                "default": 30.0,
+                                                "min": 0.0,
+                                                "max": 63.0,
+                                                "step": 1.0
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "optional": {
+        "codec": [
+          "COMFY_DYNAMICCOMBO_V3",
+          {
+            "tooltip": "The output video codec. Auto preserves a compatible source stream. H.264 and AV1 re-encoding support SDR, HDR (HLG), and HDR PQ.",
+            "hidden": true,
+            "options": [
+              {
+                "key": "auto",
+                "inputs": {
+                  "required": {}
+                }
+              },
+              {
+                "key": "h264",
+                "inputs": {
+                  "required": {},
+                  "optional": {
+                    "encoding": [
+                      "COMFY_DYNAMICCOMBO_V3",
+                      {
+                        "display_name": "encoding mode",
+                        "tooltip": "Automatic preserves compatible H.264 streams. Re-encode applies custom encoding options.",
+                        "options": [
+                          {
+                            "key": "auto",
+                            "inputs": {
+                              "required": {}
+                            }
+                          },
+                          {
+                            "key": "re-encode",
+                            "inputs": {
+                              "required": {
+                                "crf": [
+                                  "FLOAT",
+                                  {
+                                    "tooltip": "Lower values produce higher quality and larger files.",
+                                    "default": 23.0,
+                                    "min": 0.0,
+                                    "max": 51.0,
+                                    "step": 1.0
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "key": "av1",
+                "inputs": {
+                  "required": {},
+                  "optional": {
+                    "encoding": [
+                      "COMFY_DYNAMICCOMBO_V3",
+                      {
+                        "display_name": "encoding mode",
+                        "tooltip": "Automatic preserves compatible AV1 streams. Re-encode applies custom encoding options.",
+                        "options": [
+                          {
+                            "key": "auto",
+                            "inputs": {
+                              "required": {}
+                            }
+                          },
+                          {
+                            "key": "re-encode",
+                            "inputs": {
+                              "required": {
+                                "crf": [
+                                  "FLOAT",
+                                  {
+                                    "tooltip": "Lower values produce higher quality and larger files.",
+                                    "default": 30.0,
+                                    "min": 0.0,
+                                    "max": 63.0,
+                                    "step": 1.0
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "hidden": {
+        "prompt": [
+          "PROMPT"
+        ],
+        "extra_pnginfo": [
+          "EXTRA_PNGINFO"
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "video",
+        "filename_prefix",
+        "format"
+      ],
+      "optional": [
+        "codec"
+      ],
+      "hidden": [
+        "prompt",
+        "extra_pnginfo"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "VIDEO"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "video"
+    ],
+    "output_tooltips": [
+      "The input video, unchanged."
+    ],
+    "output_matchtypes": null,
+    "name": "SaveVideo",
+    "display_name": "Save Video",
+    "description": "Saves the input videos to your ComfyUI output directory.",
+    "python_module": "comfy_extras.nodes_video",
+    "category": "video",
+    "output_node": true,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": [
+      "export video"
+    ],
+    "essentials_category": "Basics",
+    "has_intermediate_output": false
+  },
+  "SenseNovaH3DistilledBridge": {
+    "input": {
+      "required": {
+        "conditioning": [
+          "CONDITIONING"
+        ],
+        "distilled_adapter": [
+          [
+            "MiniMaxH3_SemanticBridge_v1.safetensors"
+          ]
+        ],
+        "alpha": [
+          "FLOAT",
+          {
+            "default": 0.1,
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.01
+          }
+        ],
+        "magnitude_match": [
+          [
+            "per_token",
+            "global",
+            "none"
+          ],
+          {
+            "default": "per_token"
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "conditioning",
+        "distilled_adapter",
+        "alpha",
+        "magnitude_match"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "CONDITIONING"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "conditioning"
+    ],
+    "name": "SenseNovaH3DistilledBridge",
+    "display_name": "MiniMax H3 Semantic Bridge",
+    "description": "",
+    "python_module": "custom_nodes.MiniMax_H3_Semantic_Bridge",
+    "category": "MiniMax H3/Semantic Bridge",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "UNETLoader": {
+    "input": {
+      "required": {
+        "unet_name": [
+          [
+            "minimax-h3\\Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+            "previous_install\\SeedVR2\\seedvr2_ema_3b_fp8_e4m3fn.safetensors",
+            "previous_install\\krea2\\krea2_turbo-int4_convrot.safetensors",
+            "previous_install\\krea2\\krea2_turbo_mxfp8.safetensors",
+            "previous_install\\ltx-2.5\\ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+            "previous_install\\ltx-2.5\\ltx-2.5-22b-distilled-transformer-nvfp4.safetensors",
+            "previous_install\\minimax-h3\\MiniMax_H3_FL2VA_pruned_int8_convrot.safetensors",
+            "previous_install\\minimax-h3\\PinkCherry_fl2va_MiniMax_H3_pruned_int8_convrot-beta-0.6.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_fastvideo_vsa_datafree_1300step_4step_int8_convrot.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_hybrid_fl2va_ref2va_b15-49-int8.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_hybrid_fl2va_ref2va_b20-49-int8.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_hybrid_fl2va_ref2va_b25-49-int8.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_hybrid_fl2va_ref2va_b30-49-int8.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+            "previous_install\\minimax-music3\\minimax_music3_dit_int8_convrot.safetensors",
+            "previous_install\\minimax_h3_fastvideo_vsa_datafree_1300step_4step_int8_convrot.safetensors",
+            "previous_install\\minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors",
+            "previous_install\\roformer\\MelBandRoformer_fp16.safetensors",
+            "previous_install\\seedvr2\\seedvr2_7b-int4_convrot.safetensors"
+          ]
+        ],
+        "weight_dtype": [
+          [
+            "default",
+            "fp8_e4m3fn",
+            "fp8_e4m3fn_fast",
+            "fp8_e5m2"
+          ],
+          {
+            "advanced": true
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "unet_name",
+        "weight_dtype"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "MODEL"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "MODEL"
+    ],
+    "name": "UNETLoader",
+    "display_name": "Load Diffusion Model",
+    "description": "",
+    "python_module": "nodes",
+    "category": "model/loaders",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "VAEDecode": {
+    "input": {
+      "required": {
+        "samples": [
+          "LATENT",
+          {
+            "tooltip": "The latent to be decoded."
+          }
+        ],
+        "vae": [
+          "VAE",
+          {
+            "tooltip": "The VAE model used for decoding the latent."
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "samples",
+        "vae"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "IMAGE"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "IMAGE"
+    ],
+    "name": "VAEDecode",
+    "display_name": "VAE Decode",
+    "description": "Decodes latent images back into pixel space images.",
+    "python_module": "nodes",
+    "category": "model/latent",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "output_tooltips": [
+      "The decoded image."
+    ],
+    "search_aliases": [
+      "decode",
+      "decode latent",
+      "latent to image",
+      "render latent"
+    ]
+  },
+  "VAEDecodeAudio": {
+    "input": {
+      "required": {
+        "samples": [
+          "LATENT",
+          {}
+        ],
+        "vae": [
+          "VAE",
+          {}
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "samples",
+        "vae"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "AUDIO"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "AUDIO"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "VAEDecodeAudio",
+    "display_name": "VAE Decode Audio",
+    "description": "",
+    "python_module": "comfy_extras.nodes_audio",
+    "category": "model/latent",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": [
+      "latent to audio"
+    ],
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "VAEEncode": {
+    "input": {
+      "required": {
+        "pixels": [
+          "IMAGE"
+        ],
+        "vae": [
+          "VAE"
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "pixels",
+        "vae"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "LATENT"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "LATENT"
+    ],
+    "name": "VAEEncode",
+    "display_name": "VAE Encode",
+    "description": "",
+    "python_module": "nodes",
+    "category": "model/latent",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": [
+      "encode",
+      "encode image",
+      "image to latent"
+    ]
+  },
+  "VAEEncodeAudio": {
+    "input": {
+      "required": {
+        "audio": [
+          "AUDIO",
+          {}
+        ],
+        "vae": [
+          "VAE",
+          {}
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "audio",
+        "vae"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "LATENT"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "LATENT"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "VAEEncodeAudio",
+    "display_name": "VAE Encode Audio",
+    "description": "",
+    "python_module": "comfy_extras.nodes_audio",
+    "category": "model/latent",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": [
+      "audio to latent"
+    ],
+    "essentials_category": null,
+    "has_intermediate_output": false
+  },
+  "VAELoader": {
+    "input": {
+      "required": {
+        "vae_name": [
+          [
+            "previous_install\\SeedVR2\\ema_vae_fp16.safetensors",
+            "previous_install\\flux2_ae.safetensors",
+            "previous_install\\ltx-2.5\\ltx-2.5-audio-vae-bf16.safetensors",
+            "previous_install\\ltx-2.5\\ltx-2.5-video-vae-conv-bf16.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_audio_vae_fp32.safetensors",
+            "previous_install\\minimax-h3\\minimax_h3_video_vae_int8_convrot.safetensors",
+            "previous_install\\minimax-music3\\minimax_music3_dav.safetensors",
+            "taesdxl",
+            "taesd",
+            "taef1",
+            "pixel_space"
+          ]
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "vae_name"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "VAE"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "VAE"
+    ],
+    "name": "VAELoader",
+    "display_name": "Load VAE",
+    "description": "",
+    "python_module": "nodes",
+    "category": "model/loaders",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "easy cleanGpuUsed": {
+    "input": {
+      "required": {
+        "anything": [
+          "*",
+          {}
+        ]
+      },
+      "hidden": {
+        "unique_id": [
+          "UNIQUE_ID"
+        ],
+        "extra_pnginfo": [
+          "EXTRA_PNGINFO"
+        ],
+        "prompt": [
+          "PROMPT"
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "anything"
+      ],
+      "hidden": [
+        "unique_id",
+        "extra_pnginfo",
+        "prompt"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "*"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "output"
+    ],
+    "output_tooltips": [
+      null
+    ],
+    "output_matchtypes": null,
+    "name": "easy cleanGpuUsed",
+    "display_name": null,
+    "description": "",
+    "python_module": "custom_nodes.ComfyUI-Easy-Use",
+    "category": "EasyUse/Logic",
+    "output_node": true,
+    "deprecated": false,
+    "experimental": false,
+    "dev_only": false,
+    "api_node": false,
+    "price_badge": null,
+    "search_aliases": null,
+    "essentials_category": null,
+    "has_intermediate_output": false
+  }
+}

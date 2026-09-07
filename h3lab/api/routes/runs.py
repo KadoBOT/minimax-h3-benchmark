@@ -33,13 +33,13 @@ def list_runs(lab: LabDep, query: Annotated[RunQuery, Query()]) -> RunPage:
 
 @router.post("/runs", status_code=201)
 def enqueue(lab: LabDep, body: EnqueueRequest) -> list[RunView]:
-    return lab.enqueue(body.config, count=body.count)
+    return lab.enqueue(body.config.to_config(), count=body.count)
 
 
 @router.post("/runs/dry-run")
 def dry_run(lab: LabDep, body: DryRunRequest) -> DryRun:
     """Build the graph and report problems without spending GPU time on them."""
-    return lab.dry_run(body.config)
+    return lab.dry_run(body.config.to_config())
 
 
 @router.get("/runs/{run_id}")
